@@ -12,7 +12,11 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { applyDomainRegistry, parseDomainRegistry } from '@/lib/knowledge/domain-registry';
+import {
+  applyDomainRegistry,
+  domainRegistryEntry,
+  parseDomainRegistry,
+} from '@/lib/knowledge/domain-registry';
 import { domainLabel, hasDomainLabel } from '@/lib/knowledge/domain-labels';
 import { examplePromptsFor } from '@/lib/knowledge/example-prompts';
 import { courseDomainOf, readCourseDomains } from '@/lib/server/course-domains';
@@ -187,5 +191,54 @@ describe('课程域归属：跑真实课程目录', () => {
   it('.json.bak 之类的旁落文件不进结果', async () => {
     const rows = await readCourseDomains();
     expect(Object.keys(rows).some((id) => id.includes('.bak'))).toBe(false);
+  });
+});
+
+describe('示例提示词的形状必须与引擎产物一致', () => {
+  it('引擎给的 {prompt, anchor} 对象要被收下，不是静默丢弃', () => {
+    // 线上实锤（2026-08-23）：/api/domains 返回 examples 空数组，而盘上有 3 条。
+    // 解析器声明成 string[]、按字符串过滤，对象全被滤掉——**没有任何报错**：
+    // 清单条数正常、结构正常，就是示例永远为空，查表悄悄回退硬编码。
+    applyDomainRegistry(
+      parseDomainRegistry({
+        corpora: [
+          {
+            corpus: 'mfg',
+            examples: [
+              { prompt: '数控机床坐标系怎么定？', anchor: '第2章 2.1 坐标系' },
+              { prompt: 'PLC 扫描周期是什么？' },
+            ],
+          },
+        ],
+      }),
+    );
+    const entry = domainRegistryEntry('mfg');
+    expect(entry?.examples).toHaveLength(2);
+    expect(entry?.examples?.[0]).toEqual({
+      prompt: '数控机床坐标系怎么定？',
+      anchor: '第2章 2.1 坐标系',
+    });
+    // 出处可缺省，但有就要留着——它是「这条示例出自哪一章」的唯一记录
+    expect(entry?.examples?.[1]).toEqual({ prompt: 'PLC 扫描周期是什么？' });
+  });
+
+  it('裸字符串也收——手工改过的清单不该整批消失', () => {
+    applyDomainRegistry(
+      parseDomainRegistry({ corpora: [{ corpus: 'mfg', examples: ['讲讲伺服电机'] }] }),
+    );
+    expect(domainRegistryEntry('mfg')?.examples).toEqual([{ prompt: '讲讲伺服电机' }]);
+  });
+
+  it('消费方拿到的是字符串，不是 [object Object]', () => {
+    // 类型上 readonly string[] 与对象数组结构兼容、tsc 不报错，
+    // 直接把对象返回去渲染出来就是 [object Object]。
+    applyDomainRegistry(
+      parseDomainRegistry({
+        corpora: [{ corpus: 'mfg', examples: [{ prompt: '讲讲伺服电机', anchor: '第3章' }] }],
+      }),
+    );
+    const prompts = examplePromptsFor('mfg');
+    expect(prompts).toEqual(['讲讲伺服电机']);
+    expect(prompts.every((p) => typeof p === 'string')).toBe(true);
   });
 });

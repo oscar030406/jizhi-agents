@@ -55,9 +55,14 @@ const GENERIC_EXAMPLES: readonly string[] = [
  * `corpus` 没传（画像「跟随培训领域」）时按 ai 处理——那是生成入口的既有默认。
  * 返回的数组永远非空。
  */
-export function examplePromptsFor(corpus?: string): readonly string[] {
+export function examplePromptsFor(corpus?: string, _registryVersion?: number): readonly string[] {
   const name = corpus?.trim() || 'ai';
+  // 清单里的示例是 `{prompt, anchor}` 对象——**取 prompt，别直接返回对象**：
+  // 类型上 readonly string[] 与对象数组结构兼容不报错，渲染出来是 [object Object]。
   const fromRegistry = domainRegistryEntry(name)?.examples;
-  if (fromRegistry && fromRegistry.length > 0) return fromRegistry;
+  if (fromRegistry && fromRegistry.length > 0) {
+    const prompts = fromRegistry.map((e) => e.prompt).filter((p) => p.trim() !== '');
+    if (prompts.length > 0) return prompts;
+  }
   return LEGACY_EXAMPLES[name] ?? GENERIC_EXAMPLES;
 }

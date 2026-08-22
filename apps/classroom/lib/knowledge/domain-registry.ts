@@ -13,6 +13,9 @@
  */
 
 /** 清单里一个域的记录。字段全可选——引擎那边逐步补齐，缺一项不该让整份清单作废。 */
+/** 一条示例提示词。`anchor` 是它出自语料的哪一章——出处丢了就再也找不回来。 */
+export type DomainExample = { prompt: string; anchor?: string };
+
 export interface DomainRegistryEntry {
   corpus: string;
   /** 域中文显示名。`domain-labels.ts` 优先用它。 */
@@ -26,8 +29,12 @@ export interface DomainRegistryEntry {
   gate?: string;
   /** 与哪些域有跨域关联。 */
   cross_domain?: string[];
-  /** 造课卡示例提示词。空/缺 = 没有域专属示例，调用方回退。 */
-  examples?: string[];
+  /** 造课卡示例提示词。空/缺 = 没有域专属示例，调用方回退。
+   *
+   *  **形状必须与引擎产物一致**：引擎写的是 `{prompt, anchor}` 对象数组。
+   *  早先声明成 `string[]`，解析时按字符串过滤，三条示例被静默丢光——
+   *  清单条数正常、没有报错、就是 examples 永远为空，查表全部回退硬编码。 */
+  examples?: DomainExample[];
   /** 管理者可选上传的岗位/技能要求文件的提炼结果。没给就没有这一项，不编造。 */
   job_requirements?: unknown;
   /** C21：这个域教不教动手操作（带电/机械/化学/高温）。由投料方在接入时声明，
@@ -55,6 +62,29 @@ function toEntry(corpus: string, row: Record<string, unknown>): DomainRegistryEn
     Array.isArray(row[k])
       ? (row[k] as unknown[]).filter((s): s is string => typeof s === 'string' && s.trim() !== '')
       : undefined;
+  /** 示例可能是 `{prompt, anchor}`（引擎产出）或裸字符串（手工改过的清单）。
+   *  两种都收——只认一种就等于让另一半数据静默消失，那正是这条被修的原因。 */
+  const exampleArray = (k: string): DomainExample[] | undefined => {
+    if (!Array.isArray(row[k])) return undefined;
+    const out: DomainExample[] = [];
+    for (const item of row[k] as unknown[]) {
+      if (typeof item === 'string' && item.trim()) {
+        out.push({ prompt: item.trim() });
+        continue;
+      }
+      if (item && typeof item === 'object') {
+        const prompt = (item as Record<string, unknown>).prompt;
+        const anchor = (item as Record<string, unknown>).anchor;
+        if (typeof prompt === 'string' && prompt.trim()) {
+          out.push({
+            prompt: prompt.trim(),
+            ...(typeof anchor === 'string' && anchor.trim() ? { anchor: anchor.trim() } : {}),
+          });
+        }
+      }
+    }
+    return out;
+  };
   return {
     corpus,
     label: str('label'),
@@ -63,7 +93,7 @@ function toEntry(corpus: string, row: Record<string, unknown>): DomainRegistryEn
     eligible: typeof row.eligible === 'boolean' ? row.eligible : undefined,
     gate: str('gate'),
     cross_domain: strArray('cross_domain'),
-    examples: strArray('examples'),
+    examples: exampleArray('examples'),
     ...(row.job_requirements === undefined ? {} : { job_requirements: row.job_requirements }),
     ...(typeof row.hands_on_safety === 'boolean' ? { hands_on_safety: row.hands_on_safety } : {}),
   };
@@ -99,9 +129,31 @@ export function parseDomainRegistry(raw: unknown): DomainRegistry {
   };
 }
 
+/**
+ * 订阅视图变更。灌注是**异步**的：页面首帧渲染常常发生在 /api/domains 返回之前，
+ * 消费组件如果只在渲染时读一次，灌注完成后没人通知 React 重读——示例词、
+ * 中文名就停在兜底值上（第八例：接了线、灌了水，龙头没人再拧）。
+ * 组件用 `useDomainRegistryVersion()`（lib/knowledge/use-domain-registry.ts）
+ * 把版本号进依赖即可；这里保持零 React 依赖，服务端照常可导入。
+ */
+type Listener = () => void;
+const listeners = new Set<Listener>();
+let version = 0;
+
+export function subscribeDomainRegistry(cb: Listener): () => void {
+  listeners.add(cb);
+  return () => listeners.delete(cb);
+}
+
+export function domainRegistryVersion(): number {
+  return version;
+}
+
 /** 灌入（或用 `null` 清空）当前视图。服务端读完盘调它。 */
 export function applyDomainRegistry(registry: DomainRegistry | null): void {
   current = registry ?? EMPTY;
+  version += 1;
+  for (const cb of listeners) cb();
 }
 
 /** 当前视图。没灌过就是空视图（`entries` 为空对象，不是 null）。 */
