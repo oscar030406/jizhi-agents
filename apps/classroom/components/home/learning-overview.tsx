@@ -24,6 +24,7 @@
  * - 学情摘要的 0.6 线：与 `/report` 的「实测盲区」同一条线，不是新拍的。
  */
 
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowRight, BarChart3, BookOpen, Route } from 'lucide-react';
 import rawPathData from '@/data/learning-path.json';
@@ -248,17 +249,40 @@ interface CourseDomainEntry {
 
 export function DomainCoursesCard({
   corpus,
-  courseDomains = rawCourseDomains as Record<string, CourseDomainEntry>,
+  courseDomains,
   progressByCourseId = {},
   className,
 }: {
   corpus: string;
+  /** 测试注入用。缺省时先用打包快照出首帧，再被 /api/course-domains 的运行时推导覆盖。 */
   courseDomains?: Record<string, CourseDomainEntry>;
   progressByCourseId?: Record<string, number>;
   className?: string;
 }) {
+  // 归属主从：运行时推导（/api/course-domains，现读磁盘）为主，打包快照为首帧兜底。
+  // 快照是构建时的世界——投币新建的课不在里面；此前只读快照，新域的课在这张卡上隐形。
+  const [runtimeDomains, setRuntimeDomains] = useState<Record<string, CourseDomainEntry> | null>(
+    null,
+  );
+  useEffect(() => {
+    if (courseDomains) return; // 测试注入了就不拉
+    let alive = true;
+    fetch('/api/course-domains')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (alive && data && typeof data === 'object')
+          setRuntimeDomains(data as Record<string, CourseDomainEntry>);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [courseDomains]);
+
   const label = domainLabel(corpus);
-  const courses = Object.entries(courseDomains)
+  const effective =
+    courseDomains ?? runtimeDomains ?? (rawCourseDomains as Record<string, CourseDomainEntry>);
+  const courses = Object.entries(effective)
     .filter(([, v]) => v.domain === corpus)
     .map(([id, v]) => ({ id, title: v.title, progress: progressByCourseId[id] }));
   const done = courses.filter((c) => (c.progress ?? 0) >= DONE_AT).length;

@@ -51,6 +51,8 @@ import { PracticeCard, projectsForJob } from '@/components/skills/practice-proje
 import { cn } from '@/lib/utils';
 import { conceptLabel } from '@/lib/knowledge/concept-labels';
 import { domainLabel } from '@/lib/generation/learner-profile';
+import { loadLearnerProfile } from '@/components/generation/learner-profile-popover';
+import { ForeignDomainEmpty } from '@/components/skills/foreign-domain-empty';
 import type { CorpusStatus, JobSkills, SkillCoverage } from '@/app/api/skills/route';
 
 /** Home page's requirement draft cache key (lib/hooks/use-draft-cache + app/page.tsx). */
@@ -375,6 +377,13 @@ function JobCard({
 export default function SkillsPage() {
   const router = useRouter();
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
+  /** 画像选定的知识库。非 AI 域整页换空态——岗位图谱是主域专有数据（几十 GB
+   *  招聘数据集 + 人工提炼），别的领域摆它只会误导学习方向。 */
+  const [profileCorpus, setProfileCorpus] = useState<string>('');
+  useEffect(() => {
+    setProfileCorpus(loadLearnerProfile().corpus?.trim() ?? '');
+  }, []);
+  const foreignDomain = Boolean(profileCorpus) && profileCorpus !== 'ai';
   const [openJob, setOpenJob] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   // 项目卡「相关课程」的课名。课程边（courseIds）在 data/practice-projects.json 里，
@@ -452,8 +461,8 @@ export default function SkillsPage() {
       <SiteHeader localized={false} maxWidth="max-w-5xl" />
       {/* 区块间距 24px、区块内最大 16px：相邻层级差 1.5 倍以上，分组才读得出来 */}
       <div className="mx-auto max-w-5xl space-y-6 px-4 pb-24 pt-6 sm:px-6">
-        {/* 域工作区：非 AI 库画像下说明本页数据的域覆盖范围 */}
-        <DomainScopeNotice scope="岗位技能图谱与实操项目" className="flex items-start gap-2 rounded-lg border border-border bg-muted/50 px-4 py-3 text-sm leading-relaxed text-muted-foreground" />
+        {/* 非 AI 域：整页换空态主体（见 ForeignDomainEmpty 的注释）。
+            原来是「一条注记 + 照常展示整张 AI 图谱」——注记会被略过，图谱不会。 */}
         {/* header */}
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -486,21 +495,23 @@ export default function SkillsPage() {
           </div>
         </div>
 
-        {state.kind === 'loading' && (
+        {foreignDomain && <ForeignDomainEmpty label={domainLabel(profileCorpus)} />}
+
+        {!foreignDomain && state.kind === 'loading' && (
           <div className="flex items-center gap-2 py-16 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
             正在读取岗位技能地图…
           </div>
         )}
 
-        {state.kind === 'offline' && (
+        {!foreignDomain && state.kind === 'offline' && (
           <EmptyState
             title="岗位技能地图暂时读不到"
             hint="静态快照与多智能体引擎都没有返回数据。点「重新读取」再试一次。"
           />
         )}
 
-        {data && (
+        {!foreignDomain && data && (
           <motion.div
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
