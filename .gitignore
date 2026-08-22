@@ -1,0 +1,49 @@
+# ── 内部工作区（对外仓库不含，原地保留） ──────────────────────────────
+.claude/
+CLAUDE.md
+AGENTS.md
+PLAYBOOK.md
+HANDOFF*
+*.docx
+docs/
+tmp/
+dist/
+references/
+智能制造/
+画像/
+
+# ── 数据与产物（体积/隐私/版权） ─────────────────────────────────────
+data/
+apps/agent-engine/data/
+apps/classroom/data/classrooms/*.bak*
+*.zip
+*.pdf
+*.log
+
+# ── 密钥与环境 ───────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+!.env.example.*
+
+# ── 构建与依赖 ───────────────────────────────────────────────────────
+node_modules/
+.next/
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+.turbo/
+
+# ── 备份目录（部署/互换留下的 .bak 家族） ────────────────────────────
+*.bak
+*.bak-*
+.bak-*/
+apps/classroom/public/agents/.bak-swap-20260822/
+
+# ── 嵌套仓库自身的元数据（classroom 上游 fork 的 .git 由脚本临时移开） ──
+apps/classroom/.git.upstream-bak/
+
+# ── 不属于本项目的文件与上游宣传素材 ─────────────────────────────────
+*.pptx
+apps/classroom/assets/

@@ -1,0 +1,20 @@
+{
+  "_source": "apps/agent-engine/data/metrics.json",
+  "_generator": "apps/classroom/scripts/sync-public-metrics.mjs（产物，勿手编）",
+  "hallucination": {
+    "percent": "2.08%",
+    "runs": 57,
+    "claims": 576,
+    "unsupported": 12
+  },
+  "adaptation": {
+    "percent": "85.2%",
+    "n": 108
+  },
+  "kcCoverage": {
+    "percent": "96.0%",
+    "hit": 48,
+    "total": 50,
+    "courses": 6
+  }
+}

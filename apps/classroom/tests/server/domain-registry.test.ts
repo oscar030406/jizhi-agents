@@ -1,0 +1,191 @@
+/**
+ * 域注册清单的消费路径：清单在 → 学习端认识新库；清单不在 → 全部走原有兜底。
+ *
+ * 用真文件（临时目录 + `ENGINE_DATA_DIR`），不 mock fs——这一层最容易坏在
+ * 「跨应用路径拼错」，假 fs 正好测不出来。课程域归属那一组跑仓库里真实的
+ * `data/classrooms/`，因为规则本身是对着这批课定的。
+ */
+
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+import { afterEach, describe, expect, it } from 'vitest';
+
+import { applyDomainRegistry, parseDomainRegistry } from '@/lib/knowledge/domain-registry';
+import { domainLabel, hasDomainLabel } from '@/lib/knowledge/domain-labels';
+import { examplePromptsFor } from '@/lib/knowledge/example-prompts';
+import { courseDomainOf, readCourseDomains } from '@/lib/server/course-domains';
+import { readDomainRegistry } from '@/lib/server/domain-registry';
+
+const ORIGINAL_ENGINE_DIR = process.env.ENGINE_DATA_DIR;
+
+afterEach(() => {
+  applyDomainRegistry(null);
+  if (ORIGINAL_ENGINE_DIR === undefined) delete process.env.ENGINE_DATA_DIR;
+  else process.env.ENGINE_DATA_DIR = ORIGINAL_ENGINE_DIR;
+});
+
+/**
+ * 把一份清单写进临时引擎数据目录并指过去。
+ * `enginePath()` 的口径是 `<ENGINE_DATA_DIR>/../<引擎相对路径>`，所以 env 指到 `data` 本身，
+ * 文件落在 `data/knowledge_base/` 下——与线上目录结构一致。
+ * `payload` 传字符串就原样写（用来造坏 json）。
+ */
+async function withRegistryFile(payload: unknown): Promise<void> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'domain-registry-'));
+  const dataDir = path.join(root, 'data');
+  await fs.mkdir(path.join(dataDir, 'knowledge_base'), { recursive: true });
+  await fs.writeFile(
+    path.join(dataDir, 'knowledge_base', 'domain_registry.json'),
+    typeof payload === 'string' ? payload : JSON.stringify(payload),
+    'utf-8',
+  );
+  process.env.ENGINE_DATA_DIR = dataDir;
+}
+
+describe('域注册清单：解析', () => {
+  it('两种外层形状都收（数组 / 以库名为键的对象）', () => {
+    const asArray = parseDomainRegistry({
+      generated_at: '2026-08-21T00:00:00Z',
+      source_run_id: 'run-1',
+      domains: [{ corpus: 'cold-chain', label: '冷链仓储运维' }],
+    });
+    const asMap = parseDomainRegistry({
+      generated_at: '2026-08-21T00:00:00Z',
+      source_run_id: 'run-1',
+      domains: { 'cold-chain': { label: '冷链仓储运维' } },
+    });
+    for (const r of [asArray, asMap]) {
+      expect(r.entries['cold-chain']?.label).toBe('冷链仓储运维');
+      expect(r.generatedAt).toBe('2026-08-21T00:00:00Z');
+      expect(r.sourceRunId).toBe('run-1');
+    }
+  });
+
+  it('坏数据不抛错：整个是 null、条目缺 corpus、字段类型不对', () => {
+    expect(parseDomainRegistry(null).entries).toEqual({});
+    expect(parseDomainRegistry({ domains: [{ label: '没有库名' }] }).entries).toEqual({});
+    const r = parseDomainRegistry({ domains: [{ corpus: 'x', chunks: '很多', examples: 'abc' }] });
+    expect(r.entries.x).toMatchObject({ corpus: 'x', chunks: undefined, examples: undefined });
+  });
+});
+
+describe('域中文名：清单优先，硬编码表兜底，都没有返回原值', () => {
+  it('清单里的新库直接上中文名', () => {
+    applyDomainRegistry(parseDomainRegistry({ domains: [{ corpus: 'mfg', label: '智能制造' }] }));
+    expect(domainLabel('mfg')).toBe('智能制造');
+    expect(hasDomainLabel('mfg')).toBe(true);
+  });
+
+  it('清单没灌时历史库仍有名字', () => {
+    expect(domainLabel('iotdb')).toBe('时序数据库 IoTDB');
+  });
+
+  it('清单里的名字压过硬编码表（改名走清单，不用改代码）', () => {
+    applyDomainRegistry(parseDomainRegistry({ domains: [{ corpus: 'iotdb', label: '新名字' }] }));
+    expect(domainLabel('iotdb')).toBe('新名字');
+  });
+
+  it('查不到时返回传进来的那个值本身，不兜底成别的库名', () => {
+    expect(domainLabel('brand-new-lib')).toBe('brand-new-lib');
+    expect(hasDomainLabel('brand-new-lib')).toBe(false);
+    expect(domainLabel()).toBe('人工智能应用开发');
+  });
+});
+
+describe('示例提示词', () => {
+  it('清单给了就用清单的', () => {
+    applyDomainRegistry(
+      parseDomainRegistry({ domains: [{ corpus: 'mfg', examples: ['讲清楚数控机床坐标系'] }] }),
+    );
+    expect(examplePromptsFor('mfg')).toEqual(['讲清楚数控机床坐标系']);
+  });
+
+  it('清单没有 → 历史库用自己的那份，陌生库用通用示例（不拿 ai 的主题顶）', () => {
+    expect(examplePromptsFor('iotdb')[1]).toContain('IoTDB');
+    const generic = examplePromptsFor('brand-new-lib');
+    expect(generic.length).toBeGreaterThan(0);
+    expect(generic.join('')).not.toContain('RAG');
+    expect(examplePromptsFor()).toEqual(examplePromptsFor('ai'));
+  });
+
+  it('清单里 examples 为空数组时回退，不返回空清单', () => {
+    applyDomainRegistry(parseDomainRegistry({ domains: [{ corpus: 'iotdb', examples: [] }] }));
+    expect(examplePromptsFor('iotdb')[1]).toContain('IoTDB');
+  });
+});
+
+describe('读盘', () => {
+  it('清单不存在时返回空视图且不抛错（引擎没跑过 ⑧ 站的环境要能启动）', async () => {
+    process.env.ENGINE_DATA_DIR = path.join(os.tmpdir(), 'no-such-engine-dir', 'data');
+    const r = await readDomainRegistry();
+    expect(r.entries).toEqual({});
+    expect(domainLabel('mfg')).toBe('mfg');
+  });
+
+  it('清单存在时读到并灌进内存视图', async () => {
+    await withRegistryFile({
+      domains: [{ corpus: 'mfg', label: '智能制造', examples: ['造一课'] }],
+    });
+    const r = await readDomainRegistry();
+    expect(r.entries.mfg?.label).toBe('智能制造');
+    expect(domainLabel('mfg')).toBe('智能制造');
+    expect(examplePromptsFor('mfg')).toEqual(['造一课']);
+  });
+
+  it('文件坏了退回空视图，不留旧清单在内存里冒充真源', async () => {
+    applyDomainRegistry(parseDomainRegistry({ domains: [{ corpus: 'mfg', label: '智能制造' }] }));
+    await withRegistryFile('{ 这不是 json');
+    expect((await readDomainRegistry()).entries).toEqual({});
+    expect(domainLabel('mfg')).toBe('mfg');
+  });
+});
+
+describe('课程域归属：单课规则', () => {
+  const scenesCiting = (sid: string) =>
+    [{ audit: { sources: [{ source_id: `${sid}#s3` }] } }] as unknown as Parameters<
+      typeof courseDomainOf
+    >[0]['scenes'];
+
+  it('路径内课程一律归 ai，压过课程自己记的 corpus（原脚本的硬规则）', () => {
+    const data = {
+      scenes: scenesCiting('em01s02'),
+      generation: { profile: { corpus: 'rag-adv' } },
+    } as Parameters<typeof courseDomainOf>[0];
+    expect(courseDomainOf(data, true)).toBe('ai');
+    expect(courseDomainOf(data, false)).toBe('rag-adv');
+  });
+
+  it('没有 corpus 字段的存量课按 source_id 前缀归位', () => {
+    expect(courseDomainOf({ scenes: scenesCiting('em01s02') }, false)).toBe('embodied');
+    expect(courseDomainOf({ scenes: scenesCiting('iotdb-quick-start') }, false)).toBe('iotdb');
+    expect(courseDomainOf({ scenes: scenesCiting('applications-sales') }, false)).toBe('odoo');
+  });
+
+  it('零引用的纯 slide 老课兜底成 ai', () => {
+    expect(courseDomainOf({ scenes: [] }, false)).toBe('ai');
+  });
+});
+
+describe('课程域归属：跑真实课程目录', () => {
+  it('结果与 build-course-domains.mjs 的既有产物一致', async () => {
+    const rows = await readCourseDomains();
+    expect(Object.keys(rows).length).toBeGreaterThan(0);
+
+    // 路径内的课（大量引具身文档）仍是 ai。
+    expect(rows.ygmJ2PpCKb?.domain).toBe('ai');
+    // 不在路径上、无 generation 字段的存量具身课。
+    expect(rows['r-kOa4ogHT']?.domain).toBe('embodied');
+    expect(rows.zTWuJxehpv?.domain).toBe('embodied');
+    // 选了 rag-adv 生成，但它挂在学习路径上 → 规则 1 压过来，判 ai（与旧产物一致）。
+    expect(rows.c3HH74qwAH?.domain).toBe('ai');
+    // 标题取 stage.name，首页课程卡直接用。
+    expect(rows['r-kOa4ogHT']?.title).toBe('ROS2 机器人系统入门');
+  });
+
+  it('.json.bak 之类的旁落文件不进结果', async () => {
+    const rows = await readCourseDomains();
+    expect(Object.keys(rows).some((id) => id.includes('.bak'))).toBe(false);
+  });
+});

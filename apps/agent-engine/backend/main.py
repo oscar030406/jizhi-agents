@@ -1,0 +1,48 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+from backend.api.intake_routes import router as intake_router
+from backend.api.routes import router
+from backend.integration.personalize_api import router as personalize_router
+
+
+ROOT = Path(__file__).resolve().parents[1]
+FRONTEND_DIR = ROOT / "frontend"
+
+
+app = FastAPI(
+    title="Agent Training System",
+    description="Multi-agent personalized learning system for Agent application training.",
+    version="0.1.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(router)
+# personalize 路由原本只在 legacy-platform 的 vendored 副本里挂载——README 教人起
+# apps/agent-engine，起完 /internal/v1/personalize/* 全 404，classroom 四个桥静默降级成
+# 裸生成（评分表最低档），页面上看不出任何异常。挂在引擎自己身上，两边起哪个都活。
+app.include_router(personalize_router)
+# 领域接入流水线：上传语料 → 一次可观察的 run。发起走 x-internal-token，查询只读。
+app.include_router(intake_router)
+
+if FRONTEND_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIR / "assets"), name="assets")
+
+
+@app.get("/")
+def index() -> FileResponse:
+    return FileResponse(FRONTEND_DIR / "index.html")
+

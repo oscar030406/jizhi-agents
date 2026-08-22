@@ -1,0 +1,141 @@
+from __future__ import annotations
+
+from backend.schemas.learner import DiagnosisResult, LearnerProfile
+from backend.schemas.resources import AuditResult, LearningPath, LearningPathStage, LearningResources
+from backend.services.concept_graph import concept_meta, load_graph, prerequisite_closure, topological_order
+
+_LEVELS = ["L1", "L2", "L3", "L4"]
+
+
+class LearningPathPlannerAgent:
+    """按概念前置图 + 学习者薄弱点动态生成学习路径（PLAYBOOK Phase B-2）。
+
+    取代原死模板：不同画像（薄弱概念、推荐难度不同）→ 不同的前置闭包与拓扑顺序 → 不同的路径。
+    """
+
+    name = "LearningPathPlannerAgent"
+
+    def run(
+        self,
+        profile: LearnerProfile,
+        diagnosis: DiagnosisResult,
+        resources: LearningResources,
+        audit: AuditResult,
+    ) -> LearningPath:
+        graph = load_graph()
+        # 学习者本次需要的概念 = 技能缺口 + 薄弱概念 + 目标概念；扩展到前置闭包。
+        blueprint = diagnosis.personalization_blueprint
+        gap_concepts = [
+            gap.concept
+            for gap in (blueprint.skill_gaps if blueprint else [])
+            if gap.gap > 0
+        ]
+        gap_priority = {
+            gap.concept: gap.priority
+            for gap in (blueprint.skill_gaps if blueprint else [])
+        }
+        needed = list(dict.fromkeys(gap_concepts + diagnosis.weak_concepts + resources.target_concepts))
+        closure = prerequisite_closure(needed) if graph else needed
+        ordered = topological_order(closure) if graph else needed
+
+        rec_rank = _rank(diagnosis.recommended_difficulty)
+        weak_set = set(diagnosis.weak_concepts) | set(gap_concepts)
+        base_hours = max(2, min(8, profile.time_budget_hours // 4))
+
+        # 核心阶段：难度不超过推荐难度的概念，按难度分档成阶段
+        core = [c for c in ordered if _rank(_concept_level(c, graph)) <= rec_rank]
+        advanced = [c for c in ordered if _rank(_concept_level(c, graph)) > rec_rank]
+        if not core:
+            core = ordered[:1] or needed[:1]
+
+        stages: list[LearningPathStage] = []
+        stage_no = 0
+        for level in _LEVELS:
+            level_concepts = [c for c in core if _concept_level(c, graph) == level]
+            level_concepts.sort(key=lambda concept: gap_priority.get(concept, 10_000))
+            if not level_concepts:
+                continue
+            stage_no += 1
+            gap_here = [c for c in level_concepts if c in weak_set]
+            focus = gap_here or level_concepts
+            titles = "、".join(_concept_title(c, graph) for c in level_concepts)
+            misconceptions = [m for c in level_concepts for m in concept_meta(c).get("misconceptions", [])][:2]
+            practice = (
+                resources.practice_task.title
+                if resources.practice_task.difficulty == level
+                else f"围绕 {titles} 做一个证据约束的小实操，产出可运行片段并记录 trace。"
+            )
+            goals = [f"掌握：{titles}"]
+            if gap_here:
+                goals.append(f"重点补齐薄弱点：{'、'.join(_concept_title(c, graph) for c in gap_here)}")
+            if misconceptions:
+                goals.append(f"规避常见误区：{'；'.join(misconceptions)}")
+            stages.append(
+                LearningPathStage(
+                    stage_id=f"stage-{stage_no}",
+                    title=f"阶段{stage_no}·{level} {titles}",
+                    difficulty=level,
+                    goals=goals,
+                    concepts=level_concepts,
+                    practice_task=practice,
+                    assessment=f"针对 {titles} 的分阶测验 + 证据引用检查",
+                    estimated_hours=base_hours + (_rank(level) - 1),
+                )
+            )
+
+        # 审核未过则插入证据修订阶段
+        if audit.revision_required and stages:
+            stages.insert(
+                min(1, len(stages)),
+                LearningPathStage(
+                    stage_id="stage-revise",
+                    title="证据修订巩固",
+                    difficulty=diagnosis.recommended_difficulty,
+                    goals=["为缺引用的结论补齐 source_id", "重做被审核判为无据的部分"],
+                    concepts=list(weak_set)[:4] or resources.target_concepts[:3],
+                    practice_task="把生成资源修订到审核通过：引用覆盖与概念覆盖达标。",
+                    assessment="审核事实性≥0.75 且无低置信检索警告",
+                    estimated_hours=2,
+                ),
+            )
+
+        # 进阶展望（超出当前推荐难度的概念）
+        if advanced:
+            titles = "、".join(_concept_title(c, graph) for c in advanced)
+            stages.append(
+                LearningPathStage(
+                    stage_id="stage-advanced",
+                    title=f"进阶展望·{titles}",
+                    difficulty=_concept_level(advanced[-1], graph),
+                    goals=[f"达成当前阶段后再挑战：{titles}"],
+                    concepts=advanced,
+                    practice_task=f"完成核心阶段后，选做 {titles} 的开放任务。",
+                    assessment="开放任务 + 自评 trace",
+                    estimated_hours=base_hours + 2,
+                )
+            )
+
+        prereq_titles = [
+            _concept_title(c, graph)
+            for c in ordered
+            if c not in weak_set and c not in resources.target_concepts
+        ]
+        return LearningPath(
+            learning_path=stages,
+            stage_goals=[stage.title for stage in stages],
+            prerequisites=prereq_titles[:4] or ["Python 基础", "LLM 提示词基础"],
+            estimated_time=sum(stage.estimated_hours for stage in stages),
+            assessment_plan=[stage.assessment for stage in stages],
+        )
+
+
+def _rank(level: str) -> int:
+    return _LEVELS.index(level) + 1 if level in _LEVELS else 2
+
+
+def _concept_level(concept: str, graph: dict) -> str:
+    return graph.get(concept, {}).get("difficulty", "L2")
+
+
+def _concept_title(concept: str, graph: dict) -> str:
+    return graph.get(concept, {}).get("title", concept.replace("_", " "))

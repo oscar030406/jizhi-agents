@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent Training OS - 多智能体个性化学习系统</title>
+    <link rel="stylesheet" href="assets/styles.css" />
+  </head>
+  <body>
+    <div class="topbar">
+      <div class="brand-lockup">
+        <div class="brand-mark">A</div>
+        <div>
+          <strong>Agent Training OS</strong>
+          <span>AI Agent 个性化学习系统</span>
+        </div>
+      </div>
+      <div class="level-strip">
+        <span>Lv. 7</span>
+        <div class="level-track"><div></div></div>
+        <strong>本周学习进度 68%</strong>
+      </div>
+      <div class="top-actions">
+        <a id="exportEval" href="/api/evaluation/export" download>导出评测 CSV</a>
+        <button id="runWorkflow" class="primary">运行完整闭环</button>
+      </div>
+    </div>
+
+    <main class="learning-shell">
+      <aside class="course-rail" id="profile">
+        <div class="rail-card course-progress">
+          <div class="rail-title">
+            <h2>个性化学习路径</h2>
+            <button id="loadProfiles" class="ghost">刷新</button>
+          </div>
+          <label>预设画像</label>
+          <select id="profileSelect"></select>
+          <label>学习目标</label>
+          <textarea id="learningGoal" rows="3"></textarea>
+          <div id="profileDetail" class="profile-detail"></div>
+        </div>
+
+        <div class="rail-card chapter-list">
+          <div class="progress-ring"><span>72%</span><small>整体进度</small></div>
+          <div class="chapter active"><b>01</b><span>认识 Agent 与智能体架构</span><em>完成</em></div>
+          <div class="chapter active"><b>02</b><span>工具调用与结构化输出</span><em>完成</em></div>
+          <div class="chapter current"><b>03</b><span>RAG 证据链生成</span><em>进行中</em></div>
+          <div class="chapter"><b>04</b><span>多 Agent 协同与审核</span><em>未开始</em></div>
+          <div class="chapter"><b>05</b><span>评测、反馈与部署</span><em>未开始</em></div>
+        </div>
+      </aside>
+
+      <section class="coach-column">
+        <section id="conversation" class="coach-card">
+          <div class="coach-head">
+            <div>
+              <h1>AI 导师正在构建你的 Agent 实训路线</h1>
+              <p>聊天会落到画像、证据、资源、审核、路径或反馈决策，不做泛聊天。</p>
+            </div>
+            <div class="mode-pill">教学模式</div>
+          </div>
+          <div id="chatLog" class="chat-log"></div>
+          <div class="quick-actions">
+            <button class="quick" data-message="开始运行完整闭环">运行闭环</button>
+            <button class="quick" data-message="查看当前评测指标">评测指标</button>
+            <button class="quick" data-message="我测验分数不高，有点卡住，需要反馈建议">反馈建议</button>
+          </div>
+          <div class="chat-input-row">
+            <input id="chatInput" placeholder="告诉我目标、基础和时间，例如：我会 Python，7 天冲刺 Agent RAG 评测系统" />
+            <button id="sendChat" class="primary">发送</button>
+          </div>
+        </section>
+
+        <section id="diagnosis" class="lesson-card">
+          <div class="section-title">
+            <span>诊断</span>
+            <h2>学情画像与能力向量</h2>
+          </div>
+          <div class="metric-strip">
+            <div><span>推荐难度</span><strong id="difficulty">-</strong></div>
+            <div><span>薄弱知识点</span><strong id="weakCount">-</strong></div>
+            <div><span>证据源数量</span><strong id="sourceCount">-</strong></div>
+            <div><span>审核状态</span><strong id="auditStatus">-</strong></div>
+          </div>
+          <div class="diagnosis-grid">
+            <div>
+              <h3>能力向量</h3>
+              <div id="masteryBars" class="bar-list"></div>
+            </div>
+            <div>
+              <h3>诊断摘要</h3>
+              <p id="diagnosisSummary" class="muted">等待运行工作流。</p>
+              <div id="weakConcepts" class="chip-list"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="resources" class="lesson-card">
+          <div class="section-title">
+            <span>资源</span>
+            <h2>个性化讲义与实操任务</h2>
+          </div>
+          <div class="resource-layout">
+            <article>
+              <h3>专属讲义</h3>
+              <div id="lecture"></div>
+            </article>
+            <article>
+              <h3>实操任务</h3>
+              <div id="practiceTask"></div>
+            </article>
+          </div>
+          <div class="quiz-band">
+            <h3>分层测试题</h3>
+            <div id="gradedQuiz" class="quiz-grid"></div>
+          </div>
+        </section>
+
+        <section id="path" class="lesson-card">
+          <div class="section-title">
+            <span>路径</span>
+            <h2>项目阶梯与学习报告</h2>
+          </div>
+          <div id="auditPanel" class="audit-panel"></div>
+          <div id="debatePanel" class="debate-panel"></div>
+          <div id="learningPath" class="path-grid"></div>
+        </section>
+
+        <section id="history" class="lesson-card">
+          <div class="section-title">
+            <span>历史</span>
+            <h2>运行历史与对比</h2>
+          </div>
+          <div class="history-toolbar">
+            <p class="muted">每次闭环运行保留一条摘要；点击历史项可回放完整产物。</p>
+            <button id="refreshHistory" class="ghost" type="button">刷新历史</button>
+          </div>
+          <div id="runHistory" class="history-grid"></div>
+          <div id="historyDetail" class="history-detail"></div>
+        </section>
+      </section>
+
+      <aside class="insight-rail">
+        <section class="insight-card artifact-board">
+          <div class="card-head">
+            <h2>结构化产物</h2>
+            <span>Artifacts</span>
+          </div>
+          <div id="artifactTargets" class="chip-list"></div>
+          <div id="profileDraft" class="profile-draft"></div>
+          <button id="runDraftProfile" class="secondary draft-run" type="button">用对话画像运行</button>
+        </section>
+
+        <section class="insight-card" id="trace">
+          <div class="card-head">
+            <h2>Agent 协同过程</h2>
+            <span>Trace</span>
+          </div>
+          <div id="traceTimeline" class="timeline"></div>
+        </section>
+
+        <section class="insight-card">
+          <div class="card-head">
+            <h2>证据链</h2>
+            <span>Evidence</span>
+          </div>
+          <div id="sources" class="source-grid"></div>
+        </section>
+
+        <section class="insight-card">
+          <div class="card-head">
+            <h2>模型路由</h2>
+            <span>Models</span>
+          </div>
+          <div id="modelRoutes" class="source-grid"></div>
+        </section>
+
+        <section class="insight-card">
+          <div class="card-head">
+            <h2>评测样例</h2>
+            <span>Eval</span>
+          </div>
+          <div id="evalSummary" class="eval-summary"></div>
+        </section>
+
+        <section id="feedback" class="insight-card">
+          <div class="card-head">
+            <h2>反馈迭代</h2>
+            <span>Loop</span>
+          </div>
+          <div class="feedback-form">
+            <label>测验得分</label>
+            <input id="feedbackScore" type="range" min="0" max="100" value="68" />
+            <label>学习信心 1-5</label>
+            <input id="feedbackConfidence" type="number" min="1" max="5" value="3" />
+            <label>反馈说明</label>
+            <textarea id="feedbackText" rows="3">RAG 能理解，但审核规则还不熟。</textarea>
+            <button id="submitFeedback" class="primary">提交反馈并决策</button>
+          </div>
+          <div id="feedbackResult" class="feedback-result"></div>
+        </section>
+      </aside>
+    </main>
+
+    <script src="assets/static-data.js"></script>
+    <script src="assets/app.js"></script>
+  </body>
+</html>

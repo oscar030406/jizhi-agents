@@ -1,0 +1,705 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+
+/* Streamdown (AI sidebar markdown) styles itself with Tailwind utilities —
+   Tailwind must scan its dist so those classes get generated. */
+@source '../node_modules/streamdown/dist/*.js';
+@source '../node_modules/@streamdown/code/dist/*.js';
+@source "../node_modules/@openmaic/renderer/dist/**/*.{js,cjs}";
+/* slide-renderer-demo is gitignored (local sandbox), which makes Tailwind v4's
+   auto source detection skip it. Re-include it explicitly so the demo's
+   Tailwind classes (e.g. bg-violet-600) still get generated. */
+@source "./slide-renderer-demo/**/*.{tsx,ts,jsx,js}";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans:
+    var(--font-sans), 'PingFang SC', 'Hiragino Sans GB', 'Source Han Sans SC', 'Microsoft YaHei',
+    system-ui, sans-serif;
+  --font-serif: 'Noto Serif SC', 'Source Han Serif SC', 'STSong', 'SimSun', Georgia, serif;
+  --font-mono: var(--font-geist-mono);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-ring-solid: var(--ring-solid);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
+  /* 学径语义粉彩（值取自 apps/legacy-platform/web-next/app/globals.css L15-24）。
+     soft = 小面积底色，deep = 其上文字/描边。仅供我方增量功能（画像/前测/决策/对比/摘录）
+     使用，上游原生组件一律不吃这套 token——对比本身就是「哪些是我们做的」的标记。 */
+  --color-red-soft: var(--red-soft);
+  --color-red-deep: var(--red-deep);
+  --color-blue-soft: var(--blue-soft);
+  --color-blue-deep: var(--blue-deep);
+  --color-green-soft: var(--green-soft);
+  --color-green-deep: var(--green-deep);
+  --color-yellow-soft: var(--yellow-soft);
+  --color-yellow-deep: var(--yellow-deep);
+  --color-purple-soft: var(--purple-soft);
+  --color-purple-deep: var(--purple-deep);
+  /* 设计语言规格 v1 增量：卡内分隔线（2.1）、进度达成绿（2.2）、暗色 surface 台阶（2.7） */
+  --color-border-subtle: var(--border-subtle);
+  --color-green-solid: var(--green-solid);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  /* 公共页整段换底暖米色（public-site-redesign §4.1）：介于 Brilliant 米灰与
+     Khanmigo 奶油之间，只给公共页 section 级底色轮换用，应用页不吃。 */
+  --color-surface-warm: var(--surface-warm);
+  /* 评点本朱批（public-site-redesign §0-bis）：朱=判官核验过的句子，
+     赭=复核/打回批次。细下划线专用，禁大面积铺色。 */
+  --color-annot-zhu: var(--annot-zhu);
+  --color-annot-zhe: var(--annot-zhe);
+}
+
+/* static：动效/阴影 token 即使暂无消费方也要真实落进 :root，供后续各期直接取用 */
+@theme static {
+  /* 阴影三档（规格 2.3，配方⑭⑮）：静置卡四层微阴影 / 悬浮层近锐远柔 / hover 专用 drop-shadow */
+  --shadow-card:
+    0px 1px 1px rgb(0 0 0 / 0.05), 0px 1px 2px rgb(0 0 0 / 0.06), 0px 2px 2px rgb(0 0 0 / 0.07),
+    0px 0px 8px rgb(0 0 0 / 0.04);
+  --shadow-dropdown: 0px 5px 20px rgb(0 0 0 / 0.1), 0px 10px 40px rgb(0 0 0 / 0.03);
+  --drop-shadow-card-hover: 0 2px 4px #222a350d;
+  /* 动效预算（规格 2.6，配方⑳㉑②）。Tailwind v4 的 duration-* 工具类读
+     --transition-duration-* 命名空间，故在规格命名之外补一份同值别名，
+     两套名字指向同一预算，改值时两处同改。 */
+  --duration-fast: 150ms;
+  --duration-base: 200ms;
+  --duration-slow: 300ms;
+  --transition-duration-fast: 150ms;
+  --transition-duration-base: 200ms;
+  --transition-duration-slow: 300ms;
+  --ease-out-quad: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+:root {
+  /* 学径米暖白底（色调回暖微调：原 #fbfbfa 肉眼近白，暖化一档为 hue 85 奶油白），
+     卡片保持纯白形成层次。中性色带微暖（规格 2.1，配方⑬）：压在暖白上不显脏。 */
+  --background: oklch(0.985 0.006 85);
+  /* 正文暖棕黑（public-site-redesign §4.1）：chroma 0.006→0.010，对齐 Notion #37352F 口径 */
+  --foreground: oklch(0.28 0.01 50);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.28 0.01 50);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.28 0.01 50);
+  --primary: #722ed1;
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.955 0.005 50);
+  --secondary-foreground: oklch(0.28 0.01 50);
+  --muted: oklch(0.965 0.007 85);
+  --muted-foreground: oklch(0.5 0.008 50);
+  --accent: oklch(0.945 0.009 85);
+  --accent-foreground: oklch(0.28 0.01 50);
+  /* 公共页段落换底暖米色（public-site-redesign §4.1）：白 / surface-warm / soft 粉彩三轮换 */
+  --surface-warm: oklch(0.965 0.012 60);
+  --destructive: oklch(0.58 0.22 27);
+  --border: oklch(0.9 0.006 50);
+  --border-subtle: oklch(0.93 0.005 50);
+  --input: oklch(0.9 0.006 50);
+  /* focus ring 中性蓝（规格 2.8，配方㉒）：紫 ring 叠粉彩底会花 */
+  --ring: oklch(0.62 0.17 255 / 0.4);
+  /* 焦点圈专用的**不透明**同色。
+     2026-08-13 实测：--ring 自带 0.4 alpha，base 层 `* { outline-ring/50 }` 与
+     shadcn 组件基类的 `focus-visible:ring-ring/50` 又各砍一半 → 有效 alpha ≈0.2，
+     全站控件焦点圈与底色对比 **1.06–1.65:1**，WCAG 2.4.7/1.4.11 要 3:1。
+     三个 agent 各自在自己页面打过临时补丁，根因都在这里。
+     不动 --ring 本身：那个 0.4 是有记录的设计决定（紫 ring 叠粉彩底会花），
+     它服务的是装饰性描边；焦点圈另开一个不透明值，两件事分开。 */
+  --ring-solid: oklch(0.62 0.17 255);
+  /* 进度达成绿（规格 2.2，配方③）：只用于徽章/描边/4px 进度条等小面积 */
+  --green-solid: oklch(0.62 0.15 150);
+  /* 亮色不走 surface 台阶（用阴影分层），占位与卡片/弹层同值（规格 2.7 只定义暗色） */
+  --surface-1: var(--card);
+  --surface-2: var(--popover);
+  --surface-3: var(--muted);
+  --chart-1: oklch(0.809 0.105 251.813);
+  --chart-2: oklch(0.623 0.214 259.815);
+  --chart-3: oklch(0.546 0.245 262.881);
+  --chart-4: oklch(0.488 0.243 264.376);
+  --chart-5: oklch(0.424 0.199 265.638);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+  /* 评点本朱批 · 亮色：朱砂偏暖于 red-deep（错误语义），赭石为复核批次色 */
+  --annot-zhu: #b2422f;
+  --annot-zhe: #96662a;
+  /* 学径语义粉彩 · 亮色（原值照抄） */
+  --red-soft: #fdebec;
+  --red-deep: #9f2f2d;
+  --blue-soft: #e1f3fe;
+  --blue-deep: #1f6c9f;
+  --green-soft: #edf3ec;
+  --green-deep: #346538;
+  --yellow-soft: #fbf3db;
+  --yellow-deep: #956400;
+  --purple-soft: #f1edf7;
+  --purple-deep: #5e4b8b;
+}
+
+.dark {
+  /* 暗色同步微暖（不发灰）：底/muted/accent 带 hue 70 微暖色相，与亮色米暖白对应 */
+  --background: oklch(0.148 0.005 70);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: #8b47ea;
+  /* 2026-08-13：原来是 oklch(0.205 0 0)（近黑 #171717），压在 #8b47ea 上实测
+     **3.57:1**，正文要 4.5:1（WCAG 1.4.3）。全站每个 primary Button 在暗色下都是这个数。
+     亮色那侧本来就是近白（6.65:1），暗色跟上即可——紫底配白字两边一致，
+     也省掉「暗色按钮字是黑的」这种反直觉。 */
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0.005 70);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.371 0.005 70);
+  --accent-foreground: oklch(0.985 0 0);
+  /* 暗色 surface-warm：比底色高半档的微暖台阶，维持段落轮换的明度节奏 */
+  --surface-warm: oklch(0.19 0.008 70);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --border-subtle: oklch(1 0 0 / 7%);
+  --input: oklch(1 0 0 / 15%);
+  /* focus ring 与亮色同规格中性蓝（规格 2.8） */
+  --ring: oklch(0.62 0.17 255 / 0.4);
+  /* 暗色底更深，焦点圈提亮一档才够 3:1（见亮色侧注释） */
+  --ring-solid: oklch(0.72 0.15 255);
+  --green-solid: oklch(0.62 0.15 150);
+  /* 暗色 surface 三档（规格 2.7，配方⑰）：暗色下卡片 hover 走升 surface + 边框升档，不走阴影 */
+  --surface-1: oklch(0.205 0 0);
+  --surface-2: oklch(0.24 0 0);
+  --surface-3: oklch(0.27 0 0);
+  --chart-1: oklch(0.809 0.105 251.813);
+  --chart-2: oklch(0.623 0.214 259.815);
+  --chart-3: oklch(0.546 0.245 262.881);
+  --chart-4: oklch(0.488 0.243 264.376);
+  --chart-5: oklch(0.424 0.199 265.638);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+  /* 评点本朱批 · 暗色：同色相提亮减饱和，保下划线可见度 */
+  --annot-zhu: #e09a83;
+  --annot-zhe: #d3a960;
+  /* 学径语义粉彩 · 暗色：soft 转同色相深底、deep 提亮减饱和为文字色，保对比度 */
+  --red-soft: #3a2426;
+  --red-deep: #e0a19f;
+  --blue-soft: #1c2b38;
+  --blue-deep: #8cc0e4;
+  --green-soft: #233027;
+  --green-deep: #a8c9ab;
+  --yellow-soft: #352e1c;
+  --yellow-deep: #d4ac57;
+  --purple-soft: #2b2438;
+  --purple-deep: #c2b1de;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  /*
+   * 键盘焦点必须看得见（WCAG 2.4.7），且焦点指示与相邻色要 3:1（1.4.11）。
+   *
+   * 上面那条 `*` 规则给的是 outline-ring/50 —— --ring 自带 0.4 alpha 再砍一半，
+   * 实测只有 1.06–1.65:1，等于没有。组件基类的 focus-visible:ring-ring/50 同理。
+   * 那两处都不动（前者是装饰性描边的默认色，后者是 shadcn 上游文件，改了就是分叉），
+   * 改成在这里给每个 :focus-visible 补一条**不透明**的 outline 兜底。
+   *
+   * 特异度 (0,1,0)：压得住 `*`(0,0,0)，压不住
+   * `.prosemirror-editor :focus-visible`(0,2,0) —— 编辑器里那条 outline:none 仍然生效，
+   * 那是有意的（渲染器自己画选中框，再叠一圈会重影）。
+   */
+  :focus-visible {
+    outline: 2px solid var(--ring-solid);
+    outline-offset: 2px;
+  }
+  html {
+    /* Always render the vertical scrollbar so layout doesn't horizontally
+       shift when content grows/shrinks across the viewport-height threshold
+       (e.g. expanding/collapsing recent classrooms). scrollbar-gutter:
+       stable doesn't cover every browser/config combo we see, so fall back
+       to forcing overflow-y: scroll as well. */
+    scrollbar-gutter: stable;
+    overflow-y: scroll;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  /* Radix modal overlays wrap with `react-remove-scroll`, which compensates
+     for the removed page scrollbar by adding right-side body spacing. This
+     app already reserves the scrollbar gutter on <html> (above), so that
+     extra compensation creates a visible horizontal layout shift when opening
+     Settings on the homepage/classroom shells. Keep Radix's modal focus and
+     interaction locking, but neutralize only the redundant gap compensation. */
+  body[data-maic-editor='true'],
+  body[data-scroll-locked] {
+    padding-right: 0 !important;
+    margin-right: 0 !important;
+  }
+}
+/* 评点本朱批下划线（public-site-redesign §0-bis）：判官核验过的句子。
+   细下划线不是波浪线（波浪=错误语义）；朱=核过，赭=存疑/判误；
+   dotted 专给「超出教材覆盖」的存疑句。hover 微垫 soft 底提示可点。 */
+.annot-claim {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+  cursor: pointer;
+  transition: background-color 150ms;
+}
+.annot-zhu {
+  text-decoration-color: color-mix(in srgb, var(--annot-zhu) 65%, transparent);
+}
+.annot-zhe {
+  text-decoration-color: color-mix(in srgb, var(--annot-zhe) 75%, transparent);
+}
+.annot-dotted {
+  text-decoration-style: dotted;
+}
+.annot-claim:hover,
+.annot-claim[data-annot-open='true'] {
+  background: color-mix(in srgb, var(--annot-zhu) 10%, transparent);
+}
+
+/* ProseMirror Editor Styles */
+.prosemirror-editor {
+  cursor: text;
+}
+
+/* The slide editor draws a text element's frame via the renderer's Operate
+   layer. The focused contenteditable must not also paint a UA focus ring on
+   top of it (the base `* { @apply outline-ring/50 }` rule gives every focused
+   element an outline). `.prosemirror-editor` is an editor-only class —
+   playback's BaseTextElement never carries it, so playback is unaffected. */
+.prosemirror-editor :focus,
+.prosemirror-editor :focus-visible {
+  outline: none;
+}
+
+/* Tailwind's preflight resets `list-style: none` and `padding: 0` on
+   `<ul>`/`<ol>`. The text element's `bulletList` / `orderedList` commands
+   genuinely wrap content in `<ul><li>` / `<ol><li>`, but without those
+   resets undone no marker would be visible. `!important` defeats any
+   layered preflight specificity we'd otherwise have to chase.
+
+   `.editable-element-text` is the PLAYBACK text wrapper, rendered for every
+   classroom/playback user — not just in the editor. So its rules MUST be
+   scoped to editor mode (`body[data-maic-editor='true']`, set by
+   EditChromeRoot while Pro mode is mounted) to keep flag-off playback
+   rendering byte-unchanged: the editor surface isn't GA yet, so playback
+   display of editor-authored lists is deferred. Scoping keeps list markers
+   visible while editing (the user needs to see their bullets) without
+   altering how the same wrapper renders during normal playback for all
+   users. `.prosemirror-editor` is an editor-only class already (playback's
+   BaseTextElement never carries it), so it stays unscoped. */
+body[data-maic-editor='true'] .editable-element-text ul,
+.prosemirror-editor ul {
+  list-style: disc outside !important;
+  padding-inline-start: 1.5rem !important;
+}
+body[data-maic-editor='true'] .editable-element-text ol,
+.prosemirror-editor ol {
+  list-style: decimal outside !important;
+  padding-inline-start: 1.5rem !important;
+}
+body[data-maic-editor='true'] .editable-element-text li,
+.prosemirror-editor li {
+  display: list-item !important;
+}
+
+/* Compact react-colorful for the slide editor's color popover. Defaults are
+   a 200×200 square with a thick separator — we squeeze it tight + round it
+   so the popover feels intentional, not stock. */
+.color-picker .react-colorful {
+  width: 100%;
+  height: auto;
+}
+.color-picker .react-colorful__saturation {
+  height: 128px;
+  border-radius: 6px;
+  border-bottom: none;
+}
+.color-picker .react-colorful__hue {
+  height: 10px;
+  margin-top: 10px;
+  border-radius: 999px;
+}
+.color-picker .react-colorful__pointer {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+}
+
+.prosemirror-editor.format-painter {
+  cursor:
+    url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjYiIGhlaWdodD0iMTYiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHBhdGggZD0iTTcuMzUuMDEybC0uMDY2Ljk5OGE1LjI3MSA1LjI3MSAwIDAwLTEuMTg0LjA2IDMuOCAzLjggMCAwMC0uOTMzLjQ3MmMtLjQ0LjM1Ni0uNzgzLjgxMS0uOTk4IDEuMzI0bC4wMTgtLjAzNnY1LjEySDEuMDR2Ljk4aC0xLjA0bC0uMDAyIDQuMTVjLjE4Ny40MjYuNDYuODEuNzkxIDEuMTE3bC4xNzUuMTUyYy4yOTMuMjA4LjYxNS4zNzMuODkuNDcyLjQxLjA4Mi44My4xMTIgMS4yNDkuMDlsLjA1Ny45OTlhNi4wNjMgNi4wNjMgMCAwMS0xLjU4OC0uMTI5IDQuODM2IDQuODM2IDAgMDEtMS4yNS0uNjQ3IDQuNDYzIDQuNDYzIDAgMDEtLjgzOC0uODgzYy0uMjI0LjMzMi0uNS42NDItLjgyNC45MjdhNC4xMSA0LjExIDAgMDEtMS4zMDUuNjMzQTYuMTI2IDYuMTI2IDAgMDEwIDE1LjkwOWwuMDY4LS45OTdjLjQyNC4wMjYuODUtLjAwMSAxLjIxNy0uMDcuMzM2LS4wOTkuNjUxLS4yNTQuODk0LS40My40My0uMzguNzY1LS44NDcuOTgyLTEuMzY4bC0uMDA1LjAxNFY4LjkzSDIuMTE1di0uOThoMS4wNFYyLjg2MmEzLjc3IDMuNzcgMCAwMC0uNzc0LTEuMTY3bC0uMTY1LS4xNTZhMy4wNjQgMy4wNjQgMCAwMC0uODgtLjQ0OEE1LjA2MiA1LjA2MiAwIDAwLjA2NyAxLjAxTDAgLjAxMmE2LjE0IDYuMTQgMCAwMTEuNTkyLjExYy40NTMuMTM1Ljg3Ny4zNDUgMS4yOS42NS4zLjI2NS41NjUuNTY0Ljc4Ny44OS4yMzMtLjMzMS41Mi0uNjM0Ljg1My0uOTA0YTQuODM1IDQuODM1IDAgMDExLjMtLjY0OEE2LjE1NSA2LjE1NSAwIDAxNy4zNS4wMTJ6IiBmaWxsPSIjMEQwRDBEIi8+PHBhdGggZD0iTTE3LjM1IDE0LjVsNC41LTQuNS02LTZjLTIgMi0zIDItNS41IDIuNS40IDMuMiA0LjgzMyA2LjY2NyA3IDh6bTQuNTg4LTQuNDkzYS4zLjMgMCAwMC40MjQgMGwuNjgtLjY4YTEuNSAxLjUgMCAwMDAtMi4xMjJMMjEuNjkgNS44NTNsMi4wMjUtMS41ODNhMS42MjkgMS42MjkgMCAxMC0yLjI3OS0yLjI5NmwtMS42MDMgMi4wMjItMS4zNTctMS4zNTdhMS41IDEuNSAwIDAwLTIuMTIxIDBsLS42OC42OGEuMy4zIDAgMDAwIC40MjVsNi4yNjMgNi4yNjN6IiBmaWxsPSIjZmZmIi8+PHBhdGggZD0iTTE1Ljg5MiAzLjk2MnMtMS4wMyAxLjIwMi0yLjQ5NCAxLjg5Yy0xLjAwNi40NzQtMi4xOC41ODYtMi43MzQuNjI3LS4yLjAxNS0uMzQ0LjIxLS4yNzYuMzk5LjI5Mi44MiAxLjExMiAyLjggMi42NTggNC4zNDYgMi4xMjYgMi4xMjcgMy42NTggMi45NjggNC4xNDIgMy4yMDMuMS4wNDguMjE0LjAzLjI5OC0uMDQyLjM4Ni0uMzI1IDEuNS0xLjI3NyAyLjIxLTEuOTg2Ljg5Mi0uODg5IDIuMTg3LTIuNDQ3IDIuMTg3LTIuNDQ3bS40NzkuMDU1YS4zLjMgMCAwMS0uNDI0IDBsLTYuMjY0LTYuMjYzYS4zLjMgMCAwMTAtLjQyNWwuNjgtLjY4YTEuNSAxLjUgMCAwMTIuMTIyIDBsMS4zNTcgMS4zNTcgMS42MDMtMi4wMjJhMS42MjkgMS42MjkgMCAxMTIuMjggMi4yOTZMMjEuNjkgNS44NTNsMS4zNTIgMS4zNTJhMS41IDEuNSAwIDAxMCAyLjEyMmwtLjY4LjY4eiIgc3Ryb2tlPSIjMzMzIiBzdHJva2Utd2lkdGg9IjEuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9zdmc+')
+      2 5,
+    default !important;
+}
+
+/* Animation for audio visualizer */
+@keyframes wave {
+  0%,
+  100% {
+    height: 30%;
+  }
+  50% {
+    height: 100%;
+  }
+}
+
+/* Breathing bars for presentation speech bubbles (parent is h-3.5 = 14px) */
+@keyframes breathing-bar-1 {
+  0%,
+  100% {
+    height: 3px;
+  }
+  50% {
+    height: 14px;
+  }
+}
+@keyframes breathing-bar-2 {
+  0%,
+  100% {
+    height: 6px;
+  }
+  50% {
+    height: 14px;
+  }
+}
+@keyframes breathing-bar-3 {
+  0%,
+  100% {
+    height: 3px;
+  }
+  50% {
+    height: 11px;
+  }
+}
+
+/* Hide scrollbar by default, show on hover */
+@utility scrollbar-hide {
+  &::-webkit-scrollbar {
+    display: none;
+  }
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* PBL v2 workspace scrollbars: scoped so the rest of OpenMAIC keeps native behavior. */
+[data-pbl-workspace='true'] .pbl-v2-scrollbar,
+[data-pbl-workspace='true'] .pbl-v2-scroll-fade {
+  scrollbar-color: rgb(224 231 255 / 0.44) transparent;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+[data-pbl-workspace='true'] .pbl-v2-scrollbar::-webkit-scrollbar,
+[data-pbl-workspace='true'] .pbl-v2-scroll-fade::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+
+[data-pbl-workspace='true'] .pbl-v2-scrollbar::-webkit-scrollbar-track,
+[data-pbl-workspace='true'] .pbl-v2-scroll-fade::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 999px;
+}
+
+[data-pbl-workspace='true'] .pbl-v2-scrollbar::-webkit-scrollbar-corner,
+[data-pbl-workspace='true'] .pbl-v2-scroll-fade::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* 规格第 5 章第 8 条：彩虹渐变+发光滚动条清除，改为素色半透明拇指。 */
+[data-pbl-workspace='true'] .pbl-v2-scrollbar::-webkit-scrollbar-thumb,
+[data-pbl-workspace='true'] .pbl-v2-scroll-fade::-webkit-scrollbar-thumb {
+  background: rgb(224 231 255 / 0.35) content-box;
+  background-clip: content-box;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  min-height: 48px;
+}
+
+[data-pbl-workspace='true'] .pbl-v2-scrollbar::-webkit-scrollbar-thumb:hover,
+[data-pbl-workspace='true'] .pbl-v2-scroll-fade::-webkit-scrollbar-thumb:hover {
+  background: rgb(224 231 255 / 0.5) content-box;
+  background-clip: content-box;
+}
+
+[data-pbl-workspace='true'] .pbl-v2-light-card-markdown {
+  color: rgb(51 65 85);
+}
+
+[data-pbl-workspace='true'] .pbl-v2-light-card-markdown :where(p, li, blockquote) {
+  color: rgb(51 65 85);
+}
+
+[data-pbl-workspace='true'] .pbl-v2-light-card-markdown :where(strong, b) {
+  color: rgb(15 23 42);
+}
+
+[data-pbl-workspace='true'] .pbl-v2-light-card-markdown :where(code):not(pre code) {
+  background: rgb(226 232 240 / 0.9);
+  border: 1px solid rgb(148 163 184 / 0.28);
+  border-radius: 0.375rem;
+  color: rgb(30 41 59);
+  font-weight: 600;
+}
+
+[data-pbl-workspace='true'] .pbl-v2-light-card-markdown div[data-streamdown='code-block'] {
+  border-color: rgb(148 163 184 / 0.22);
+  box-shadow: 0 12px 24px rgb(15 23 42 / 0.16);
+}
+
+[data-pbl-workspace='true'] .pbl-v2-light-card-markdown div[data-streamdown='code-block-body'],
+[data-pbl-workspace='true'] .pbl-v2-light-card-markdown div[data-streamdown='code-block-body'] pre {
+  background: rgb(15 23 42) !important;
+  color: rgb(248 250 252) !important;
+}
+
+[data-pbl-workspace='true'] .pbl-v2-light-card-markdown div[data-streamdown='code-block-body'] code,
+[data-pbl-workspace='true']
+  .pbl-v2-light-card-markdown
+  div[data-streamdown='code-block-body']
+  span {
+  color: rgb(248 250 252) !important;
+}
+
+[data-pbl-workspace='true'] .pbl-v2-task-review-markdown :where(code):not(pre code) {
+  background: rgb(255 255 255 / 0.34);
+  border: 1px solid rgb(165 180 252 / 0.34);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.35),
+    0 6px 14px rgb(51 65 85 / 0.1);
+  color: rgb(36 50 76);
+}
+
+[data-pbl-workspace='true'] .pbl-v2-task-review-markdown :where(li)::marker {
+  color: rgb(99 102 241 / 0.65);
+}
+
+/* 规格第 1/5 章：原 radial-gradient + backdrop-blur + 发光阴影已清除，
+   收敛为 bg-card + border + shadow-card（布局尺寸不变，只去赛博朋克味）。
+   工作台底是深色，气泡改浅卡后文字色随卡片走。 */
+[data-pbl-workspace='true'] .pbl-v2-instructor-bubble {
+  position: relative;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--card-foreground);
+  box-shadow: var(--shadow-card);
+}
+
+[data-pbl-workspace='true'] .pbl-v2-instructor-label {
+  color: var(--muted-foreground);
+  letter-spacing: 0.04em;
+}
+
+[data-pbl-workspace='true'] .pbl-v2-task-review-shell {
+  position: relative;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--card-foreground);
+  box-shadow: var(--shadow-card);
+}
+
+[data-pbl-workspace='true'] .pbl-v2-task-review-card {
+  border: 1px solid var(--border-subtle);
+  background: var(--muted);
+}
+
+/* Shimmer sweep for skeleton loading */
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* Breathing animation for interactive mode button */
+@keyframes interactive-mode-breathe {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.08);
+  }
+}
+
+/* PBL v2 — thinking dots pulse (wider swing for visibility on dark bg) */
+@keyframes think-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.15;
+  }
+}
+
+/* Cursor-style "Thinking…" indicator: a bright band sweeps left→right across
+   muted text (gradient clipped to glyphs). Used by the AI sidebar while the
+   agent run streams and nothing has arrived yet. */
+@keyframes ai-thinking-shimmer {
+  0% {
+    background-position: 150% 0;
+  }
+  100% {
+    background-position: -50% 0;
+  }
+}
+.ai-thinking-shimmer {
+  background: linear-gradient(
+    100deg,
+    var(--muted-foreground) 0%,
+    var(--muted-foreground) 40%,
+    var(--foreground) 50%,
+    var(--muted-foreground) 60%,
+    var(--muted-foreground) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: ai-thinking-shimmer 1.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ai-thinking-shimmer {
+    animation: none;
+    color: var(--muted-foreground);
+    -webkit-text-fill-color: var(--muted-foreground);
+  }
+}
+
+/* 课堂放映微反馈（设计规格 3.2，配方⑤②⑧）：
+   check-pop = L1 答对绿勾微弹跳（<300ms 纯 CSS）；
+   slide-up-fade = 答错「再想想」滑入（150ms）；
+   confetti-drop = L2 小节完成的 CSS 粒子粉彩纸屑（~1s，20 粒）。 */
+@keyframes check-pop {
+  0% {
+    transform: scale(0.5);
+  }
+  60% {
+    transform: scale(1.18);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes slide-up-fade {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes confetti-drop {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translate3d(var(--cf-x, 0px), var(--cf-y, 160px), 0) rotate(var(--cf-r, 360deg));
+    opacity: 0;
+  }
+}
+
+/* 系统开启「减少动态效果」时统一降级：CSS 动画/过渡一并静音
+   （照抄学径 web-next globals.css L85-94；framer-motion 走 JS 驱动不受此影响） */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* 场景陪伴小人（components/agents/scene-companion.tsx）：静立时轻轻起伏，
+   气泡弹出用一次性上浮。减少动态偏好开着就不动——前庭敏感的人会晕。 */
+@keyframes companion-breathe {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(-4px) scale(1.012);
+  }
+}
+
+@keyframes companion-pop {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [class*='companion-breathe'],
+  [class*='companion-pop'] {
+    animation: none !important;
+  }
+}

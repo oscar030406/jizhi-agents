@@ -1,0 +1,143 @@
+{
+  "profile": {
+    "presetId": "backend_to_agent",
+    "name": "后端开发转 Agent 应用",
+    "background": "熟悉后端服务和数据库，想掌握 Agent 编排与审核。"
+  },
+  "learningGoal": "搭建多 Agent 协作的内容审核工作流",
+  "diagnosisSummary": "该学习者具备扎实的后端开发基础，对部署和评估等高阶能力掌握良好，尤其在工具调用和检索增强 RAG 实践中表现稳健，说明其具备较强的工程实现能力。然而，在智能体基础概念和工作流编排（LangGraph）方面存在明显薄弱，掌握度仅为 0.25，表明其对 Agent 的核心架构、状态管理与流程编排理解尚不深入，可能影响其在复杂任务编排中的设计能力。推荐难度 L2 适中，适合在已有工程经验基础上进行系统性补强。学习者偏好系统设计与接口契约，建议重点围绕 LangGraph 的状态图建模与 Agent 间通信机制展开实践，以弥补核心概念短板。",
+  "learningRisks": [
+    "因智能体基础掌握度过低，可能导致在设计多 Agent 协作流程时出现逻辑漏洞或职责不清",
+    "LangGraph 理解不足可能引发流程控制混乱，增加调试复杂度，影响开发效率",
+    "若未及时建立 Agent 编排的系统化思维，易陷入局部优化，难以支撑可扩展的 Agent 应用架构"
+  ],
+  "masteryVector": {
+    "agent_basics": 0.25,
+    "rag": 0.5,
+    "tool_calling": 0.75,
+    "langgraph": 0.25,
+    "evaluation": 0.75,
+    "deployment": 1,
+    "guardrails": 0.5
+  },
+  "weakConcepts": [
+    "agent_basics",
+    "langgraph"
+  ],
+  "difficultyBand": {
+    "recommended": "L2",
+    "items": [
+      {
+        "kind": "quiz",
+        "label": "测验 1 · Agent的核心组成部分是什么？",
+        "difficulty": "L2"
+      },
+      {
+        "kind": "quiz",
+        "label": "测验 2 · LangGraph的核心特点不包括以下哪一项？",
+        "difficulty": "L2"
+      },
+      {
+        "kind": "quiz",
+        "label": "测验 3 · 在内容审核工作流中，使用LangGraph实现条",
+        "difficulty": "L2"
+      },
+      {
+        "kind": "quiz",
+        "label": "测验 4 · Parlant的ARQs技术包含哪三个阶段？",
+        "difficulty": "L2"
+      },
+      {
+        "kind": "quiz",
+        "label": "测验 5 · 为什么在复杂工作流场景中推荐选择LangGrap",
+        "difficulty": "L2"
+      },
+      {
+        "kind": "stage",
+        "label": "Evidence-grounded fundamentals",
+        "difficulty": "L2"
+      },
+      {
+        "kind": "stage",
+        "label": "RAG and tool-use implementation",
+        "difficulty": "L2"
+      },
+      {
+        "kind": "stage",
+        "label": "Audit, guardrails, and evaluation",
+        "difficulty": "L3"
+      }
+    ]
+  },
+  "learningPath": {
+    "stages": [
+      {
+        "title": "Evidence-grounded fundamentals",
+        "difficulty": "L2",
+        "goals": [
+          "Establish shared vocabulary",
+          "Map learner gaps to concept tags"
+        ],
+        "concepts": [
+          "agent_basics",
+          "langgraph",
+          "guardrails"
+        ],
+        "estimatedHours": 8,
+        "practiceTask": "Annotate a small Agent workflow with inputs, outputs, and source_ids.",
+        "assessment": "Short concept quiz plus trace review"
+      },
+      {
+        "title": "RAG and tool-use implementation",
+        "difficulty": "L2",
+        "goals": [
+          "Build a retrieval step",
+          "Add one safe tool call",
+          "Return structured outputs"
+        ],
+        "concepts": [
+          "langgraph",
+          "guardrails"
+        ],
+        "estimatedHours": 10,
+        "practiceTask": "搭建多Agent协作的内容审核工作流",
+        "assessment": "Runnable endpoint and evidence coverage check"
+      },
+      {
+        "title": "Audit, guardrails, and evaluation",
+        "difficulty": "L3",
+        "goals": [
+          "Reject unsupported claims",
+          "Measure concept coverage",
+          "Prepare demo trace"
+        ],
+        "concepts": [
+          "agent_basics",
+          "langgraph",
+          "guardrails",
+          "evaluation"
+        ],
+        "estimatedHours": 11,
+        "practiceTask": "Run evaluation cases and explain failures in a reviewer-facing report.",
+        "assessment": "Evaluation report with audit flags and revision actions"
+      }
+    ],
+    "prerequisites": [
+      "Basic Python",
+      "HTTP API basics",
+      "LLM prompting basics"
+    ],
+    "estimatedHours": 29
+  },
+  "source": {
+    "runId": "e1787943-5421-4074-8b63-258ea4921192",
+    "archivedAt": "2026-07-06T10:59:59.241Z",
+    "engines": {
+      "LearnerDiagnosisAgent": "llm+deterministic",
+      "KnowledgeRetrievalAgent": "deterministic",
+      "ResourceGenerationAgent": "llm",
+      "ContentAuditAgent": "llm+deterministic",
+      "LearningPathPlannerAgent": "deterministic"
+    }
+  }
+}

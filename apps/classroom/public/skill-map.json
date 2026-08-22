@@ -1,0 +1,1342 @@
+{
+  "provenance": {
+    "generated_at": "2026-07-20",
+    "method": "从 AIGC-Interview-Book-main 目录结构 + AIGC面试宝典文件名人工辅助提炼（不爬招聘网站，合规口径）",
+    "sources": [
+      "references/AIGC-Interview-Book-main",
+      "data warehouse/面试题/AIGC面试宝典"
+    ],
+    "known_gaps": [
+      "evaluation_engineer 语料跨目录拼合",
+      "ai_backend_engineer 缺真实后端考点",
+      "具身智能/AI视频 evidence 来源单一"
+    ],
+    "market_data_added_at": "2026-07-26",
+    "market_data_source": "招聘数据集聚合统计（人工智能招聘大数据 2014-2025 + 智联大盘 1300万条对照），口径与复算见 docs/job_market_research.md"
+  },
+  "market_stats": {
+    "sample": "L2 大模型应用开发岗 2023-2025.7，n=6601（词表清洗后口径 v2）",
+    "demand_trend_share_of_ai_jobs": {
+      "2022": 0.001,
+      "2023": 0.05,
+      "2024": 0.079,
+      "2025_partial": 0.114
+    },
+    "yoy_burst": "2022→2023 岗位量 52→3362（65 倍）",
+    "education": {
+      "本科": 0.602,
+      "硕士": 0.272,
+      "大专": 0.066,
+      "博士": 0.016,
+      "不限": 0.044
+    },
+    "experience": {
+      "1-3年": 0.612,
+      "经验不限": 0.21,
+      "3-5年": 0.155,
+      "5年以上": 0.023
+    },
+    "salary_monthly_mid_median": 22500,
+    "skill_mention_share": {
+      "python": 0.693,
+      "deployment": 0.349,
+      "finetune(课程仅理论)": 0.244,
+      "evaluation": 0.214,
+      "langgraph": 0.113,
+      "prompt_engineering": 0.112,
+      "rag": 0.103,
+      "agent_basics": 0.095,
+      "guardrails": 0.091
+    },
+    "title_buckets": {
+      "算法工程师系": 0.371,
+      "应用开发工程师系": 0.176,
+      "AI产品/解决方案": 0.096,
+      "其他(JD含大模型职责)": 0.357
+    }
+  },
+  "jobs": [
+    {
+      "job_id": "agent_engineer",
+      "title": "AI Agent 开发工程师",
+      "summary": "设计与落地基于大模型的智能体系统，覆盖设计模式、工作流编排、记忆与上下文工程、协议与平台化。",
+      "core_concepts": [
+        "agent_basics",
+        "tool_calling",
+        "context_engineering",
+        "langgraph",
+        "guardrails",
+        "evaluation",
+        "llm_basics"
+      ],
+      "skills": [
+        {
+          "skill": "ReAct、CoT 与工具增强推理设计模式",
+          "covered": true,
+          "score": 0.191,
+          "source_id": "ha04s02#s13",
+          "source_title": "第4章 4.2 ReAct"
+        },
+        {
+          "skill": "Agent 规划-执行-反思（Plan-Execute-Reflect）循环设计",
+          "covered": true,
+          "score": 0.243,
+          "source_id": "ag020#s1",
+          "source_title": "AI Agent 生产环境实践：挑战与解决方案"
+        },
+        {
+          "skill": "多 Agent 协作与工作流编排",
+          "covered": true,
+          "score": 0.127,
+          "source_id": "ag011#s4",
+          "source_title": "OpenClaw彻底带火了沙箱，桌面Agent落地必看"
+        },
+        {
+          "skill": "MCP 与 A2A 协议原理与工程实践",
+          "covered": true,
+          "score": 0.239,
+          "source_id": "ha10s03#s1",
+          "source_title": "第10章 10.3 A2A 协议实战"
+        },
+        {
+          "skill": "Agent 记忆类型设计与 RAG 对比选型",
+          "covered": true,
+          "score": 0.2,
+          "source_id": "ag020#s1",
+          "source_title": "AI Agent 生产环境实践：挑战与解决方案"
+        },
+        {
+          "skill": "记忆写入、检索、更新与遗忘机制",
+          "covered": false,
+          "score": 0.102,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "上下文窗口治理与 Context Engine 构建",
+          "covered": false,
+          "score": 0.113,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "Agent 安全评测与 AgentOps 运维",
+          "covered": true,
+          "score": 0.299,
+          "source_id": "ag020#s1",
+          "source_title": "AI Agent 生产环境实践：挑战与解决方案"
+        },
+        {
+          "skill": "编码 Agent 与 AgentOS 工程实践",
+          "covered": true,
+          "score": 0.152,
+          "source_id": "ag020#s1",
+          "source_title": "AI Agent 生产环境实践：挑战与解决方案"
+        },
+        {
+          "skill": "Agent Harness Engineering（运行时脚手架工程）",
+          "covered": true,
+          "score": 0.153,
+          "source_id": "ag020#s1",
+          "source_title": "AI Agent 生产环境实践：挑战与解决方案"
+        },
+        {
+          "skill": "自进化 Agent 与多平台运行时",
+          "covered": true,
+          "score": 0.276,
+          "source_id": "ag020#s1",
+          "source_title": "AI Agent 生产环境实践：挑战与解决方案"
+        },
+        {
+          "skill": "多轮对话长期记忆优化策略",
+          "covered": false,
+          "score": 0.078,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "企业级 Agent 平台与产品落地",
+          "covered": true,
+          "score": 0.148,
+          "source_id": "ag020#s1",
+          "source_title": "AI Agent 生产环境实践：挑战与解决方案"
+        }
+      ],
+      "covered_count": 10
+    },
+    {
+      "job_id": "llm_algorithm_engineer",
+      "title": "大模型算法工程师",
+      "summary": "负责大语言模型的预训练、微调对齐与架构优化，掌握 Transformer 核心组件与训练全链路。",
+      "core_concepts": [
+        "llm_basics",
+        "evaluation",
+        "deployment"
+      ],
+      "skills": [
+        {
+          "skill": "Transformer 注意力机制及其升级变体（MHA/GQA/MQA）",
+          "covered": true,
+          "score": 0.151,
+          "source_id": "em06s05#s7",
+          "source_title": "具身智能·1. Transformer 基础 5. 训练与优化"
+        },
+        {
+          "skill": "Layer Normalization 位置与变体",
+          "covered": true,
+          "score": 0.22,
+          "source_id": "em06s12#s5",
+          "source_title": "具身智能·3. ViT 与视觉表征 2. ViT 架构、训练与实现"
+        },
+        {
+          "skill": "LLM 位置编码（RoPE/ALiBi 等）",
+          "covered": true,
+          "score": 0.133,
+          "source_id": "hl04s01#s6",
+          "source_title": "Happy-LLM 第4章 4.1 什么是 LLM"
+        },
+        {
+          "skill": "Tokenizer 原理与中文词表扩充",
+          "covered": true,
+          "score": 0.441,
+          "source_id": "hl05s02#s8",
+          "source_title": "Happy-LLM 第5章 5.2 训练 Tokenizer"
+        },
+        {
+          "skill": "LoRA 微调原理与超参",
+          "covered": true,
+          "score": 0.601,
+          "source_id": "hl06s03#s5",
+          "source_title": "Happy-LLM 第6章 6.3 高效微调"
+        },
+        {
+          "skill": "参数高效微调（PEFT/Adapter/Prompt-tuning）方法对比",
+          "covered": true,
+          "score": 0.214,
+          "source_id": "hl06s03#s2",
+          "source_title": "Happy-LLM 第6章 6.3 高效微调"
+        },
+        {
+          "skill": "RLHF 及其变种（PPO/DPO）对齐训练",
+          "covered": true,
+          "score": 0.228,
+          "source_id": "hl04s02#s13",
+          "source_title": "Happy-LLM 第4章 4.2 如何训练一个 LLM"
+        },
+        {
+          "skill": "增量预训练与样本拼接策略",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "SFT 数据构造与训练集治理",
+          "covered": true,
+          "score": 0.186,
+          "source_id": "hl06s02#s1",
+          "source_title": "Happy-LLM 第6章 6.2 模型有监督微调"
+        },
+        {
+          "skill": "分布式训练（数据/流水线/张量并行、ZeRO、DeepSpeed）",
+          "covered": true,
+          "score": 0.171,
+          "source_id": "hl04s02#s3",
+          "source_title": "Happy-LLM 第4章 4.2 如何训练一个 LLM"
+        },
+        {
+          "skill": "混合精度训练与显存优化策略",
+          "covered": false,
+          "score": 0.055,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "MoE 混合专家架构",
+          "covered": true,
+          "score": 0.215,
+          "source_id": "sl01#s1",
+          "source_title": "self-LLM 混元 A13B 架构解析：MoE 混合专家、共享专家与 Top-k 路由"
+        },
+        {
+          "skill": "大模型蒸馏",
+          "covered": false,
+          "score": 0.077,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "思维链 CoT 及其变体",
+          "covered": false,
+          "score": 0.093,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "大模型幻觉成因与缓解",
+          "covered": false,
+          "score": 0.076,
+          "source_id": "",
+          "source_title": ""
+        }
+      ],
+      "covered_count": 10
+    },
+    {
+      "job_id": "rag_engineer",
+      "title": "RAG/知识库工程师",
+      "summary": "构建检索增强生成与企业知识库问答系统，覆盖文档解析、分块、召回优化与 RAG 评测。",
+      "core_concepts": [
+        "rag",
+        "llm_basics",
+        "evaluation",
+        "langgraph",
+        "context_engineering"
+      ],
+      "skills": [
+        {
+          "skill": "RAG 文本分块策略",
+          "covered": true,
+          "score": 0.217,
+          "source_id": "hl07s02#s1",
+          "source_title": "Happy-LLM 第7章 7.2 RAG"
+        },
+        {
+          "skill": "PDF 解析与版面分析（表格识别）",
+          "covered": true,
+          "score": 0.189,
+          "source_id": "ha13s05#s10",
+          "source_title": "第13章 13.5 前端开发详解"
+        },
+        {
+          "skill": "向量检索与相似度函数选型",
+          "covered": false,
+          "score": 0.08,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "LLM + 向量库文档对话系统搭建",
+          "covered": true,
+          "score": 0.263,
+          "source_id": "hl04s01#s6",
+          "source_title": "Happy-LLM 第4章 4.1 什么是 LLM"
+        },
+        {
+          "skill": "大模型辅助召回优化",
+          "covered": false,
+          "score": 0.051,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "负样本挖掘",
+          "covered": false,
+          "score": 0.073,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "RAG-Fusion 多查询融合",
+          "covered": false,
+          "score": 0.087,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "Graph RAG（基于知识图谱的检索增强）",
+          "covered": false,
+          "score": 0.118,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "RAG 关键痛点诊断与优化策略",
+          "covered": true,
+          "score": 0.217,
+          "source_id": "hl07s02#s1",
+          "source_title": "Happy-LLM 第7章 7.2 RAG"
+        },
+        {
+          "skill": "RAG 系统评测方法",
+          "covered": true,
+          "score": 0.234,
+          "source_id": "hl07s02#s1",
+          "source_title": "Happy-LLM 第7章 7.2 RAG"
+        },
+        {
+          "skill": "基于 langchain 的 RAG 问答应用开发",
+          "covered": true,
+          "score": 0.149,
+          "source_id": "ag011#s3",
+          "source_title": "OpenClaw彻底带火了沙箱，桌面Agent落地必看"
+        },
+        {
+          "skill": "外挂知识库整体架构设计",
+          "covered": false,
+          "score": 0.061,
+          "source_id": "",
+          "source_title": ""
+        }
+      ],
+      "covered_count": 6
+    },
+    {
+      "job_id": "llm_inference_deploy_engineer",
+      "title": "大模型推理与部署工程师",
+      "summary": "负责大模型推理加速、显存优化与生产环境部署，掌握主流推理框架与模型压缩技术。",
+      "core_concepts": [
+        "deployment",
+        "llm_basics"
+      ],
+      "skills": [
+        {
+          "skill": "KV-Cache 与 PagedAttention 推理优化",
+          "covered": true,
+          "score": 0.344,
+          "source_id": "ld10s02#s7",
+          "source_title": "LLM-Deploy 第10章 PagedAttention：分页显存管理与写时复制"
+        },
+        {
+          "skill": "vLLM 推理加速框架",
+          "covered": true,
+          "score": 0.28,
+          "source_id": "ha07s02#s5",
+          "source_title": "第7章 7.2 HelloAgentsLLM扩展"
+        },
+        {
+          "skill": "StreamingLLM 无限长流式推理",
+          "covered": true,
+          "score": 0.128,
+          "source_id": "ha10s02#s12",
+          "source_title": "第10章 10.2 MCP 协议实战"
+        },
+        {
+          "skill": "模型量化（PTQ/QAT/混合精度）",
+          "covered": true,
+          "score": 0.133,
+          "source_id": "ld01s02#s5",
+          "source_title": "LLM-Deploy 第1章 为什么要量化：原理、量化参数与分类"
+        },
+        {
+          "skill": "模型蒸馏与稀疏化压缩",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "ONNX/TensorRT/Triton Inference Server 部署",
+          "covered": false,
+          "score": 0.107,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "显存问题诊断与优化策略",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "浮点数格式与量化精度（FP16/BF16/INT8）",
+          "covered": true,
+          "score": 0.187,
+          "source_id": "ld01s01#s3",
+          "source_title": "LLM-Deploy 第1章 数值类型与精度格式（FP32/FP16/BF16）"
+        },
+        {
+          "skill": "自定义 CUDA 算子实现",
+          "covered": true,
+          "score": 0.162,
+          "source_id": "hl05s03#s34",
+          "source_title": "Happy-LLM 第5章 5.3 预训练一个小型LLM"
+        },
+        {
+          "skill": "边云端部署方案",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "Faster Transformer/LightLLM 等轻量推理框架",
+          "covered": true,
+          "score": 0.247,
+          "source_id": "hl02s03#s1",
+          "source_title": "Happy-LLM 第2章 2.3 搭建一个 Transformer"
+        },
+        {
+          "skill": "大模型软硬件配置估算",
+          "covered": false,
+          "score": 0.062,
+          "source_id": "",
+          "source_title": ""
+        }
+      ],
+      "covered_count": 7
+    },
+    {
+      "job_id": "multimodal_algorithm_engineer",
+      "title": "多模态算法工程师",
+      "summary": "研发视觉-语言多模态大模型，掌握模态编码、输入输出映射与多模态训练微调。",
+      "core_concepts": [
+        "llm_basics",
+        "evaluation"
+      ],
+      "skills": [
+        {
+          "skill": "多模态模型整体架构（编码器-映射器-主干-生成器）",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "模态编码器（视觉/音频编码）设计",
+          "covered": false,
+          "score": 0.063,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "输入映射器与输出映射器",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "Qwen-VL 系列模型核心机制",
+          "covered": false,
+          "score": 0.093,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "Intern-VL 系列模型核心机制",
+          "covered": false,
+          "score": 0.063,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "GLM-V 系列模型核心机制",
+          "covered": true,
+          "score": 0.157,
+          "source_id": "hl03s03#s8",
+          "source_title": "Happy-LLM 第3章 3.3 Decoder-Only PLM"
+        },
+        {
+          "skill": "多模态训练与微调策略",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "多模态模态生成器",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "多模态前沿技术跟踪",
+          "covered": false,
+          "score": 0.06,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "多模态高频面试考点",
+          "covered": false,
+          "score": 0.052,
+          "source_id": "",
+          "source_title": ""
+        }
+      ],
+      "covered_count": 1
+    },
+    {
+      "job_id": "aigc_image_engineer",
+      "title": "AIGC 图像算法工程师",
+      "summary": "研发图像生成与编辑模型，掌握扩散模型、可控生成与图像生成训练优化技术。",
+      "core_concepts": [
+        "llm_basics",
+        "deployment",
+        "evaluation"
+      ],
+      "skills": [
+        {
+          "skill": "Stable Diffusion 系列模型原理",
+          "covered": true,
+          "score": 0.155,
+          "source_id": "em05s48#s1",
+          "source_title": "具身智能·7. Diffusion Policy 动作建模 5. 关键消融与经验结论"
+        },
+        {
+          "skill": "FLUX 系列模型原理",
+          "covered": false,
+          "score": 0.072,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "类 LoRA 技术在图像生成中的应用",
+          "covered": true,
+          "score": 0.389,
+          "source_id": "hl06s03#s5",
+          "source_title": "Happy-LLM 第6章 6.3 高效微调"
+        },
+        {
+          "skill": "ControlNet 与主流可控生成技术",
+          "covered": false,
+          "score": 0.092,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "GAN 系列模型基础",
+          "covered": false,
+          "score": 0.054,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "AIGC 图像生成训练与性能优化",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "AIGC 图像生成框架（ComfyUI 等生态）",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "AIGC 视觉基础模型",
+          "covered": false,
+          "score": 0.061,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "主流图像生成编辑大模型对比",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "图像生成前沿与开放式问题",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        }
+      ],
+      "covered_count": 2
+    },
+    {
+      "job_id": "digital_human_engineer",
+      "title": "AI 数字人工程师",
+      "summary": "研发音频驱动数字人与虚拟人生成系统，覆盖人体生成、换脸换衣与 3D 可微渲染。",
+      "core_concepts": [
+        "llm_basics",
+        "deployment",
+        "evaluation"
+      ],
+      "skills": [
+        {
+          "skill": "音频驱动数字人生成（Hallo/Sonic/InfiniteTalk）",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "长视频生成稳定性与推理工程",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "多人音频驱动与音频-人物绑定",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "可控人体生成与角色动画",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "ID 保持换脸技术",
+          "covered": true,
+          "score": 0.175,
+          "source_id": "tu09#s8",
+          "source_title": "TinyGraphRAG 数据预处理：文档分块、实体与三元组抽取、实体消歧与合并"
+        },
+        {
+          "skill": "虚拟换衣技术",
+          "covered": false,
+          "score": 0.071,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "3D 数字人与可微渲染",
+          "covered": false,
+          "score": 0.111,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "GAN 数字人技术",
+          "covered": false,
+          "score": 0.051,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "数字人数据预处理、对齐与评估",
+          "covered": false,
+          "score": 0.101,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "实时交互数字人前沿方案",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        }
+      ],
+      "covered_count": 1
+    },
+    {
+      "job_id": "ai_video_engineer",
+      "title": "AI 视频算法工程师",
+      "summary": "研发视频生成、理解与编辑模型，掌握视频生成架构、训练微调与性能评测。",
+      "core_concepts": [
+        "llm_basics",
+        "evaluation",
+        "deployment"
+      ],
+      "skills": [
+        {
+          "skill": "视频生成核心基础架构（DiT 类模型）",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "视频生成典型模型与架构对比",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "视频理解典型模型与架构",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "视频编辑典型模型与架构",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "人体视频生成专题技术",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "视频虚拟试衣",
+          "covered": false,
+          "score": 0.055,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "视频模型训练与微调技术",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "视频数据集构建与性能评测",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "AI 视频核心基础知识（时序建模等）",
+          "covered": true,
+          "score": 0.191,
+          "source_id": "ag020#s6",
+          "source_title": "AI Agent 生产环境实践：挑战与解决方案"
+        }
+      ],
+      "covered_count": 1
+    },
+    {
+      "job_id": "embodied_ai_engineer",
+      "title": "具身智能工程师",
+      "summary": "研发机器人具身智能系统，覆盖具身感知、任务规划、VLA 模型与 Sim2Real 数据工程。",
+      "core_concepts": [
+        "agent_basics",
+        "llm_basics",
+        "evaluation",
+        "deployment",
+        "guardrails"
+      ],
+      "skills": [
+        {
+          "skill": "具身智能核心架构与系统范式",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "具身感知与三维世界表示",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "具身任务规划与决策推理",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "机器人学习与动作生成",
+          "covered": false,
+          "score": 0.073,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "VLA（视觉-语言-动作）与具身基础模型",
+          "covered": true,
+          "score": 0.208,
+          "source_id": "em05s61#s1",
+          "source_title": "具身智能·导读"
+        },
+        {
+          "skill": "具身数据工程与仿真",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "Sim2Real 迁移",
+          "covered": false,
+          "score": 0.081,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "具身智能评估与安全部署",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "强化学习基础（与机器人控制结合）",
+          "covered": false,
+          "score": 0.087,
+          "source_id": "",
+          "source_title": ""
+        }
+      ],
+      "covered_count": 1
+    },
+    {
+      "job_id": "ml_engineer",
+      "title": "机器学习工程师",
+      "summary": "掌握经典机器学习与深度学习基础，负责模型训练、优化与评估的通用算法岗位。",
+      "core_concepts": [
+        "llm_basics",
+        "evaluation"
+      ],
+      "skills": [
+        {
+          "skill": "经典机器学习算法（KNN、线性回归、树模型等）",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "损失函数选型与设计",
+          "covered": false,
+          "score": 0.056,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "机器学习优化方法（梯度下降族）",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "模型评估指标与验证方法",
+          "covered": false,
+          "score": 0.061,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "深度网络架构设计",
+          "covered": false,
+          "score": 0.066,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "激活函数选型",
+          "covered": false,
+          "score": 0.068,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "注意力机制基础",
+          "covered": true,
+          "score": 0.177,
+          "source_id": "ld10s03#s3",
+          "source_title": "LLM-Deploy 第10章 FlashAttention：分块计算与 HBM 访存优化"
+        },
+        {
+          "skill": "模型训练与调优实践",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "图神经网络基础",
+          "covered": true,
+          "score": 0.125,
+          "source_id": "dl01s01#s1",
+          "source_title": "动手学深度学习 第6章 6.1 卷积神经网络·导言"
+        },
+        {
+          "skill": "数据结构与算法（排序/查找/哈希/树堆图）",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "数学基础与公式推导（AIGC 场景）",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        }
+      ],
+      "covered_count": 2
+    },
+    {
+      "job_id": "nlp_engineer",
+      "title": "NLP 工程师",
+      "summary": "负责文本理解与生成任务，从经典 NLP 模型到大模型时代的文本任务落地。",
+      "core_concepts": [
+        "llm_basics",
+        "rag",
+        "evaluation"
+      ],
+      "skills": [
+        {
+          "skill": "Transformer/BERT/GPT/T5 经典模型主线",
+          "covered": true,
+          "score": 0.199,
+          "source_id": "hl03s03#s2",
+          "source_title": "Happy-LLM 第3章 3.3 Decoder-Only PLM"
+        },
+        {
+          "skill": "文本分类任务方法",
+          "covered": true,
+          "score": 0.212,
+          "source_id": "hl01s03#s4",
+          "source_title": "Happy-LLM 第1章 1.3 NLP 任务"
+        },
+        {
+          "skill": "文本摘要任务方法",
+          "covered": true,
+          "score": 0.128,
+          "source_id": "hl01s03#s6",
+          "source_title": "Happy-LLM 第1章 1.3 NLP 任务"
+        },
+        {
+          "skill": "命名实体识别（NER）",
+          "covered": false,
+          "score": 0.11,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "Tokenizer 与中文分词处理",
+          "covered": true,
+          "score": 0.419,
+          "source_id": "hl05s02#s8",
+          "source_title": "Happy-LLM 第5章 5.2 训练 Tokenizer"
+        },
+        {
+          "skill": "NLP 工程 Trick",
+          "covered": true,
+          "score": 0.154,
+          "source_id": "hl01s01#s1",
+          "source_title": "Happy-LLM 第1章 1.1 什么是 NLP"
+        },
+        {
+          "skill": "提示学习（Prompting）与小样本提示",
+          "covered": true,
+          "score": 0.37,
+          "source_id": "pg10#s3",
+          "source_title": "提示工程指南·Prompt Chaining"
+        },
+        {
+          "skill": "思维链 CoT 提示技术",
+          "covered": false,
+          "score": 0.101,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "强化学习在 NLP 中的应用",
+          "covered": true,
+          "score": 0.257,
+          "source_id": "hl01s01#s1",
+          "source_title": "Happy-LLM 第1章 1.1 什么是 NLP"
+        },
+        {
+          "skill": "生成模型与 AIGC 系统连接",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        }
+      ],
+      "covered_count": 7
+    },
+    {
+      "job_id": "cv_algorithm_engineer",
+      "title": "计算机视觉算法工程师",
+      "summary": "掌握检测、分割、跟踪等经典视觉任务与视觉基础模型，服务传统 CV 与 AIGC 融合场景。",
+      "core_concepts": [
+        "llm_basics",
+        "evaluation",
+        "deployment"
+      ],
+      "skills": [
+        {
+          "skill": "目标检测经典模型与高频考点",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "图像分割方法",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "图像分类模型",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "目标跟踪算法",
+          "covered": false,
+          "score": 0.075,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "OCR 文字识别",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "ReID 行人重识别",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "人脸模型（识别/检测）",
+          "covered": false,
+          "score": 0.114,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "经典深度网络架构与应用",
+          "covered": false,
+          "score": 0.069,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "模型部署基础（CV 模型落地）",
+          "covered": false,
+          "score": 0.087,
+          "source_id": "",
+          "source_title": ""
+        }
+      ],
+      "covered_count": 0
+    },
+    {
+      "job_id": "llm_eval_engineer",
+      "title": "大模型评测工程师",
+      "summary": "构建大模型与 RAG/Agent 系统的评测体系，覆盖能力评估、数据泄露检测与安全评测。",
+      "core_concepts": [
+        "evaluation",
+        "llm_basics",
+        "rag",
+        "agent_basics",
+        "guardrails"
+      ],
+      "skills": [
+        {
+          "skill": "大模型多维评估方法与基准",
+          "covered": false,
+          "score": 0.055,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "RAG 系统评测方法",
+          "covered": true,
+          "score": 0.234,
+          "source_id": "hl07s02#s1",
+          "source_title": "Happy-LLM 第7章 7.2 RAG"
+        },
+        {
+          "skill": "Agent 安全评测与 AgentOps",
+          "covered": true,
+          "score": 0.304,
+          "source_id": "ag020#s1",
+          "source_title": "AI Agent 生产环境实践：挑战与解决方案"
+        },
+        {
+          "skill": "测试集数据泄露检测",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "大模型幻觉评估与缓解验证",
+          "covered": false,
+          "score": 0.069,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "模型对比评测（LLaMA/百川/GPT 等）",
+          "covered": true,
+          "score": 0.147,
+          "source_id": "hl03s03#s2",
+          "source_title": "Happy-LLM 第3章 3.3 Decoder-Only PLM"
+        },
+        {
+          "skill": "训练集与 SFT 数据质量评估",
+          "covered": true,
+          "score": 0.185,
+          "source_id": "hl06s02#s1",
+          "source_title": "Happy-LLM 第6章 6.2 模型有监督微调"
+        },
+        {
+          "skill": "视频/多模态生成任务性能评测",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "模型评估指标体系（经典 ML 基础）",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        }
+      ],
+      "covered_count": 4
+    },
+    {
+      "job_id": "ai_app_backend_engineer",
+      "title": "AI 应用后端工程师",
+      "summary": "基于 langchain 等框架开发大模型应用后端，掌握工程基础与 LLM 应用编排能力。",
+      "core_concepts": [
+        "langgraph",
+        "tool_calling",
+        "rag",
+        "agent_basics",
+        "deployment",
+        "context_engineering"
+      ],
+      "skills": [
+        {
+          "skill": "langchain 框架应用开发",
+          "covered": true,
+          "score": 0.194,
+          "source_id": "ag011#s3",
+          "source_title": "OpenClaw彻底带火了沙箱，桌面Agent落地必看"
+        },
+        {
+          "skill": "基于 langchain 的 RAG 问答应用实战",
+          "covered": true,
+          "score": 0.147,
+          "source_id": "ag011#s3",
+          "source_title": "OpenClaw彻底带火了沙箱，桌面Agent落地必看"
+        },
+        {
+          "skill": "多轮对话长期记忆优化",
+          "covered": false,
+          "score": 0.091,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "提示工程与应用大模型高级方法",
+          "covered": false,
+          "score": 0.073,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "Python 编程基础",
+          "covered": true,
+          "score": 0.131,
+          "source_id": "em03s07#s2",
+          "source_title": "具身智能·3. MuJoCo 快速上手 3.3 GUI 显示"
+        },
+        {
+          "skill": "C/C++ 编程基础",
+          "covered": false,
+          "score": 0.072,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "数据结构与算法（三语言代码模板）",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "操作系统高频知识点",
+          "covered": false,
+          "score": 0.084,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "计算机网络高频知识点",
+          "covered": false,
+          "score": 0.06,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "数据库高频知识点",
+          "covered": false,
+          "score": 0.065,
+          "source_id": "",
+          "source_title": ""
+        },
+        {
+          "skill": "大模型部署与服务化",
+          "covered": false,
+          "score": 0,
+          "source_id": "",
+          "source_title": ""
+        }
+      ],
+      "covered_count": 3
+    }
+  ],
+  "corpora": [
+    {
+      "corpus": "ai",
+      "available": true,
+      "chunk_count": 1704,
+      "index_path": "data/knowledge_base/knowledge_index.jsonl"
+    },
+    {
+      "corpus": "manufacturing",
+      "available": false,
+      "chunk_count": 0,
+      "index_path": "data/knowledge_base/corpora/manufacturing/knowledge_index.jsonl"
+    },
+    {
+      "corpus": "industrial-internet",
+      "available": false,
+      "chunk_count": 0,
+      "index_path": "data/knowledge_base/corpora/industrial-internet/knowledge_index.jsonl"
+    },
+    {
+      "corpus": "software",
+      "available": false,
+      "chunk_count": 0,
+      "index_path": "data/knowledge_base/corpora/software/knowledge_index.jsonl"
+    },
+    {
+      "corpus": "iotdb",
+      "available": true,
+      "chunk_count": 3202,
+      "index_path": "data/knowledge_base/corpora/iotdb/knowledge_index.jsonl"
+    },
+    {
+      "corpus": "odoo",
+      "available": true,
+      "chunk_count": 3046,
+      "index_path": "data/knowledge_base/corpora/odoo/knowledge_index.jsonl"
+    }
+  ],
+  "coverage_rule": "覆盖 = 该技能在受控知识库检索到相似度 ≥ 0.12 的证据块（附 source_id 可复核）；低于阈值即判未覆盖，不做估算补全。",
+  "snapshot_at": "2026-08-17T07:20:09.566Z"
+}
