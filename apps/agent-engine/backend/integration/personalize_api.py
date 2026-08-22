@@ -189,6 +189,9 @@ def blueprint(payload: dict[str, Any], x_trace_id: str | None = Header(default=N
         "learning_goal", "background", "programming_level", "python_level",
         "agent_level", "rag_level", "engineering_level",
         "learning_preference", "time_budget_hours",
+        # corpus 决定用哪个域的概念集。漏在白名单外时调用方传了也被静默丢掉，
+        # 诊断永远走主域——AI 概念补进制造课（#6）。
+        "corpus",
     }
     kwargs = {k: v for k, v in payload.items() if k in allowed}
     kwargs.setdefault("learning_goal", "")

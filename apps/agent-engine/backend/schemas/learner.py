@@ -18,6 +18,10 @@ class LearnerProfile(BaseModel):
     time_budget_hours: int = Field(ge=1, le=200)
     learning_preference: str
     constraints: List[str] = Field(default_factory=list)
+    #: 这个学习者选定的知识库。决定学情诊断用哪个域的概念集——
+    #: 缺省（跟随培训领域）按主域 ai 处理。没有它，`concept_floors_for` 拿到 None、
+    #: 永远走主域分支，AI 概念会被补进别的领域的课程（#6 跨域污染）。
+    corpus: str = ""
 
 
 class PretestAnswer(BaseModel):

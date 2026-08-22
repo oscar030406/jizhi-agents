@@ -28,6 +28,32 @@ DEFAULT_CONCEPT_FLOOR = 0.45
 
 _MAIN_CORPUS = {"", "ai", "default"}
 
+#: ⑤ 站冻结金标的根目录。抽成常量是为了测试能把它指到 tmp——
+#: 否则测试只能自己重实现一遍查找逻辑，那就成了测自己的副本。
+GOLD_ROOT = Path(__file__).resolve().parents[2] / "data" / "eval" / "kc_gold_derived"
+
+
+#: 一个主题至少要有几个知识成分才算数。投目录树时金标会给每层目录都建一条，
+#: 父目录那几条（`智能制造/d2l-ros2`、`…/docs`）没有实质成分，是路径中间节点不是主题。
+MIN_TOPIC_COMPONENTS = 2
+
+
+def _topic_display_name(raw: str) -> str:
+    """主题名要能给人看。
+
+    投目录树时金标拿目录路径当主题名，长这样
+    「智能制造/d2l-ros2/docs/foxy/chapt1」。原样写进学情报告，
+    等于把我们的目录结构摊给学习者看。
+
+    **取末两段，不是末一段。** 只取末段会丢掉上下文——线上实测出来的是
+    「advance」「basic」「bt」这种，单看根本认不出是什么，
+    「你在 bt 上比较弱」和没说一样。两段是「foxy/chapt1」，勉强能读。
+    """
+    parts = [x for x in raw.replace("\\", "/").split("/") if x.strip()]
+    if not parts:
+        return raw
+    return "/".join(parts[-2:]) if len(parts) >= 2 else parts[-1]
+
 
 def concept_floors_for(corpus: str | None) -> dict[str, float]:
     """这个域的概念闸线表。
@@ -43,13 +69,21 @@ def concept_floors_for(corpus: str | None) -> dict[str, float]:
     if name in _MAIN_CORPUS:
         return dict(CONCEPT_FLOORS)
 
-    gold_dir = (
-        Path(__file__).resolve().parents[2] / "data" / "eval" / "kc_gold_derived" / name
-    )
+    gold_dir = GOLD_ROOT / name
     if not gold_dir.is_dir():
         return {}
 
-    concepts: set[str] = set()
+    # **取主题层，不取成分层。** 一个金标文件是一个主题，里面的
+    # `knowledge_components` 是它的成分。
+    #
+    # 实测 smart-manufacturing 的成分有 370 个（`1-Nav2规划器` 这种），
+    # 而学习者的 mastery 里一个都没有——`get(c, 0.0)` 全返回 0，**370 个全判弱**。
+    # 两个实害：与学习端证据键（场景级概念）不在一个空间，永远判全弱；
+    # 以及「你有 370 个薄弱概念」这种诊断等于什么都没说。
+    #
+    # 主题层（该库 18 个）与 ai 域那 7 个概念粒度可比，也才是人读得懂的结论。
+    # 成分级留给覆盖复测——那里正需要细粒度。
+    topics: set[str] = set()
     for topic_file in sorted(gold_dir.glob("*.json")):
         if topic_file.name.startswith("_"):
             continue  # `_freeze.json` 存的是计数与元信息，不是概念本身
@@ -57,12 +91,14 @@ def concept_floors_for(corpus: str | None) -> dict[str, float]:
             payload = json.loads(topic_file.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        for item in payload.get("knowledge_components") or []:
-            if isinstance(item, dict):
-                key = str(item.get("id") or item.get("name") or "").strip()
-                if key:
-                    concepts.add(key)
-    return {c: DEFAULT_CONCEPT_FLOOR for c in sorted(concepts)}
+        components = payload.get("knowledge_components") or []
+        if len(components) < MIN_TOPIC_COMPONENTS:
+            # 投目录树时金标会给每层目录都建一条，父目录那几条没有实质成分。
+            # 它们不是主题，只是路径上的中间节点。
+            continue
+        raw = str(payload.get("topic") or "").strip() or topic_file.stem
+        topics.add(_topic_display_name(raw))
+    return {t: DEFAULT_CONCEPT_FLOOR for t in sorted(topics)}
 
 SUMMARY_SYSTEM = (
     "你是学情诊断分析师。基于给定的掌握度向量、薄弱概念和推荐难度，"

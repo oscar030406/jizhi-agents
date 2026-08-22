@@ -259,6 +259,13 @@ def post_blueprint(
         "learning_goal", "background", "programming_level", "python_level",
         "agent_level", "rag_level", "engineering_level",
         "learning_preference", "time_budget_hours",
+        # corpus 决定学情诊断用哪个域的概念集。漏在白名单外时调用方传了也被
+        # 静默丢掉，诊断永远走主域——AI 概念补进制造课（#6）。
+        #
+        # **这份白名单在 backend/integration/personalize_api.py 里还有一份**，
+        # 生产入口是 app.main:app 走的是这里。两处必须同改，
+        # tests/test_diagnosis_domain_concepts.py 有一条测试钉住它们一致。
+        "corpus",
     }
     kwargs = {k: v for k, v in payload.items() if k in allowed}
     kwargs.setdefault("learning_goal", "")

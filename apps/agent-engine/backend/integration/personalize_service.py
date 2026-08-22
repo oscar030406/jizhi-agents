@@ -420,6 +420,7 @@ def learner_blueprint_api(
     engineering_level: int = 1,
     learning_preference: str = "可运行示例与分步练习",
     time_budget_hours: int = 24,
+    corpus: str = "",
 ) -> dict[str, Any]:
     """画像 → 学情诊断 + 个性化蓝图（含资源配比计划），纯确定性无 LLM 调用。
 
@@ -442,6 +443,8 @@ def learner_blueprint_api(
         learning_goal=learning_goal,
         time_budget_hours=max(1, min(200, time_budget_hours)),
         learning_preference=learning_preference,
+        # 决定学情诊断用哪个域的概念集。不传就是跟随培训领域（主域 ai）。
+        corpus=(corpus or "").strip(),
     )
     # 双引擎：AGENT_GENERATION_MODE=api 时 LLM 优先（fast 档），失败/超时/未启用
     # 自动降级到确定性规则——与全系统七个 Agent 同一套约定。
