@@ -194,10 +194,20 @@ async function loadBuiltCorpora(): Promise<BuiltCorpus[]> {
       // 引擎离线时 /api/skills 是 204（ok 但没 body），直接退下一路。
       if (!resp.ok || resp.status === 204) continue;
       const payload = (await resp.json()) as {
-        corpora?: Array<{ corpus?: string; available?: boolean; chunk_count?: number }>;
+        corpora?: Array<{
+          corpus?: string;
+          available?: boolean;
+          eligible?: boolean;
+          chunk_count?: number;
+        }>;
       };
       const built = (payload.corpora ?? [])
-        .filter((c) => c.available && typeof c.corpus === 'string')
+        // `eligible` 是引擎那侧「够不够格对外露面」的完整判词（四条取与：可检索、
+        // 块数够、词表闸、试跑不降级）。原先只看 `available`（索引加载得出来），
+        // 当前数据下恰好等价，但一个正常命名、能检索、没过质量闸的库会漏进来——
+        // 学习者选中它，生成的课要么资料不足要么质量没兜底。
+        // 老接口没有这个字段时退回 `available`，不因为字段缺失把下拉清空。
+        .filter((c) => (c.eligible ?? c.available) && typeof c.corpus === 'string')
         // 一次性验证库（*-probe/-test/-tmp/-scratch）不给学习者看——双保险：
         // 引擎侧 eligible 已判，这里按命名约定再拦一道。上次 fullpath-probe
         // 漏进这个下拉，就是因为唯一那道闸换了判据（跳过被当失败的镜像事故）。

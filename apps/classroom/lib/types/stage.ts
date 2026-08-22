@@ -24,12 +24,45 @@ export type {
   VideoManifest,
   GeneratedAgentConfig,
   MultiAgentConfig,
-  Stage,
   SlideContent,
   QuizOption,
   QuizQuestion,
   QuizContent,
 } from '@openmaic/dsl';
+
+import type { Stage as DslStage } from '@openmaic/dsl';
+
+/**
+ * 一门课的出身：它是用哪个知识库、按哪个培训领域生成的。
+ *
+ * **app 层标注，不是 `@openmaic/dsl` 的 Stage 契约的一部分**——与
+ * `AppScene` 上的 `outlineId` / `audit` 同一个做法。
+ *
+ * 为什么要落盘：客户端生成的课只存在本机文档库里，而那份 schema 原本
+ * 一个域字段都没有（`id/name/languageDirective/videoManifest/style/
+ * createdAt/updatedAt/agentIds`）。课程归属只能靠 source_id 前缀反推，
+ * 而那张前缀表是手工维护的 AI 域清单——**新域的课必然反推错**，
+ * 于是投币建的新库生成的课在首页「本域课程」里永远看不见。
+ */
+export interface CourseOrigin {
+  /** 生成时选定的知识库（画像 `corpus`）。跟随培训领域时缺省。 */
+  corpus?: string;
+  /** 生成时的培训领域（画像 `domain`）。 */
+  domain?: string;
+}
+
+/**
+ * app 层的 Stage：DSL 契约 + 本应用自己的标注。
+ *
+ * 与 `AppScene` 对称——`Stage` 这个名字仍然指向它，既有 `import { Stage }`
+ * 的调用方语义不变，只是多了几个可选字段。
+ */
+export type AppStage = DslStage & {
+  /** 这门课出自哪个域/库。生成时写入，落盘时随课带走。 */
+  origin?: CourseOrigin;
+};
+
+export type Stage = AppStage;
 
 // The two discriminant guards are runtime functions, so they must be value
 // re-exported — a bare `export type {}` erases them and leaves the import as

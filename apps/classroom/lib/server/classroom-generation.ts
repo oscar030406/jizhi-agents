@@ -468,6 +468,20 @@ async function generateClassroomInner(
     style: 'interactive',
     createdAt: Date.now(),
     updatedAt: Date.now(),
+    // 这门课出自哪个域/库，随课落盘。
+    // 不记的话客户端生成的课只能靠 source_id 前缀反推归属，而那张前缀表是
+    // 手工维护的 AI 域清单——投币建的新库生成的课必然反推错，
+    // 在首页「本域课程」里永远看不见（P0-A）。
+    ...(input.learnerProfile?.corpus?.trim() || input.learnerProfile?.domain
+      ? {
+          origin: {
+            ...(input.learnerProfile?.corpus?.trim()
+              ? { corpus: input.learnerProfile.corpus.trim() }
+              : {}),
+            ...(input.learnerProfile?.domain ? { domain: input.learnerProfile.domain } : {}),
+          },
+        }
+      : {}),
     // For LLM-generated agents, embed full configs so the client can
     // hydrate the agent registry without prior IndexedDB data.
     // For default agents, just record IDs — the client already has them.
@@ -490,6 +504,9 @@ async function generateClassroomInner(
 
   const store = createInMemoryStore(stage);
   const api = createStageAPI(store);
+
+  /** 骨架落盘失败时的原因。非空 = 这门课可能存不住，要让学习者看见。 */
+  let skeletonPersistError: string | null = null;
 
   // 骨架先落盘：大纲一出来就把课程文件写出去，`scenes` 还是空的，但课已经存在了。
   //
@@ -514,16 +531,23 @@ async function generateClassroomInner(
     );
     log.info(`Skeleton persisted: ${stageId} (${outlines.length} planned scenes)`);
   } catch (error) {
-    log.warn(
-      `Skeleton persist failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    // **失败要让人看见。** 原来这里只 warn——落盘链一直失败也没人知道，
+    // 学习者关掉标签页才发现课没了，而排查时服务端日志里连一行都没有
+    // （2026-08-23 查了半宿才分清是「没走这条链」还是「走了但失败」）。
+    // 现在把它挂进进度消息：课照常生成，但当场说清它可能存不住。
+    const detail = error instanceof Error ? error.message : String(error);
+    log.warn(`Skeleton persist failed: ${detail}`);
+    skeletonPersistError = detail;
   }
 
   // 课号立刻往外报，前端据此就能跳进课堂——不等第一屏。
   await options.onProgress?.({
     step: 'generating_scenes',
     progress: 30,
-    message: `Course skeleton ready: ${outlines.length} scenes planned`,
+    message: skeletonPersistError
+      ? `大纲已就绪（${outlines.length} 屏），但这门课没能存到服务器上——` +
+        `现在可以正常学，关掉页面后可能找不回来。原因：${skeletonPersistError}`
+      : `Course skeleton ready: ${outlines.length} scenes planned`,
     scenesGenerated: 0,
     totalScenes: outlines.length,
     classroomId: stageId,

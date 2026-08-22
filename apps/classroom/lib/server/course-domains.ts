@@ -63,12 +63,21 @@ async function pathCourseIds(): Promise<Set<string>> {
  * `onPath` = 这门课挂在学习路径上。
  */
 export function courseDomainOf(
-  data: Pick<PersistedClassroomData, 'scenes' | 'generation'>,
+  data: Pick<PersistedClassroomData, 'scenes' | 'generation'> & {
+    stage?: { origin?: { corpus?: string; domain?: string } };
+  },
   onPath: boolean,
 ): string {
   if (onPath) return 'ai';
   return (
+    // ① 课自己记的出身（`stage.origin`）——生成时写入、随课落盘，最可靠。
+    //    客户端生成的课只有这一条：它不走服务端 `generation` 那份记录。
+    data.stage?.origin?.corpus?.trim() ||
+    data.stage?.origin?.domain?.trim() ||
+    // ② 服务端生成记录里的画像
     data.generation?.profile?.corpus?.trim() ||
+    // ③ 兜底：引用的 source_id 前缀投票。**这张前缀表是手工维护的 AI 域清单**，
+    //    对投币新建的库必然反推错——所以它只是兜底，不是主判据。
     majorityDomain(collectSourceIds(data.scenes)) ||
     'ai'
   );
