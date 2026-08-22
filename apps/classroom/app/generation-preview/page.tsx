@@ -2,6 +2,7 @@
 
 import { useEffect, useState, Suspense, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'motion/react';
 import { CheckCircle2, Sparkles, AlertCircle, AlertTriangle, ArrowLeft, Bot } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -1095,7 +1096,13 @@ function GenerationPreviewContent() {
       );
 
       sessionStorage.removeItem('generationSession');
-      await store.saveToStorage();
+      // **落盘失败必须让人看见。** `saveToStorage()` 失败时返回 false 并只 log.error，
+      // 而这里原本不看返回值直接跳课堂——课在内存里能正常看，关掉标签页就没了，
+      // 界面上却一切正常（2026-08-23 查了半宿才定位到这一行）。
+      const saved = await store.saveToStorage();
+      if (!saved) {
+        toast.error('这门课没能存到本机，现在可以正常学，但关掉页面后可能找不回来');
+      }
       router.push(`/classroom/${stage.id}`);
     } catch (err) {
       setIsOutlineStreaming(false);
