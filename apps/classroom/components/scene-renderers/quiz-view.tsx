@@ -657,7 +657,16 @@ function ScoreBanner({
       className={cn('rounded-2xl p-6 border shadow-card', tier.card)}
     >
       <div className="flex items-center justify-between">
-        <div>
+        <div className="flex items-start gap-3">
+          {/* 阿问答对/答错两态（E5）：≥60% 竖拇指，低于走「再想想」愁容。
+              情绪帧不是装饰——判分反馈的第一眼是表情不是数字（参照灵伴 happy/sorry）。 */}
+          <img
+            src={pct >= 60 ? '/agents/awen-glad.png' : '/agents/awen-sorry.png'}
+            alt={pct >= 60 ? '阿问：答得不错' : '阿问：再想想'}
+            className="mt-0.5 hidden size-16 shrink-0 select-none sm:block"
+            draggable={false}
+          />
+          <div>
           <p className={cn('text-sm font-medium', tier.heading)}>{tier.text}</p>
           <div className="flex items-baseline gap-1 mt-1 text-foreground">
             <span className="text-4xl font-black">{score}</span>
@@ -671,6 +680,7 @@ function ScoreBanner({
             <span className="flex items-center gap-1">
               <XCircle className="w-3.5 h-3.5" /> {incorrectCount} {t('quiz.incorrect')}
             </span>
+          </div>
           </div>
         </div>
 
