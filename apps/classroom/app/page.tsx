@@ -1,6 +1,8 @@
 'use client';
 
 import { examplePromptsFor } from '@/lib/knowledge/example-prompts';
+import { useDomainRegistryVersion } from '@/lib/knowledge/use-domain-registry';
+import { belongsToDomain, useCourseDomains } from '@/lib/knowledge/use-course-domains';
 import { useState, useEffect, useMemo, useRef, useDeferredValue } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence, MotionConfig } from 'motion/react';
@@ -131,6 +133,8 @@ function HomePage() {
    * 401 就停在本地那一步，匿名用户照常用。
    */
   const [learnerProfile, setLearnerProfile] = useState(DEFAULT_LEARNER_PROFILE);
+  // 清单灌注落地时自增——示例词/中文名等读清单的渲染要吃到真值而不是首帧兜底
+  const registryVersion = useDomainRegistryVersion();
   useEffect(() => {
     setLearnerProfile(loadLearnerProfile());
     let cancelled = false;
@@ -305,15 +309,28 @@ function HomePage() {
   };
 
   const deferredSearchQuery = useDeferredValue(searchQuery);
+  /** 课程归属表：运行时推导为主、打包快照兜底（`useCourseDomains` 里写了原因）。 */
+  const courseDomains = useCourseDomains();
+  /**
+   * 最近学习先按域筛一道再按搜索词筛。
+   *
+   * 不筛的现象：新账号切到智能制造域，最近学习里躺着 15 门 AI 课——
+   * 用户口径是「两个库的课程与个性化不许混」。归属表里没有的课算可见
+   * （刚生成的课有一段时间不在表里，宁可多显示也不要让它凭空消失）。
+   */
+  const domainScoped = useMemo(
+    () => classrooms.filter((c) => belongsToDomain(c.id, learnerProfile.corpus, courseDomains)),
+    [classrooms, learnerProfile.corpus, courseDomains],
+  );
   const filteredClassrooms = useMemo(() => {
     const q = deferredSearchQuery.trim().toLowerCase();
-    if (!q) return classrooms;
-    return classrooms.filter((c) => {
+    if (!q) return domainScoped;
+    return domainScoped.filter((c) => {
       const name = c.name?.toLowerCase() ?? '';
       const desc = c.description?.toLowerCase() ?? '';
       return name.includes(q) || desc.includes(q);
     });
-  }, [classrooms, deferredSearchQuery]);
+  }, [domainScoped, deferredSearchQuery]);
 
   /** 路径卡要的「本机学过哪些课、学到哪」：键=本机有记录的课，值=续读进度（没续读过是 0） */
   const pathProgress = useMemo(
@@ -592,7 +609,7 @@ function HomePage() {
             {/* 示例提示：一键填入 */}
             {!form.requirement.trim() && (
               <div className="flex flex-wrap gap-1.5 px-4 pb-2">
-                {examplePromptsFor(learnerProfile.corpus).map((p) => (
+                {examplePromptsFor(learnerProfile.corpus, registryVersion).map((p) => (
                   <button
                     key={p}
                     type="button"
@@ -728,7 +745,7 @@ function HomePage() {
           </div>
 
           {/* ── ③ 最近学习卡（原折叠列表原样迁入） ── */}
-          {classrooms.length > 0 && (
+          {domainScoped.length > 0 && (
             <section className={cn('overflow-hidden lg:col-span-3', CARD_RECIPE_STATIC)}>
               <div className="h-1 w-full bg-blue-deep/40" />
               <div className="flex w-full flex-col px-5 pb-4 pt-1">
@@ -745,7 +762,7 @@ function HomePage() {
                     >
                       <Clock className="size-3.5" />
                       {t('classroom.recentClassrooms')}
-                      <span className="text-xs tabular-nums opacity-60">{classrooms.length}</span>
+                      <span className="text-xs tabular-nums opacity-60">{domainScoped.length}</span>
                       <motion.div
                         animate={{ rotate: recentOpen ? 180 : 0 }}
                         transition={{ duration: 0.3, ease: 'easeInOut' }}
