@@ -106,7 +106,13 @@ function toEntry(corpus: string, row: Record<string, unknown>): DomainRegistryEn
  */
 export function parseDomainRegistry(raw: unknown): DomainRegistry {
   const top = isObject(raw) ? raw : {};
-  const list: unknown = Array.isArray(raw) ? raw : (top.domains ?? top.corpora ?? raw);
+  // `entries` 摆在最前：**解析器必须吃得下自己的输出**。
+  // `/api/domains` 返回的就是已解析形态 `{entries: {...}}`，而这里原本只认
+  // 引擎产物的 `corpora` 数组——于是浏览器灌注拿到满血数据却解析出空清单，
+  // 所有查表静默回退兜底（2026-08-23 线上实锤，同族第九例）。
+  const list: unknown = Array.isArray(raw)
+    ? raw
+    : (top.entries ?? top.domains ?? top.corpora ?? raw);
 
   const entries: Record<string, DomainRegistryEntry> = {};
   if (Array.isArray(list)) {

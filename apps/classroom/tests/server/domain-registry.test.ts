@@ -242,3 +242,19 @@ describe('示例提示词的形状必须与引擎产物一致', () => {
     expect(prompts.every((p) => typeof p === 'string')).toBe(true);
   });
 });
+
+describe('解析器必须吃得下自己的输出', () => {
+  it('/api/domains 返回的 {entries} 形态能被解析回来', () => {
+    // 链路上同一份数据有两种形态：引擎产物的 corpora 数组、读取器的 entries 字典。
+    // 浏览器灌注走的是后者——解析器只认前者时，拿到满血数据也解析出空清单，
+    // 所有查表静默回退兜底（2026-08-23 线上实锤，同族第九例）。
+    const engineShape = parseDomainRegistry({
+      corpora: [{ corpus: 'mfg', label: '智能制造', examples: [{ prompt: 'ROS2 怎么起节点' }] }],
+    });
+    // 把它当成 /api/domains 的响应再解析一次，结果必须等价
+    const roundTrip = parseDomainRegistry(engineShape);
+    expect(Object.keys(roundTrip.entries)).toEqual(['mfg']);
+    expect(roundTrip.entries.mfg.label).toBe('智能制造');
+    expect(roundTrip.entries.mfg.examples).toEqual([{ prompt: 'ROS2 怎么起节点' }]);
+  });
+});
