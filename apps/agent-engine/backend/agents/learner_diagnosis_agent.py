@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from backend.schemas.learner import DiagnosisResult, LearnerProfile, PretestResult
 from backend.services.feasibility import assess_feasibility
+
 from backend.services.llm_gateway import LLMGateway, llm_gateway
 from backend.services.personalization_service import build_personalization_blueprint
 
+#: 主域 ai 的概念闸线。**这是 AI 域专有的**——别的领域没有 rag / langgraph 这些概念。
+#: 2026-08-23 实锤：这张表被所有域共用，智能制造域的课第 7 页长出
+#: 「补漏：智能体 / RAG / 工具调用 / 语言图」，AI 概念被补进制造课。
 CONCEPT_FLOORS = {
     "agent_basics": 0.35,
     "rag": 0.45,
@@ -14,6 +21,48 @@ CONCEPT_FLOORS = {
     "guardrails": 0.45,
     "deployment": 0.4,
 }
+
+#: 非主域概念的统一闸线。各域没有逐概念调过的先验，用一个中位值，
+#: 别假装我们知道「制冷机组日常巡检」该卡在 0.42 还是 0.48。
+DEFAULT_CONCEPT_FLOOR = 0.45
+
+_MAIN_CORPUS = {"", "ai", "default"}
+
+
+def concept_floors_for(corpus: str | None) -> dict[str, float]:
+    """这个域的概念闸线表。
+
+    - 主域 ai：用手工调过的 `CONCEPT_FLOORS`
+    - 其它域：读该库 ⑤ 站冻结金标里的 knowledge_components，统一闸线
+    - 读不到：**返回空表**——诚实无先验，绝不拿别的域的概念顶上
+
+    空表意味着 `weak_concepts` 为空，大纲侧「薄弱概念：无」的分支会接住它，
+    补漏屏自然不生成。宁可不补，也不要补错领域的概念。
+    """
+    name = (corpus or "").strip().lower()
+    if name in _MAIN_CORPUS:
+        return dict(CONCEPT_FLOORS)
+
+    gold_dir = (
+        Path(__file__).resolve().parents[2] / "data" / "eval" / "kc_gold_derived" / name
+    )
+    if not gold_dir.is_dir():
+        return {}
+
+    concepts: set[str] = set()
+    for topic_file in sorted(gold_dir.glob("*.json")):
+        if topic_file.name.startswith("_"):
+            continue  # `_freeze.json` 存的是计数与元信息，不是概念本身
+        try:
+            payload = json.loads(topic_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for item in payload.get("knowledge_components") or []:
+            if isinstance(item, dict):
+                key = str(item.get("id") or item.get("name") or "").strip()
+                if key:
+                    concepts.add(key)
+    return {c: DEFAULT_CONCEPT_FLOOR for c in sorted(concepts)}
 
 SUMMARY_SYSTEM = (
     "你是学情诊断分析师。基于给定的掌握度向量、薄弱概念和推荐难度，"
@@ -49,8 +98,12 @@ class LearnerDiagnosisAgent:
         mastery.setdefault("deployment", profile.engineering_level / 4)
         mastery = {key: round(min(1.0, max(0.0, value)), 3) for key, value in mastery.items()}
 
-        weak_concepts = [concept for concept, floor in CONCEPT_FLOORS.items() if mastery.get(concept, 0.0) < floor]
-        if not weak_concepts:
+        floors = concept_floors_for(getattr(profile, "corpus", None))
+        weak_concepts = [c for c, floor in floors.items() if mastery.get(c, 0.0) < floor]
+        # 概念表非空却一条都没判弱，才挑两个最弱的当重点。
+        # **表本身是空的（这个域没有金标概念）时不许凑数**——凑出来的必然是
+        # `mastery` 里那几个 AI 概念，那正是跨域污染的来源。
+        if not weak_concepts and floors:
             weak_concepts = sorted(mastery, key=mastery.get)[:2]
 
         difficulty = self._recommend_difficulty(mastery, learning_goal, profile)
