@@ -51,6 +51,7 @@ import { measuredKey, type Evidence } from '@/lib/evidence/types';
 import { inferKnowledgeType, qualitativePassed, replayRepetition } from '@/lib/evidence/spaced';
 import { readMistakes, type MistakeEntry } from '@/lib/evidence/mistake-bank';
 import { learnerDomain } from '@/lib/evidence/profile-bridge';
+import { belongsToDomain } from '@/lib/knowledge/use-course-domains';
 import { LEGACY_DOMAIN } from '@/lib/evidence/types';
 import {
   knowledgeState,
@@ -1514,6 +1515,26 @@ export default function ReportPage() {
         list = await listStages();
       } catch {
         list = [];
+      }
+      if (cancelled) return;
+      // D3 域过滤：课程下拉只列当前画像域的课（联动铁令「两个库不混」）。
+      // 判据用与最近学习同一份 belongsToDomain——归属表没有的课算本域可见
+      // （新课入表有延迟，宁可多显示也不让刚生成的课凭空消失）。
+      const corpus = readStoredProfile()?.corpus?.trim() || undefined;
+      if (corpus) {
+        try {
+          const resp = await fetch('/api/course-domains');
+          if (resp.ok) {
+            const domains = (await resp.json()) as Record<
+              string,
+              { domain?: string; corpus?: string; title?: string }
+            >;
+            const filtered = list.filter((s) => belongsToDomain(s.id, corpus, domains));
+            if (filtered.length > 0) list = filtered;
+          }
+        } catch {
+          // 拉不到归属表就不过滤——展示全量好过误藏
+        }
       }
       if (cancelled) return;
       setStages(list);
