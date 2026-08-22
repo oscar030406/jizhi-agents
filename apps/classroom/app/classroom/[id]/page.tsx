@@ -1,6 +1,7 @@
 'use client';
 
 import { Stage } from '@/components/stage';
+import { SafetyNotice } from '@/components/stage/safety-notice';
 import { ThemeProvider } from '@/lib/hooks/use-theme';
 import { useStageStore } from '@/lib/store';
 import { useSettingsStore } from '@/lib/store/settings';
@@ -216,7 +217,13 @@ export default function ClassroomDetailPage() {
               </div>
             </div>
           ) : (
-            <Stage onRetryOutline={retrySingleOutline} />
+            <>
+              {/* 高危领域的安全提示（C21）：涉及实操的域一门课一条常驻横幅。
+                  显示与否只看接入时管理者勾没勾「涉及实操」——从语料关键词判
+                  实测全是误报（「性价比接地气」「高温度 Temperature」）。 */}
+              <SafetyNotice />
+              <Stage onRetryOutline={retrySingleOutline} />
+            </>
           )}
         </div>
       </MediaStageProvider>

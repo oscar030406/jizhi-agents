@@ -182,7 +182,10 @@ export function domainRegistryEntry(corpus?: string): DomainRegistryEntry | unde
  *
  * 反过来，漏挂是安全责任，所以勾选项在管理端要显眼、文案要说清后果。
  */
-export function needsSafetyLayer(corpus?: string): boolean {
+export function needsSafetyLayer(corpus?: string, _registryVersion?: number): boolean {
+  // `_registryVersion` 只为让 React 组件把「清单灌注完成」当成依赖重算一次——
+  // 清单是异步灌进来的，首帧读到空清单会永远判 false，安全提示就再也不出现。
+  // 与 `examplePromptsFor` 同一个约定。
   return domainRegistryEntry(corpus)?.hands_on_safety === true;
 }
 
