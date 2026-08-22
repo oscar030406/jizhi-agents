@@ -72,6 +72,10 @@ class IntakeManifest:
     accepted: list[TriagedFile] = field(default_factory=list)
     #: (相对路径, 退回理由)。这份清单要原样进就绪度报告——不许静默丢文件。
     rejected: list[tuple[str, str]] = field(default_factory=list)
+    #: 扫描件 PDF：抽不出文本层，但**不是废料**——交给视觉模型逐页转写还能用。
+    #: 这里只登记，实际转写在接收站①做：`triage` 是纯函数、不联网，
+    #: 把一个几十分钟的网络操作塞进分诊会让它既不可中断也给不出进度。
+    pending_transcribe: list[tuple[str, str]] = field(default_factory=list)
     #: 提示注入特征命中（WO-N16 B14）。**只标不拦**：我们自己的《提示工程指南》
     #: 正经讲的就是注入，正文里必然出现这些字样，拒收等于把讲安全的教材挡在门外。
     #: 处置权留给管理者——他知道自己传的是什么书。
@@ -161,7 +165,13 @@ def triage(root: Path) -> IntakeManifest:
             # 建个空索引，最后库建成了报告一片绿，里面什么都没有。
             extracted = extract_pdf(path)
             if extracted.reject_reason:
-                manifest.rejected.append((relative, extracted.reject_reason))
+                if "扫描件" in extracted.reject_reason:
+                    # 扫描件不退回：整本是图、没有文本层，但视觉模型读得出来。
+                    # 用户原话「扫描件人类能读我们读不了」——那不是能力边界，是没做。
+                    manifest.pending_transcribe.append((relative, extracted.reject_reason))
+                else:
+                    # 加密、损坏、装不上解析器——这些转写也救不了，如实退回。
+                    manifest.rejected.append((relative, extracted.reject_reason))
                 continue
             text = extracted.text
         else:

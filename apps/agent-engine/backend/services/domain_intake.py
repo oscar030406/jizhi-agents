@@ -349,6 +349,138 @@ def _materialize_inbox(run: IntakeRun) -> None:
         run.flush()
 
 
+#: 单次接入最多转写多少页。877 页并发 4 约 41 分钟；再多就该分批投，
+#: 否则一次接入占着后台线程小半天，其它库排不上队。撞线时如实说，不静默截断。
+MAX_TRANSCRIBE_PAGES = 1200
+
+
+def _transcribe_scans(run: IntakeRun, pending: list[tuple[str, str]]) -> dict[str, Any]:
+    """把扫描件 PDF 逐页交给视觉模型转写，产出的 markdown 落进 `docs/`。
+
+    用户原话「扫描件人类能读我们读不了」——那不是能力边界，是没做。
+    管理者手上的教材大量是扫描件（验收包三本 877 页全是整页图、零文本层）。
+
+    这一站慢（约 11s/页），所以：**逐页落盘可断点续跑**、**页级进度进事件流**。
+    投币口那次「转了八分钟只有三个字」的教训刚流过血，不能在这里重演。
+    """
+    from backend.rag import pdf_transcribe as T
+    from backend.services.llm_gateway import LLMGateway
+
+    if not pending:
+        return {}
+
+    gateway = LLMGateway()
+    route = gateway.route_for("ResourceGenerationAgent")
+    if not route.enabled:
+        for rel, why in pending:
+            run.record.setdefault("_scan_skipped", []).append(rel)
+        run.emit(
+            "receive",
+            "stage_warning",
+            f"{len(pending)} 份扫描件没能转写：LLM 路由未启用。"
+            "这些书不会进库——不是内容不合格，是这次跑的时候转写不可用。",
+        )
+        return {"transcribed": 0, "skipped": len(pending)}
+
+    import base64
+
+    import requests
+
+    # 网关的模型由 agent 路由决定（strong 档是文本模型），而转写必须走视觉模型。
+    # 不改网关——那是共用件，改它的路由语义会波及所有 agent；这里只借它的凭据直连。
+    api_key = gateway.env.get(route.api_key_env) or os.environ.get(route.api_key_env, "")
+    endpoint = f"{route.base_url.rstrip('/')}/chat/completions"
+
+    def call_model(image: Path) -> str:
+        payload = base64.b64encode(image.read_bytes()).decode()
+        resp = requests.post(
+            endpoint,
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": T.TRANSCRIBE_MODEL,
+                "temperature": 0.0,
+                "max_tokens": 4000,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/png;base64,{payload}"},
+                            },
+                            {"type": "text", "text": T.TRANSCRIBE_PROMPT},
+                        ],
+                    }
+                ],
+            },
+            timeout=300,
+        )
+        resp.raise_for_status()
+        return str(resp.json()["choices"][0]["message"]["content"] or "")
+
+    done = pages = figures = 0
+    for rel, _why in pending:
+        pdf = run.docs_dir / rel
+        out_dir = run.dir / "transcribed" / Path(rel).stem
+        run.emit("receive", "stage_progress", f"开始转写扫描件《{Path(rel).stem}》")
+
+        def progress(cur: int, total: int, _rel: str = rel) -> None:
+            # 每 20 页报一次：877 页逐页报会把事件流淹掉，全不报又回到「纯黑等待」。
+            if cur % 20 == 0 or cur == total:
+                run.emit("receive", "stage_progress", f"《{Path(_rel).stem}》已转写 {cur}/{total} 页")
+
+        report = T.transcribe_pdf(
+            pdf, out_dir, call_model=call_model, on_progress=progress,
+            max_pages=MAX_TRANSCRIBE_PAGES,
+        )
+        if report.pages_done == 0:
+            run.emit("receive", "stage_warning", f"《{Path(rel).stem}》一页都没转出来，跳过")
+            continue
+
+        # 转写产出替掉原 PDF：下游只认 md，PDF 留着会被 triage 再收一遍。
+        # **写在原 PDF 旁边**，不是 docs 根——投料的目录层次是结构信号
+        # （triage 拿 path_depth、切块拿相对路径当 section 标题），
+        # 把深层书的转写产物拍到根上等于把它的位置信息抹掉。
+        md = pdf.with_suffix(".md")
+        md.write_text(T.assemble(out_dir, Path(rel).name), encoding="utf-8")
+        pdf.unlink(missing_ok=True)
+        done += 1
+        pages += report.pages_done
+        figures += report.figure_lines
+        run.emit(
+            "receive",
+            "stage_progress",
+            f"《{Path(rel).stem}》转写完成：{report.summary()}",
+            pages=report.pages_done,
+            failed=report.pages_failed,
+        )
+
+    return {"transcribed": done, "pages": pages, "figure_lines": figures}
+
+
+def _install_figures(run: IntakeRun) -> dict[str, Any]:
+    """把转写产出的页图搬进 `corpora/<库>/figures/`。
+
+    转写时图落在 `<run>/transcribed/<书名>/figures/`——那是**过程产物**，
+    run 目录随时可以清。课程生成读的是 `corpora/<库>/`，图不搬过去，
+    正文里的 `[图：… → figures/pNNN.png]` 全是死链。
+
+    命名带上书名前缀：两本书都有 p0001.png，直接平铺会互相覆盖。
+    """
+    src_root = run.dir / "transcribed"
+    if not src_root.exists():
+        return {}
+
+    dest = CORPORA_DIR / run.corpus / "figures"
+    dest.mkdir(parents=True, exist_ok=True)
+    moved = 0
+    for book_dir in sorted(p for p in src_root.iterdir() if p.is_dir()):
+        for png in sorted((book_dir / "figures").glob("*.png")):
+            shutil.copy2(png, dest / f"{book_dir.name}-{png.name}")
+            moved += 1
+    return {"figures": moved} if moved else {}
+
+
 def _stage_receive(run: IntakeRun) -> dict[str, Any]:
     """① 投料落地 + 分诊 + 许可 + 内容去重。一个文件都收不进来就在这里失败，②之后不会动盘。"""
     from backend.rag.intake import detect_license, normalize_rst_dir, triage
@@ -392,6 +524,19 @@ def _stage_receive(run: IntakeRun) -> dict[str, Any]:
         rejected=len(rejected),
         chars=manifest.accepted_chars,
     )
+    # 扫描件转写：分诊把它们放进了 pending_transcribe。转完写回 docs/ 再分诊一遍——
+    # 转写产出也要过注入扫描，不能因为「是我们自己转出来的」就免检。
+    if manifest.pending_transcribe:
+        run.emit(
+            "receive",
+            "stage_progress",
+            f"{len(manifest.pending_transcribe)} 份扫描件进转写旁路（整本是图、没有文本层）",
+        )
+        scan_stats = _transcribe_scans(run, manifest.pending_transcribe)
+        if scan_stats.get("transcribed"):
+            manifest = triage(run.docs_dir)  # 转写产出重新分诊，与其它文档同一条路
+            rejected = [{"file": rel, "reason": why} for rel, why in manifest.rejected]
+
     # 提示注入扫描（WO-N16 B14）：扫了不上屏等于没扫。命中只报不拦——
     # 讲提示注入的教材正文里本来就有这些字样，处置权归管理者。
     if manifest.injection_hits:
@@ -444,6 +589,16 @@ def _stage_chunk(run: IntakeRun) -> dict[str, Any]:
     index_path, count = write_corpus_index(run.corpus, sections, [], tier_range)
     rel = _rel(index_path)
     run.record["products"]["corpus_index"] = rel
+    # 转写产出的原图跟着搬进库——课程生成引用的是这里，不是 run 目录。
+    figures = _install_figures(run)
+    if figures:
+        run.record["products"]["figures"] = figures["figures"]
+        run.emit(
+            "chunk",
+            "stage_progress",
+            f"原书插图 {figures['figures']} 张入库，课程里嵌原件而不是模型转述",
+            **figures,
+        )
     sample = sections[0][1][:180] if sections else ""
     return {
         "sections": len(sections),

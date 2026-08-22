@@ -127,3 +127,43 @@ export function domainRegistryEntry(corpus?: string): DomainRegistryEntry | unde
 export function needsSafetyLayer(corpus?: string): boolean {
   return domainRegistryEntry(corpus)?.hands_on_safety === true;
 }
+
+/**
+ * 一次性验证库的命名约定（与引擎 `is_scratch_corpus()` 同一份口径）：
+ * 全链自测建的 `*-probe` / `*-test` 这类库，引擎侧已在 `eligible` 里判掉；
+ * 前端再判一层是**双保险**——上一次它漏进学习者下拉，正是因为唯一一道闸
+ * 换了判据。两处口径必须一起改，改一处漏一处就是那次事故重演。
+ */
+const SCRATCH_PATTERNS = [/-probe$/, /-test$/, /-tmp$/, /-scratch$/, /^probe-/, /^test-/, /^tmp-/, /^scratch-/];
+
+export function isScratchCorpus(corpus: string): boolean {
+  const name = corpus.trim().toLowerCase();
+  return SCRATCH_PATTERNS.some((p) => p.test(name));
+}
+
+/**
+ * 这个域该不该对学习者露面：过了质量与指标闸（eligible）且不是一次性验证库。
+ * 清单里没有的库返回 false——没登记过的东西不推给学习者，管理端照常可见。
+ */
+export function isLearnerVisible(corpus?: string): boolean {
+  const entry = domainRegistryEntry(corpus);
+  if (!entry) return false;
+  if (entry.eligible !== true) return false;
+  return !isScratchCorpus(entry.corpus);
+}
+
+/**
+ * 展示名截断（CJK 按 1 全角计）。引擎存的是管理者填的完整 scope，
+ * 截多长是**展示决策**：下拉 12 字、卡片 16 字、详情页用 full 不截。
+ * 截断只在读取器做，引擎不预截——不同位置要不同长度，预截会把长的那种毁掉。
+ */
+export function truncateLabel(label: string, max: number): string {
+  let width = 0;
+  let out = '';
+  for (const ch of label) {
+    width += /[\u2E80-\uFFFD]/.test(ch) ? 1 : 0.5;
+    if (width > max) return `${out}…`;
+    out += ch;
+  }
+  return label;
+}

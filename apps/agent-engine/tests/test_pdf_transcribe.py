@@ -121,3 +121,44 @@ def test_模型与分辨率是实测定下来的常量() -> None:
     """换模型/换 dpi 前先看模块文档里的实测表，别拍脑袋改。"""
     assert T.TRANSCRIBE_MODEL == "Qwen/Qwen3-VL-8B-Instruct"
     assert T.RENDER_DPI == 100, "150dpi 输入 token 多一倍多，转写内容几乎一字不差"
+
+
+# ── 图资产入库 ────────────────────────────────────────────────
+
+def test_转写的原图搬进库(tmp_path, monkeypatch):
+    """图落在 run 目录是过程产物，run 随时可清。课程生成读 `corpora/<库>/`——
+    不搬过去，正文里的 `[图：… → figures/pNNN.png]` 全是死链。"""
+    from backend.services import domain_intake as di
+
+    monkeypatch.setattr(di, "CORPORA_DIR", tmp_path / "corpora")
+
+    class _Run:
+        dir = tmp_path / "run"
+        corpus = "probe"
+
+    for book in ("PLC教材", "机器人基础"):
+        figs = _Run.dir / "transcribed" / book / "figures"
+        figs.mkdir(parents=True)
+        for page in range(3):
+            (figs / f"p{page:04d}.png").write_bytes(b"\x89PNG")
+
+    got = di._install_figures(_Run())
+    assert got == {"figures": 6}
+
+    names = sorted(p.name for p in (tmp_path / "corpora" / "probe" / "figures").glob("*.png"))
+    # 带书名前缀：两本书都有 p0000.png，平铺会互相覆盖
+    assert "PLC教材-p0000.png" in names and "机器人基础-p0000.png" in names
+    assert len(names) == 6
+
+
+def test_没转写过的库不建空figures目录(tmp_path, monkeypatch):
+    from backend.services import domain_intake as di
+
+    monkeypatch.setattr(di, "CORPORA_DIR", tmp_path / "corpora")
+
+    class _Run:
+        dir = tmp_path / "run"
+        corpus = "probe"
+
+    _Run.dir.mkdir(parents=True)
+    assert di._install_figures(_Run()) == {}

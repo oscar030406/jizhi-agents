@@ -22,6 +22,7 @@ import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import type { LearnerProfileFields } from '@/lib/types/generation';
 import { domainLabel, TRAINING_DOMAINS } from '@/lib/knowledge/domain-labels';
+import { isScratchCorpus, truncateLabel } from '@/lib/knowledge/domain-registry';
 import { ProfileImpactPreview } from '@/components/generation/profile-impact-preview';
 import type { PretestDimResult, PretestQuestion } from '@/app/api/pretest/route';
 
@@ -197,6 +198,10 @@ async function loadBuiltCorpora(): Promise<BuiltCorpus[]> {
       };
       const built = (payload.corpora ?? [])
         .filter((c) => c.available && typeof c.corpus === 'string')
+        // 一次性验证库（*-probe/-test/-tmp/-scratch）不给学习者看——双保险：
+        // 引擎侧 eligible 已判，这里按命名约定再拦一道。上次 fullpath-probe
+        // 漏进这个下拉，就是因为唯一那道闸换了判据（跳过被当失败的镜像事故）。
+        .filter((c) => !isScratchCorpus(c.corpus as string))
         .map((c) => ({ corpus: c.corpus as string, chunks: Number(c.chunk_count ?? 0) }));
       if (built.length) return built;
     } catch {
@@ -435,7 +440,7 @@ export function LearnerProfilePopover({
                   不会因为查不到就把库名兜底成别的库（domainLabel 的约定）。 */}
               {corpora.map((c) => (
                 <option key={c.corpus} value={c.corpus}>
-                  {domainLabel(c.corpus)}（{c.chunks} 块）
+                  {truncateLabel(domainLabel(c.corpus), 12)}（{c.chunks} 块）
                 </option>
               ))}
             </select>
