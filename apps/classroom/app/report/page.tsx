@@ -2138,11 +2138,13 @@ export default function ReportPage() {
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                   {[
                     {
+                      testid: 'audit-summary-audited',
                       label: '已审核场景',
                       value: `${audit.audited}/${audit.total}`,
                       tone: 'text-foreground',
                     },
                     {
+                      testid: 'audit-summary-grounded',
                       label: '证据接地率',
                       value: `${Math.round((audit.grounded / audit.audited) * 100)}%`,
                       tone:
@@ -2150,15 +2152,25 @@ export default function ReportPage() {
                           ? 'text-green-deep'
                           : 'text-yellow-deep',
                     },
-                    { label: '核验断言数', value: String(audit.claims), tone: 'text-foreground' },
                     {
+                      testid: 'audit-summary-claims',
+                      label: '核验断言数',
+                      value: String(audit.claims),
+                      tone: 'text-foreground',
+                    },
+                    {
+                      testid: 'audit-summary-flagged',
                       label: '标记 / 拦截',
                       value: `${audit.flagged} / ${audit.blocked}`,
                       tone:
                         audit.blocked > 0 ? 'text-destructive' : 'text-foreground',
                     },
                   ].map((k) => (
-                    <div key={k.label} className="rounded-lg border border-border/70 p-2.5">
+                    <div
+                      key={k.label}
+                      data-testid={k.testid}
+                      className="rounded-lg border border-border/70 p-2.5"
+                    >
                       <p className="text-xs text-muted-foreground">{k.label}</p>
                       <p className={cn('mt-0.5 text-lg font-semibold tabular-nums', k.tone)}>
                         {k.value}

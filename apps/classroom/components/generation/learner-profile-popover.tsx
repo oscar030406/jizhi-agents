@@ -378,6 +378,7 @@ export function LearnerProfilePopover({
           size="sm"
           className="gap-1.5 rounded-full text-xs"
           title="学习者画像：驱动难度、讲解深度、类比领域与测验难度"
+          data-testid="learner-profile-trigger"
         >
           <UserCog className="size-3.5" />
           <span className="max-w-[9rem] truncate">{summary}</span>
@@ -441,6 +442,7 @@ export function LearnerProfilePopover({
           <label className="text-[11px] space-y-1">
             <span className="text-muted-foreground">知识库</span>
             <select
+              data-testid="learner-profile-corpus"
               value={profile.corpus ?? ''}
               onChange={(e) => patch({ corpus: e.target.value || undefined })}
               className="w-full rounded-md border bg-background text-foreground px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2"
