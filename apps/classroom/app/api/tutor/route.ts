@@ -81,6 +81,44 @@ export interface LectureExchange {
   question: string;
   answer: string;
   verdict: string;
+  /**
+   * 这一轮用到第几级提示。引擎按它逐轮压档（`cap_verdict_by_hints`）——
+   * 不回传的话历史里每一轮都按「没要过提示」算，看了答案的那些轮会被
+   * 重新算成真会了。可选：老会话没有这一格，缺省 0。
+   */
+  hints_used?: number;
+}
+
+/**
+ * 提示阶梯的一级。**未解锁时 `content` 是空串**——解锁判定在引擎做，
+ * 前端改个 flag 露不出答案，这里也不要试图从别处凑内容。
+ */
+export interface HintStep {
+  level: number;
+  /** hint=指方向 / scaffold=拆小步子题 / bottom_out=兜底答案 */
+  kind: 'hint' | 'scaffold' | 'bottom_out' | string;
+  title: string;
+  content: string;
+  unlocked: boolean;
+  /** 开或不开的依据。界面上置灰按钮的提示文案直接用它，不要自己另写一套说法。 */
+  reason: string;
+  /** 用了这一级之后，本题最高只能记到的判分档。 */
+  verdict_cap: string;
+}
+
+/**
+ * 一道题的三级提示阶梯（引擎 `hint_ladder_turn` 的响应，`agent` 为 `tutor:hint`）。
+ *
+ * 引擎无状态：`hints_used` 是这道题**累计**用到的最高级，客户端存着、下一轮回传。
+ * 不回传等于阶梯从头走一遍，拿不到答案——状态丢了只会更严，不会更松。
+ */
+export interface HintLadder extends Record<string, unknown> {
+  requested_level: number;
+  /** 本轮实际放行到第几级；0 = 没放行（跳级或越界）。 */
+  granted_level: number;
+  hints_used: number;
+  steps: HintStep[];
+  because: string[];
 }
 
 export async function POST(req: NextRequest) {
@@ -100,6 +138,14 @@ export async function POST(req: NextRequest) {
       expectedPoints?: string[];
       lectureHistory?: LectureExchange[];
       priorMastery?: number | null;
+      /**
+       * 三级提示阶梯。`hintRequest>0` 时引擎走提示分支（不出新题）。
+       * 这三格此前被这层白名单静默丢掉——引擎那边接口早就有了，界面拿不到，
+       * 交答案也不回传 hints_used，于是「看了答案照样记成会了」。
+       */
+      hintRequest?: number;
+      hintsUsed?: number;
+      hintQuestionId?: string;
     };
     const resp = await fetch(`${base.replace(/\/$/, '')}/internal/v1/personalize/tutor`, {
       method: 'POST',
@@ -119,6 +165,9 @@ export async function POST(req: NextRequest) {
         expected_points: body.expectedPoints ?? [],
         lecture_history: body.lectureHistory ?? [],
         prior_mastery: body.priorMastery ?? null,
+        hint_request: body.hintRequest ?? 0,
+        hints_used: body.hintsUsed ?? 0,
+        hint_question_id: body.hintQuestionId ?? '',
       }),
       // 苏格拉底改写走 LLM，比确定性桥慢——给足 30s
       signal: AbortSignal.timeout(30_000),
@@ -128,13 +177,25 @@ export async function POST(req: NextRequest) {
       return apiError('INVALID_REQUEST', 404, `该主题暂无导学题库：${body.concept}`);
     }
     if (!resp.ok) return new Response(null, { status: 204 });
-    const payload = (await resp.json()) as { data?: TutorTurn | LectureTutorTurn };
+    const payload = (await resp.json()) as { data?: TutorTurn | LectureTutorTurn | HintLadder };
     const data = payload.data;
-    // 概念分支带 decision，讲义分支带 mode——两者都没有说明载荷坏了
-    if (!data || (!('decision' in data && data.decision) && !('mode' in data && data.mode))) {
+    // 三个分支的判据各不相同：概念分支带 decision，讲义分支带 mode，
+    // 提示分支两个都没有、只有 steps。**这一条不补上，提示轮会被当成坏载荷退 204**——
+    // 引擎正常返回、界面却什么都收不到，正是最难查的那种静默失败。
+    const isLadder = !!data && 'steps' in data && Array.isArray((data as HintLadder).steps);
+    if (
+      !data ||
+      (!('decision' in data && data.decision) && !('mode' in data && data.mode) && !isLadder)
+    ) {
       return new Response(null, { status: 204 });
     }
-    if ('mode' in data && data.mode) {
+    if (isLadder) {
+      const ladder = data as HintLadder;
+      log.info(
+        `Hint ladder for "${body.sceneTitle ?? body.concept ?? ''}": ` +
+          `请求第 ${ladder.requested_level} 级 → 放行 ${ladder.granted_level}，累计 ${ladder.hints_used}`,
+      );
+    } else if ('mode' in data && data.mode) {
       log.info(`Lecture turn for "${body.sceneTitle ?? ''}": ${data.mode}`);
     } else {
       const turn = data as TutorTurn;

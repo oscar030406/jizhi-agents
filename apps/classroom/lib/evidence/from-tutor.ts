@@ -42,7 +42,15 @@ export interface TutorTurnBrief {
   expected_points?: string[];
   mastery_estimate?: number;
   /** 引擎回传的概念级证据。有它就用它当测项。 */
-  profile_evidence?: { concept: string; verdict: string; confidence: number } | null;
+  profile_evidence?: {
+    concept: string;
+    verdict: string;
+    confidence: number;
+    /** 这道题用到第几级提示。≥2 说明答案有一部分是提示喂出来的。 */
+    hints_used?: number;
+    /** 压档前的原始判分。非空即表示这条证据被提示代价压过——留痕用，不重复计罚。 */
+    raw_verdict?: string;
+  } | null;
   engine?: string;
 }
 
@@ -74,10 +82,30 @@ const SCORE_BY_OUTCOME: Record<Outcome, number> = {
   incorrect: 0,
 };
 
-function becauseOf(outcome: Outcome, points: readonly string[]): EvidenceVerdict['because'] {
+function becauseOf(
+  outcome: Outcome,
+  points: readonly string[],
+  evidence: TutorTurnBrief['profile_evidence'],
+): EvidenceVerdict['because'] {
   const all = [...points];
+  // 用过提示就在依据里明写一句。压档本身发生在引擎侧、这里不重算，
+  // 但**履历上要看得见**：不写的话，一条被压成 incorrect 的证据和一条真答错的
+  // 长得一模一样，回头复盘分不出「不会」还是「看了答案」。
+  const hints = evidence?.hints_used ?? 0;
+  const note =
+    hints > 0
+      ? [
+          hints >= 3
+            ? `本题看了兜底答案（第 ${hints} 级提示）`
+            : `本题用到第 ${hints} 级提示`,
+          ...(evidence?.raw_verdict && evidence.raw_verdict !== outcome
+            ? [`原始判分 ${evidence.raw_verdict}，按提示代价压到 ${outcome}`]
+            : []),
+        ]
+      : [];
   // partial 与 incorrect 同样处理：只知道有漏，不知道哪条命中。见文件头的说明。
-  return outcome === 'correct' ? { hit: all, missed: [] } : { hit: [], missed: all };
+  const base = outcome === 'correct' ? { hit: all, missed: [] } : { hit: [], missed: all };
+  return note.length ? { ...base, note } : base;
 }
 
 /**
@@ -128,7 +156,7 @@ export function tutorEvidenceDraft(input: TutorEvidenceInput): EvidenceDraft | n
         verdict: {
           outcome,
           score,
-          because: becauseOf(outcome, turn.expected_points ?? []),
+          because: becauseOf(outcome, turn.expected_points ?? [], turn.profile_evidence ?? null),
         },
         context: {
           encounter: (input.priorEncounters ?? 0) + 1,
@@ -136,6 +164,12 @@ export function tutorEvidenceDraft(input: TutorEvidenceInput): EvidenceDraft | n
           modality: isRemediationScene(input.sceneId) ? 'review' : 'tutor',
           ...(input.sinceLastMs != null ? { sinceLastMs: input.sinceLastMs } : {}),
           ...(input.elapsedMs != null ? { elapsedMs: input.elapsedMs } : {}),
+          // 提示痕迹。引擎已经把顶层 verdict 与 mastery_estimate 压过档，
+          // 上面的 outcome/score 用的就是压后那份——这里只把「怎么来的」记全，
+          // 不再打第二次折（重复惩罚会让对外指标口径失真）。
+          ...(turn.profile_evidence?.hints_used
+            ? { hintsUsed: turn.profile_evidence.hints_used }
+            : {}),
         },
       },
     ],

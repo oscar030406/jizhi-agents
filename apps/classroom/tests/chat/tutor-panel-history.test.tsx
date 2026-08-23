@@ -163,7 +163,16 @@ describe('导学连问两轮', () => {
     expect(
       secondAsk.lectureHistory,
       '第二问必须带上一轮判定，否则引擎按空历史算，标签退回「探测提问」',
-    ).toEqual([{ question: 'Q/K/V 分别起什么作用？', answer: '不知道', verdict: 'incorrect' }]);
+    ).toEqual([
+      {
+        question: 'Q/K/V 分别起什么作用？',
+        answer: '不知道',
+        verdict: 'incorrect',
+        // 提示阶梯上线后每一轮各自带代价。这一轮没要过提示，所以是 0——
+        // 引擎按它逐轮压档，不带的话回放历史会把看过答案的轮重新算成真会了。
+        hints_used: 0,
+      },
+    ]);
 
     // 引擎按历史给出的 simplify 标签要真的渲染出来，理由行不再是「第一问」
     expect(host!.textContent).toContain('降维追问');

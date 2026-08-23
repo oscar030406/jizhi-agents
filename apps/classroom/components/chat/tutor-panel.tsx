@@ -30,7 +30,12 @@ import { useStageStore } from '@/lib/store';
 import { sceneLectureText } from '@/lib/classroom/lecture-text';
 import { stripSourceIds } from '@/lib/generation/tutor-prose';
 import { createLogger } from '@/lib/logger';
-import type { TutorTurn, LectureTutorTurn, LectureExchange } from '@/app/api/tutor/route';
+import type {
+  TutorTurn,
+  LectureTutorTurn,
+  LectureExchange,
+  HintLadder,
+} from '@/app/api/tutor/route';
 
 const LECTURE_TEXT_CAP = 3000;
 
@@ -110,6 +115,16 @@ function readProfile(concept: string): { recommendedDifficulty?: string; priorMa
 
 const log = createLogger('TutorPanel');
 
+/**
+ * 三级提示的按钮文案。级别与语义由引擎定（hint / scaffold / bottom_out），
+ * 这里只给中文标签——**顺序与含义不许在前端另立**，改了就与引擎的解锁判据错位。
+ */
+const HINT_LEVELS = [
+  { level: 1, label: '给点方向' },
+  { level: 2, label: '拆成小步' },
+  { level: 3, label: '直接看答案' },
+] as const;
+
 export function TutorPanel({ currentSceneId }: { currentSceneId?: string | null }) {
   const scenes = useStageStore((s) => s.scenes);
   const courseTitle = useStageStore((s) => s.stage?.name ?? '');
@@ -120,6 +135,16 @@ export function TutorPanel({ currentSceneId }: { currentSceneId?: string | null 
   const [lectureQA, setLectureQA] = useState<{ question: string; expectedPoints: string[] } | null>(null);
   const [answerDraft, setAnswerDraft] = useState('');
   const [unavailable, setUnavailable] = useState<string | null>(null);
+  /**
+   * 当前这道题的提示阶梯。**出下一题时必须清零**——`hints_used` 是「这道题」
+   * 累计用到第几级，带到下一题就等于凭空替新题记了提示代价。
+   *
+   * 引擎无状态，这份状态归客户端保管：要提示时带上它判解锁，交答案时带上它算代价。
+   * 不回传只会让阶梯从头走一遍（更严），不会漏掉代价——所以丢了不危险，
+   * 但带串题会危险，方向是不对称的。
+   */
+  const [ladder, setLadder] = useState<HintLadder | null>(null);
+  const hintsUsedRef = useRef(0);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const currentScene = useMemo(
@@ -182,6 +207,9 @@ export function TutorPanel({ currentSceneId }: { currentSceneId?: string | null 
             lectureHistory: historyRef.current,
             recommendedDifficulty: profile.recommendedDifficulty,
             priorMastery: profile.priorMastery,
+            // 交答案时把本题用到第几级提示带回去，引擎据此压掌握度
+            // （2 级封顶 partial，3 级记 incorrect）。不带 = 看了答案照样记成会了。
+            hintsUsed: hintsUsedRef.current,
             ...(answer && qa
               ? { learnerAnswer: answer, question: qa.question, expectedPoints: qa.expectedPoints }
               : {}),
@@ -200,6 +228,10 @@ export function TutorPanel({ currentSceneId }: { currentSceneId?: string | null 
           return 'unavailable';
         }
         if (turn.mode === 'ask') {
+          // 新题 = 新阶梯。这一行不写，上一题的 hints_used 会跟着新题走，
+          // 学习者一次提示没要也被按「看过答案」压档。
+          hintsUsedRef.current = 0;
+          setLadder(null);
           setLectureQA({ question: turn.question, expectedPoints: turn.expected_points ?? [] });
           setEntries((prev) => [...prev, { kind: 'turn', turn: askToTurn(turn, sceneTitle) }]);
           setStatus('active');
@@ -210,7 +242,14 @@ export function TutorPanel({ currentSceneId }: { currentSceneId?: string | null 
         setEntries((prev) => [...prev, { kind: 'turn', turn: verdictToTurn(turn, sceneTitle) }]);
         historyRef.current = [
           ...historyRef.current,
-          { question: qa?.question ?? '', answer: answer ?? '', verdict: turn.verdict },
+          {
+            question: qa?.question ?? '',
+            answer: answer ?? '',
+            verdict: turn.verdict,
+            // 历史里每一轮各自的提示代价。引擎重算掌握度时逐轮压档，
+            // 不记的话回放整段历史会把看过答案的那几轮重新算成真会了。
+            hints_used: hintsUsedRef.current,
+          },
         ];
         // 画像**不在这里改**。原来这段是按 `confidence×0.5` 权重的就地 EMA
         // （与 quiz 那段同族），2026-08-12 随 fold 上线一并撤掉：
@@ -269,12 +308,60 @@ export function TutorPanel({ currentSceneId }: { currentSceneId?: string | null 
     [lectureText, sceneTitle, courseTitle],
   );
 
+  /**
+   * 要第 level 级提示。走同一个 `/api/tutor`，`hintRequest>0` 时引擎走提示分支——
+   * **不出新题**（出了新题这道题的提示状态就断了，引擎那边分流也放在最前面）。
+   *
+   * 解锁判定在引擎，这里不自己判：置灰只是省一次往返，真正拦住跳级的是服务端。
+   * 前端把按钮点亮也拿不到未解锁那级的 content——引擎压根不下发。
+   */
+  const requestHint = useCallback(
+    async (level: number) => {
+      if (!lectureQA) return;
+      setStatus('loading');
+      const profile = readProfile(sceneTitle);
+      try {
+        const res = await fetch('/api/tutor', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            lectureText,
+            sceneTitle,
+            courseTitle,
+            lectureHistory: historyRef.current,
+            recommendedDifficulty: profile.recommendedDifficulty,
+            priorMastery: profile.priorMastery,
+            question: lectureQA.question,
+            expectedPoints: lectureQA.expectedPoints,
+            hintRequest: level,
+            hintsUsed: hintsUsedRef.current,
+          }),
+        });
+        if (res.status === 204 || !res.ok) {
+          setStatus('active');
+          return;
+        }
+        const got = (await res.json()) as HintLadder;
+        setLadder(got);
+        // 累计级别以引擎回的为准，不在前端自增——引擎驳回时 hints_used 不该涨，
+        // 前端自增会让下一次请求带着一个没真拿到的级别去解锁更深的一级。
+        hintsUsedRef.current = Math.max(hintsUsedRef.current, got.hints_used ?? 0);
+        setStatus('active');
+      } catch {
+        setStatus('active');
+      }
+    },
+    [lectureQA, lectureText, sceneTitle, courseTitle],
+  );
+
   const handleStart = useCallback(() => {
     historyRef.current = [];
     setEntries([]);
     setLectureQA(null);
     setAnswerDraft('');
     setUnavailable(null);
+    setLadder(null);
+    hintsUsedRef.current = 0;
     void requestTurn();
   }, [requestTurn]);
 
@@ -370,6 +457,59 @@ export function TutorPanel({ currentSceneId }: { currentSceneId?: string | null 
           )}
 
           {/* 自由作答，LLM 对照讲义正文判分 */}
+          {/* 提示阶梯：卡住时逐级要提示。未解锁的置灰，鼠标悬停给引擎回的 reason，
+              不自己另编一套说法——判据在引擎，界面只转述。
+              每级标出代价（用了这一级本题最高记到哪一档），让人**知情后再决定**，
+              而不是点完才发现掌握度被压了。 */}
+          {lectureQA && (status === 'active' || status === 'loading') && (
+            <div className="space-y-1">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] text-muted-foreground">卡住了？</span>
+                {HINT_LEVELS.map(({ level, label }) => {
+                  const step = ladder?.steps?.find((x) => x.level === level);
+                  // 阶梯还没取过时按「严格顺序」预判：只放行下一级。
+                  // 这只是省一次往返的乐观显示，真正的闸在引擎。
+                  const unlocked = step?.unlocked ?? level <= hintsUsedRef.current + 1;
+                  const cap = step?.verdict_cap;
+                  return (
+                    <button
+                      key={level}
+                      type="button"
+                      disabled={!unlocked || status === 'loading'}
+                      title={
+                        step?.reason ??
+                        (unlocked ? '' : `要先用完第 ${hintsUsedRef.current + 1} 级`)
+                      }
+                      onClick={() => void requestHint(level)}
+                      className="rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed transition"
+                    >
+                      {label}
+                      {cap && cap !== 'correct' ? `（记 ${cap}）` : ''}
+                    </button>
+                  );
+                })}
+              </div>
+              {ladder?.steps
+                ?.filter((x) => x.unlocked && x.content)
+                .map((x) => (
+                  <div
+                    key={x.level}
+                    className="rounded-lg border border-border/70 bg-muted/40 px-2.5 py-2 text-xs leading-relaxed"
+                  >
+                    <p className="font-medium text-foreground">
+                      {x.level}. {x.title}
+                    </p>
+                    <p className="mt-0.5 text-muted-foreground whitespace-pre-wrap">{x.content}</p>
+                  </div>
+                ))}
+              {ladder && ladder.granted_level === 0 && ladder.requested_level > 0 && (
+                <p className="px-1 text-[11px] text-muted-foreground">
+                  {ladder.because?.[0] ?? '这一级还没解锁'}
+                </p>
+              )}
+            </div>
+          )}
+
           {lectureQA && status === 'active' && (
             <div className="space-y-1.5">
               <textarea
