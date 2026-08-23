@@ -163,7 +163,7 @@ function reportAudit(
 function reportAuditUnavailable(sceneTitle: string): void {
   useWorkshopStore
     .getState()
-    .push(sceneTitle, '⚠️ 审核：审核服务未响应，本场景未经核验放行（已如实标注）', 'yellow');
+    .push(sceneTitle, '⚠️ 审核：审核服务未响应，本场景未经核验放行', 'yellow');
 }
 
 function reportFailure(sceneTitle: string, phase: string, error: string): void {
@@ -278,6 +278,23 @@ function withStoredProfile<T extends { requirements?: UserRequirements }>(params
   };
 }
 
+/** 从当前 stage 已生成场景收集 template 教具的模板 id（同课形态去重信号）。 */
+function collectUsedTemplateIds(): string[] {
+  const ids = useStageStore
+    .getState()
+    .scenes.map(
+      (s) =>
+        (s.content as { widgetConfig?: { type?: string; templateId?: string } } | undefined)
+          ?.widgetConfig,
+    )
+    .filter(
+      (w): w is { type: 'template'; templateId: string } =>
+        w?.type === 'template' && typeof w.templateId === 'string',
+    )
+    .map((w) => w.templateId);
+  return [...new Set(ids)];
+}
+
 /** Call POST /api/generate/scene-content (step 1) */
 export async function fetchSceneContent(
   params: {
@@ -295,6 +312,8 @@ export async function fetchSceneContent(
     agents?: AgentInfo[];
     languageDirective?: string;
     requirements?: UserRequirements;
+    /** 本课已生成场景里用过的教具模板 id，供服务端选模板时避免同课重形态 */
+    usedTemplateIds?: string[];
   },
   signal?: AbortSignal,
   retryOptions?: ClientRetryOptions<SceneContentResult>,
@@ -925,6 +944,8 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
           agents: params.agents,
           languageDirective: params.languageDirective,
           requirements: params.requirements,
+          // 并发预取时同批在飞的场景互相看不见，退化为无此信号的旧行为
+          usedTemplateIds: collectUsedTemplateIds(),
         });
         // slide 走讲义流式（md 增量进草稿 store，等待界面「边生成边读」）；
         // 流不合格/中断回落非流式（槽位/自由版面降级链不变）。其余类型照旧。
@@ -1305,6 +1326,7 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
             // 重试也要带：漏了的话重试出来的场景会掉回 diagram，
             // 一门课里就会出现「有的页是实操指南、重试过的那页不是」
             requirements: params.requirements,
+            usedTemplateIds: collectUsedTemplateIds(),
           },
           signal,
         );
@@ -1538,6 +1560,7 @@ export async function generateRemediationScene(params: {
       stageId: stage.id,
       stageInfo: { name: stage.name, description: stage.description, style: stage.style },
       languageDirective: stage.languageDirective,
+      usedTemplateIds: collectUsedTemplateIds(),
       ...(learnerProfile
         ? { requirements: { requirement: stage.name, learnerProfile } as UserRequirements }
         : {}),

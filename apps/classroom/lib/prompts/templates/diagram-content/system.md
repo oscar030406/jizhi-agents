@@ -130,3 +130,7 @@ So highlight/annotate/reveal can target nodes, give each node a stable id:
 ## Output
 
 Return exactly ONE complete HTML document. No markdown fences, no duplication.
+
+## Visual design system (shared across all widget types)
+
+{{snippet:widget-visual-system}}

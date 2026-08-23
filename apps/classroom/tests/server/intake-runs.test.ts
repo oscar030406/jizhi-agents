@@ -362,3 +362,23 @@ describe('事件推演', () => {
     expect(view.finale?.cleaned).toEqual(['data/knowledge_base/corpora/broken-demo']);
   });
 });
+
+describe('run_queued 排队态', () => {
+  it('run_queued 显示为排队并带原话，第一站开跑自动转回进行中', () => {
+    const queuedEvents = [
+      ev(1, 0, 'run', 'run_queued', '前面还有 2 个接入在跑，轮到会自动开始，不用重投'),
+    ];
+    const q = deriveView(OK_RECORD, queuedEvents as never);
+    expect(q.runStatus).toBe('queued');
+    expect(q.queueNote).toContain('不用重投');
+
+    const started = [...queuedEvents, ev(2, 1000, 'receive', 'stage_start', '开始接收')];
+    const r = deriveView(OK_RECORD, started as never);
+    expect(r.runStatus).toBe('running');
+    expect(r.queueNote).toBeNull();
+  });
+
+  it('非排队 run 的 queueNote 为 null', () => {
+    expect(deriveView(OK_RECORD, OK_EVENTS).queueNote).toBeNull();
+  });
+});

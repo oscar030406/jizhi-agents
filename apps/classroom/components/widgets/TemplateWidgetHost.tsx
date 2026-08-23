@@ -42,9 +42,6 @@ export default function TemplateWidgetHost({ config }: { config: TemplateWidgetC
           交互教具
         </span>
         <p className="text-sm font-medium">{config.name}</p>
-        <span className="ml-auto text-[10px] text-muted-foreground/70">
-          参数预制 · 断网可用 · 可审计
-        </span>
       </div>
       {config.guide && (
         <p className="border-b border-border bg-muted px-5 py-2.5 text-xs text-muted-foreground">

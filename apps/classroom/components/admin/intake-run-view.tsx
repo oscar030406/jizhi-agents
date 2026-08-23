@@ -516,13 +516,24 @@ export function IntakeRunView({
           </h2>
           <span
             className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-              STATUS_CLASS[
-                (view.runStatus === 'running' ? 'running' : view.runStatus) as StageStatus
-              ]
+              view.runStatus === 'queued'
+                ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200'
+                : STATUS_CLASS[
+                    (view.runStatus === 'running' ? 'running' : view.runStatus) as StageStatus
+                  ]
             }`}
           >
-            {view.runStatus === 'running' ? '进行中' : view.runStatus === 'done' ? '完成' : '失败'}
+            {view.runStatus === 'queued'
+              ? '排队中'
+              : view.runStatus === 'running'
+                ? '进行中'
+                : view.runStatus === 'done'
+                  ? '完成'
+                  : '失败'}
           </span>
+          {view.runStatus === 'queued' && view.queueNote && (
+            <span className="text-[11px] text-amber-700 dark:text-amber-300">{view.queueNote}</span>
+          )}
           <span className="text-[11px] tabular-nums text-muted-foreground">
             {record.files.length} 个文件
             {ms(view.runMs) && ` · 墙钟 ${ms(view.runMs)}`}

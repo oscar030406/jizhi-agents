@@ -44,7 +44,7 @@ export function MechanismCards() {
     <>
       <h2 className="flex items-center gap-2.5 text-[28px] font-semibold leading-snug">
         <SectionAnchor icon={ShieldCheck} />
-        我们为什么可信
+        课程内容是怎么被核验的
       </h2>
       <div className="mt-5 grid gap-4 sm:grid-cols-3">
         {MECHANISMS.map((m) => (

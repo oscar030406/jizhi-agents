@@ -26,6 +26,12 @@ export function ThumbnailInteractive({
   const containerRef = useRef<HTMLDivElement>(null);
   const [isVisible, setIsVisible] = useState(false);
 
+  // 模板教具落盘 html:''，空 srcDoc 渲染成白板——画静态占位
+  const templateName =
+    content.widgetType === 'template'
+      ? ((content.widgetConfig as { name?: string } | undefined)?.name ?? '交互教具')
+      : null;
+
   // Intersection observer for lazy loading
   useEffect(() => {
     if (!containerRef.current) return;
@@ -64,7 +70,14 @@ export function ThumbnailInteractive({
         height: `${height}px`,
       }}
     >
-      {!isVisible ? (
+      {templateName !== null ? (
+        <div className="w-full h-full flex flex-col justify-center items-center gap-1 bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400">
+          <span aria-hidden className="text-base leading-none">
+            🧩
+          </span>
+          <span className="text-xs px-2 text-center truncate max-w-full">{templateName}</span>
+        </div>
+      ) : !isVisible ? (
         // Placeholder when not visible
         <div className="w-full h-full flex justify-center items-center bg-gray-100 dark:bg-gray-800 text-gray-400 text-xs">
           Interactive

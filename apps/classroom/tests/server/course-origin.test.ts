@@ -78,3 +78,23 @@ describe('生成链把出身写进课里', () => {
     expect(src).toMatch(/没能存到服务器上/);
   });
 });
+
+describe('两条生成路都写 origin', () => {
+  it('客户端路（generation-preview）建 stage 时带 origin', async () => {
+    // P0-A 的后半截：服务端生成链早就写了，客户端这条漏了——
+    // 而首页「一句需求」走的正是客户端路，于是学习者自己造的课
+    // 在归属表里永远认不出新域。
+    const { readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const src = readFileSync(join(process.cwd(), 'app/generation-preview/page.tsx'), 'utf-8');
+    expect(src).toMatch(/origin: \{/);
+    expect(src).toContain('loadLearnerProfile');
+  });
+
+  it('服务端路（classroom-generation）也带', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const src = readFileSync(join(process.cwd(), 'lib/server/classroom-generation.ts'), 'utf-8');
+    expect(src).toMatch(/origin: \{/);
+  });
+});

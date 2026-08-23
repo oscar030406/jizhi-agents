@@ -3,6 +3,7 @@
 import { useEffect, useState, Suspense, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
+import { loadLearnerProfile } from '@/components/generation/learner-profile-popover';
 import { motion, AnimatePresence } from 'motion/react';
 import { CheckCircle2, Sparkles, AlertCircle, AlertTriangle, ArrowLeft, Bot } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -581,6 +582,17 @@ function GenerationPreviewContent() {
         updatedAt: Date.now(),
         interactiveMode: !!currentSession.requirements.interactiveMode,
         taskEngineMode: currentSession.taskEngineMode === true,
+        // 这门课出自哪个域/库，随课落盘。服务端生成链早就写了这个字段，
+        // **客户端这条路漏了**——而首页「一句需求」走的正是这条，
+        // 于是学习者自己造的课在归属表里永远认不出新域（P0-A 的后半截）。
+        ...(() => {
+          const p = loadLearnerProfile();
+          const corpus = p.corpus?.trim();
+          const domain = p.domain?.trim();
+          return corpus || domain
+            ? { origin: { ...(corpus ? { corpus } : {}), ...(domain ? { domain } : {}) } }
+            : {};
+        })(),
       };
 
       // ── Generate outlines first (infers languageDirective) ──
@@ -1096,6 +1108,22 @@ function GenerationPreviewContent() {
       );
 
       sessionStorage.removeItem('generationSession');
+
+      // 落盘前给首屏审计一个有界的等待窗。
+      //
+      // 判官结论是 `void auditPromise.then(…)` 后台跑的，而落盘紧接着就执行——
+      // 审计要十几秒（判官 + 可能的仲裁 + 修订），**落盘的那一份没有 audit 字段**，
+      // 跳走之后 `updateScene` 只改了内存，课堂页从盘上读回来首屏就是无审计的
+      // （2026-08-23 线上实锤：PLC 课屏 1 完全无审计记录，其余屏都有——
+      // 那几屏在课堂页主循环里生成，那条路 await 了审计再落盘）。
+      //
+      // **不无限等**：判官挂了不该把「课已经生成好了」一起拖住。
+      // 超时就照常落盘，审计结论留在内存里，课堂页下一次保存会带上。
+      await Promise.race([
+        auditPromise.catch(() => null),
+        new Promise((r) => setTimeout(r, AUDIT_SETTLE_MS)),
+      ]);
+
       // **落盘失败必须让人看见。** `saveToStorage()` 失败时返回 false 并只 log.error，
       // 而这里原本不看返回值直接跳课堂——课在内存里能正常看，关掉标签页就没了，
       // 界面上却一切正常（2026-08-23 查了半宿才定位到这一行）。
@@ -1593,6 +1621,9 @@ function GenerationPreviewContent() {
     </div>
   );
 }
+
+/** 落盘前等首屏审计的上限。判官正常十几秒，给 20 秒；超了照常落盘不拖住课程。 */
+const AUDIT_SETTLE_MS = 20_000;
 
 export default function GenerationPreviewPage() {
   return (

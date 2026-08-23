@@ -11,7 +11,9 @@ export type WidgetType =
   | 'game'
   | 'visualization3d'
   | 'procedural-skill'
-  // 模板池参数化教具：LLM 只选模板+填参数，组件在站内确定性渲染（不走 iframe HTML）
+  // 模板池参数化教具：LLM 选模板+填参数，站内 React 确定性渲染（不走 iframe）。
+  // 'template' 不在上游 DSL 的 WIDGET_TYPES 里——同步上游 dsl/interactive.ts 会让
+  // 存量课校验失败，tests/types/template-widget-mutex.test.ts 钉住此互斥。
   | 'template';
 
 // ==================== Simulation Widget ====================

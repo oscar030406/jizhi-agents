@@ -45,7 +45,9 @@ export interface RunView {
   stages: StageView[];
   /** 按波次分组的泳道，波次序号从 0 起。 */
   waves: Array<{ wave: number; stages: StageView[] }>;
-  runStatus: 'running' | 'done' | 'failed';
+  runStatus: 'queued' | 'running' | 'done' | 'failed';
+  /** 排队事件的原话（前面还有几个、不用重投）。非排队态为 null。 */
+  queueNote: string | null;
   /** 时间轴左右端（epoch 秒）。事件不足时两端相等，调用方按 span=0 处理。 */
   startTs: number | null;
   endTs: number | null;
@@ -104,10 +106,16 @@ export function deriveView(
   }
 
   let runStatus: RunView['runStatus'] = 'running';
+  let queueNote: string | null = null;
   let finale: IntakeEvent | null = null;
   for (const event of shown) {
     const view = views[event.stage];
     switch (event.kind) {
+      case 'run_queued':
+        // 排队与卡死在界面上长得一样就等于没做——单列状态，第一站开跑时自动转回
+        runStatus = 'queued';
+        queueNote = event.message ?? null;
+        break;
       case 'run_done':
         runStatus = 'done';
         finale = event;
@@ -117,6 +125,10 @@ export function deriveView(
         finale = event;
         break;
       case 'stage_start':
+        if (runStatus === 'queued') {
+          runStatus = 'running';
+          queueNote = null;
+        }
         if (view) {
           view.status = 'running';
           view.startTs = event.ts;
@@ -182,6 +194,7 @@ export function deriveView(
     stages,
     waves: waveIds.map((wave) => ({ wave, stages: stages.filter((s) => s.wave === wave) })),
     runStatus,
+    queueNote,
     startTs,
     endTs,
     stageMsTotal,

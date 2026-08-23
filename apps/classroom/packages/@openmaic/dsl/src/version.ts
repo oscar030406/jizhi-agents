@@ -21,8 +21,12 @@
  * store first consumes this pipeline.
  */
 
-/** Current version of the serialized slide contract. */
-export const DSL_VERSION = '0.1.0' as const;
+/**
+ * Current version of the serialized slide contract.
+ * 0.2.0 对齐上游（audioUrl 退契约的纯盖章步，转换体为空、数据不动）；
+ * 停在 0.1.0 会把上游 0.3.2+ 写出的文档当 future 版本拒收。
+ */
+export const DSL_VERSION = '0.2.0' as const;
 
 export type DslVersion = typeof DSL_VERSION;
 
@@ -43,9 +47,8 @@ export const UNVERSIONED_DSL_VERSION = '0.0.0' as const;
  * The first shipped serialized-contract version — a **pinned literal**, not the
  * moving {@link DSL_VERSION}. Migration endpoints must be immutable: they name a
  * fixed point in the ladder, so they cannot reference `DSL_VERSION` (which moves
- * every time the shape changes). It equals `DSL_VERSION` today; the two diverge
- * the moment the first real shape change bumps `DSL_VERSION` and appends a step
- * from here.
+ * every time the shape changes). The two diverged when 0.2.0 (audioUrl
+ * abolition stamp) appended a step from here.
  */
 export const INITIAL_DSL_VERSION = '0.1.0' as const;
 
@@ -142,6 +145,8 @@ export interface DslMigration {
  */
 export const DSL_MIGRATIONS: readonly DslMigration[] = [
   { from: UNVERSIONED_DSL_VERSION, to: INITIAL_DSL_VERSION, migrate: (doc) => doc },
+  // 0.2.0 = 上游 audioUrl 退契约盖章步，刻意 no-op（见 DSL_VERSION 注释）
+  { from: '0.1.0', to: '0.2.0', migrate: (doc) => doc },
 ];
 
 /**

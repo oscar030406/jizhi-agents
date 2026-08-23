@@ -661,3 +661,8 @@ Return ONLY the HTML document, no markdown fences or explanations.
 - Do NOT duplicate content
 - Do NOT include multiple `<!DOCTYPE html>` tags
 - The output must end with exactly one `</html>` tag
+
+
+## Visual design system (shared across all widget types)
+
+{{snippet:widget-visual-system}}

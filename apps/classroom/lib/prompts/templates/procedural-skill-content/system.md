@@ -352,3 +352,8 @@ Before finalizing the HTML, verify that:
 ## Language
 
 Follow the requested language directive exactly when provided.
+
+
+## Visual design system (shared across all widget types)
+
+{{snippet:widget-visual-system}}

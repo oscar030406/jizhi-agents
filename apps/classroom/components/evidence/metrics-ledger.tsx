@@ -141,7 +141,7 @@ export function MetricsLedgerSection() {
     <section id="metrics-ledger" className="mt-16 scroll-mt-20">
       <details className="group rounded-xl border border-border bg-card shadow-card dark:shadow-none">
         <summary className="flex cursor-pointer list-none items-baseline justify-between gap-3 px-5 py-4 [&::-webkit-details-marker]:hidden">
-          <span className="text-xl font-semibold">我们测出来的数</span>
+          <span className="text-xl font-semibold">实测指标台账</span>
           <span className="text-xs text-muted-foreground">
             <span className="group-open:hidden">展开台账 · 每个数带口径与复算命令</span>
             <span className="hidden group-open:inline">收起</span>

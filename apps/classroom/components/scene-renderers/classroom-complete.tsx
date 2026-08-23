@@ -614,13 +614,10 @@ function AuditBillCard({ scenes }: { readonly scenes: Scene[] }) {
           </div>
           <div className="mt-1 text-sm text-gray-600 dark:text-gray-400 leading-relaxed">
             {bill.pages} 页经审
-            {bill.revised > 0 && <>，{bill.revised} 页标记后修订放行</>}
-            {bill.uncertain > 0 && <>，{bill.uncertain} 条存疑已标注</>}
-            ，交付内容幻觉率{' '}
-            <span className="font-bold text-emerald-700 dark:text-emerald-300">
-              {bill.rate < 0.05 ? '0' : bill.rate.toFixed(1)}%
-            </span>
-            {bill.incorrect > 0 && <>（{bill.incorrect} 条未通过核验，已标红提示）</>}
+            {bill.revised > 0 && <>，{bill.revised} 页修订后放行</>}
+            {bill.uncertain > 0 && <>，{bill.uncertain} 条超出教材覆盖的表述已标注</>}
+            {bill.incorrect > 0 && <>，{bill.incorrect} 条未通过核验（课件中已标红）</>}
+            。点开每页角标可看逐条判定与教材出处。
           </div>
         </div>
       </div>

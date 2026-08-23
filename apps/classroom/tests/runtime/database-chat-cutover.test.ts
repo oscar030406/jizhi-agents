@@ -1511,7 +1511,7 @@ describe('database runtime chat integration', () => {
     ).toHaveLength(1);
 
     expect(exportedDocument).toMatchObject({
-      dslVersion: '0.1.0',
+      dslVersion: '0.2.0',
       stage: { id: stage.id, name: 'Legacy-only export' },
       scenes: [
         {
@@ -1708,7 +1708,7 @@ describe('database runtime chat integration', () => {
       {
         stage: { id: 'stage-document-backup', name: 'Aggregate backup' },
         outline: { generationComplete: true },
-        dslVersion: '0.1.0',
+        dslVersion: '0.2.0',
       },
     ]);
 
@@ -1717,7 +1717,7 @@ describe('database runtime chat integration', () => {
     await expect(documentStore.loadDocument('stage-document-backup')).resolves.toMatchObject({
       stage: { name: 'Aggregate backup' },
       outline: { generationComplete: true },
-      dslVersion: '0.1.0',
+      dslVersion: '0.2.0',
     });
   });
 

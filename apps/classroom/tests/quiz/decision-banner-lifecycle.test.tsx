@@ -225,6 +225,7 @@ describe('交卷 → 决策横幅', () => {
       await Promise.resolve();
     });
 
-    expect(el.textContent).toContain('反馈决策引擎未响应');
+    // 锁的是「决策失败不许被吞」：失败必须以学习者可读的话上屏，措辞可变、上屏不可变
+    expect(el.textContent).toContain('学情分析暂时没跟上');
   });
 });

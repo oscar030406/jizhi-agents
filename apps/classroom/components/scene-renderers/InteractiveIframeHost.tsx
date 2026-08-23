@@ -164,14 +164,40 @@ function PooledIframe({ sceneId, entry, visible }: PooledIframeProps) {
     pointerEvents: shown ? 'auto' : 'none',
   };
 
+  // 运行时错误非空时贴窄横幅；不整层接管——console.error 不等于教具全坏
+  const runtimeErrors = useSceneRuntimeErrors((s) => s.errors[sceneId]);
+  const errorBannerStyle: CSSProperties = {
+    position: 'fixed',
+    left: rect?.left ?? 0,
+    top: (rect?.top ?? 0) + (rect?.height ?? 0) - 28,
+    width: rect?.width ?? 0,
+    height: 28,
+    zIndex: 2,
+    visibility: shown ? 'visible' : 'hidden',
+    pointerEvents: 'none',
+  };
+
   return (
-    <iframe
-      ref={iframeRef}
-      srcDoc={entry.srcDoc}
-      src={entry.srcDoc ? undefined : entry.src}
-      style={style}
-      title={`Interactive Scene ${sceneId}`}
-      sandbox="allow-scripts allow-forms allow-popups"
-    />
+    <>
+      <iframe
+        ref={iframeRef}
+        srcDoc={entry.srcDoc}
+        src={entry.srcDoc ? undefined : entry.src}
+        style={style}
+        title={`Interactive Scene ${sceneId}`}
+        sandbox="allow-scripts allow-forms allow-popups"
+      />
+      {runtimeErrors && runtimeErrors.length > 0 && (
+        <div
+          style={errorBannerStyle}
+          className="flex items-center gap-2 px-3 text-xs bg-amber-50/95 text-amber-800 border-t border-amber-200 dark:bg-amber-950/90 dark:text-amber-200 dark:border-amber-800"
+        >
+          <span aria-hidden>⚠</span>
+          <span className="truncate">
+            这个教具运行时报了 {runtimeErrors.length} 个错，显示可能不完整——可换页继续学习
+          </span>
+        </div>
+      )}
+    </>
   );
 }
