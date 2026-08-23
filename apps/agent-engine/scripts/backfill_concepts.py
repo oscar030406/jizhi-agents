@@ -86,8 +86,13 @@ def main() -> int:
     tier_range = str(readiness.get("corpus_index", {}).get("tier_range") or "L1-L3")
     run = OfflineRun(corpus, sections, tier_range)
     vocab, graph, note = _extract_concepts(run)
-    if not vocab:
-        print(f"没抽到词表（{note}），readiness 不动")
+    # 词表闸三态的边界（personalize_service._vocabulary_verdict）：note 里带「未抽取」
+    # 判 skipped 不拦库，写「抽到 N 个」判 failed 直接把库挡出学习端。补站在
+    # smart-manufacturing 上实锤过一次：抽出 1 个概念落了盘，note 被覆盖成
+    # 「只抽到 1 个」，一个三指标全过、体检 passed 的库当场从学习者下拉消失。
+    # 所以不足以成表（<2）就一个字节都不写——半成品词表没有任何消费方。
+    if len(vocab) < 2:
+        print(f"词表不足以成表（{note}），readiness 不动、不留半成品")
         return 1
 
     readiness["concepts"] = vocab
