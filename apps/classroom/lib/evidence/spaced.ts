@@ -1,26 +1,28 @@
 /**
- * 类型化间隔重复调度器——DeepTutor `learning/scheduler.py` 的直移
- * （HKUDS，Apache-2.0；提炼判决见 docs/04-research/deeptutor-transplant-decision-20260821.md）。
+ * 间隔重复调度器——内核为 ts-fsrs（open-spaced-repetition 官方 TS 实现，MIT），
+ * 默认参数，取代原 DeepTutor 固定间隔序列（见文件历史与 INTERVAL_SEQUENCES 注记）。
  *
  * 与 policy.ts 的 recall 阈值是互补关系，不是重复：recall 只能回答「现在该不该复习」，
  * 这里回答「**哪天**该复习」——学习者要的是一张排期表，不只是一个红点。
  * 两个信号在消费端取或：到日期了、或者 recall 已经掉穿，都算到期。
  *
- * 与原版的两点差异（其余规则逐条同源）：
- * - 状态不落盘。DeepTutor 把 RepetitionState 存进 LearningProgress；我们守
- *   「状态不存，从履历算」（fold.ts 文件头），用 {@link replayRepetition} 对
- *   该测项的作答序列重放更新规则，随时可复算、换规则不废历史。
- * - 知识点类型我们没有教研标注，由 {@link inferKnowledgeType} 从证据形态推：
- *   有导学（概念级判定）证据的算 concept，否则算 memory（DeepTutor 调度器
- *   查不到类型时的缺省同为 MEMORY）。有真标注后换掉推断即可，规则不动。
+ * 架构原则不变：状态不落盘，用 {@link replayRepetition} 从证据账本重放推导当前
+ * 卡片状态与到期时间，随时可复算、换规则不废历史。重放必须确定：默认参数
+ * enable_fuzz=false，同一账本两次重放结果逐位相同。
+ *
+ * 评分映射：答对→Good、答错→Again。我们没有作答置信/耗时输入，Hard/Easy 无判据，不用。
  */
+
+import { createEmptyCard, fsrs, Rating, type Card } from 'ts-fsrs';
 
 import type { Evidence } from './types';
 
-/** 知识点四类型（DeepTutor KnowledgeType 直移）。 */
+/** 知识点四类型（沿自 DeepTutor KnowledgeType）。 */
 export type KnowledgeType = 'memory' | 'concept' | 'procedure' | 'design';
 
-/** 类型化间隔序列，单位天（DeepTutor INTERVAL_SEQUENCES 原值直移）。 */
+/**
+ * @deprecated 旧固定间隔序列（DeepTutor 直移），已被 FSRS 替代，仅供测试对照旧行为。
+ */
 export const INTERVAL_SEQUENCES: Record<KnowledgeType, readonly number[]> = {
   memory: [0, 1, 3, 7, 14, 30, 60],
   concept: [3, 7, 14, 30],
@@ -28,90 +30,38 @@ export const INTERVAL_SEQUENCES: Record<KnowledgeType, readonly number[]> = {
   design: [14, 28],
 };
 
-/** 复习优先级：错题置顶为 1（policy 层处理），类型内序与 DeepTutor _TYPE_PRIORITY 同。 */
-export const TYPE_PRIORITY: Record<KnowledgeType, number> = {
-  memory: 2,
-  concept: 3,
-  procedure: 4,
-  design: 5,
-};
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 export interface RepetitionState {
-  intervalIndex: number;
-  consecutiveCorrect: number;
-  consecutiveWrong: number;
   /** 下次复习时刻（ms epoch）。 */
   nextReviewAt: number;
+  /** FSRS 卡片全量状态（stability/difficulty/reps/lapses/state）。 */
+  card: Card;
 }
 
-/**
- * 一次作答后的状态更新（DeepTutor schedule_next 规则直移）：
- * 连对 2 次跳 2 档并清零，否则进 1 档；答错退 1 档、清零连对，连错 2 次清零连错。
- * 档位钳在序列边界内。
- */
-export function scheduleNext(
-  state: RepetitionState,
-  type: KnowledgeType,
-  isCorrect: boolean,
-  atMs: number,
-): RepetitionState {
-  const intervals = INTERVAL_SEQUENCES[type];
-  let { intervalIndex, consecutiveCorrect, consecutiveWrong } = state;
-  if (isCorrect) {
-    consecutiveWrong = 0;
-    consecutiveCorrect += 1;
-    if (consecutiveCorrect >= 2) {
-      intervalIndex += 2;
-      consecutiveCorrect = 0;
-    } else {
-      intervalIndex += 1;
-    }
-  } else {
-    consecutiveWrong += 1;
-    consecutiveCorrect = 0;
-    intervalIndex = Math.max(0, intervalIndex - 1);
-    if (consecutiveWrong >= 2) consecutiveWrong = 0;
-  }
-  intervalIndex = Math.max(0, Math.min(intervalIndex, intervals.length - 1));
-  return {
-    intervalIndex,
-    consecutiveCorrect,
-    consecutiveWrong,
-    nextReviewAt: atMs + intervals[intervalIndex] * DAY_MS,
-  };
-}
-
-/** 初始状态（DeepTutor get_initial_state 同源：从序列第 0 档起算）。 */
-export function initialState(type: KnowledgeType, atMs: number): RepetitionState {
-  return {
-    intervalIndex: 0,
-    consecutiveCorrect: 0,
-    consecutiveWrong: 0,
-    nextReviewAt: atMs + INTERVAL_SEQUENCES[type][0] * DAY_MS,
-  };
-}
+/** FSRS 默认参数；enable_fuzz 默认关闭，保重放确定性。 */
+const scheduler = fsrs();
 
 /**
  * 从该测项的证据序列（时间升序）重放出当前排期状态。空序列返回 null——
  * 没作答过的东西没有复习排期，那是 nextObjective 的 probe 管的事。
+ *
+ * type 参数保留接口兼容：FSRS 默认参数不按知识类型分档（个体化靠参数优化，
+ * 我们没有训练数据，先统一默认参数）。
  */
 export function replayRepetition(
   chronological: ReadonlyArray<{ atMs: number; correct: boolean }>,
-  type: KnowledgeType,
+  _type: KnowledgeType,
 ): RepetitionState | null {
   if (chronological.length === 0) return null;
-  let state = initialState(type, chronological[0].atMs);
+  let card = createEmptyCard(new Date(chronological[0].atMs));
   for (const step of chronological) {
-    state = scheduleNext(state, type, step.correct, step.atMs);
+    card = scheduler.next(card, new Date(step.atMs), step.correct ? Rating.Good : Rating.Again).card;
   }
-  return state;
+  return { nextReviewAt: card.due.getTime(), card };
 }
 
 /**
- * 类型推断（我们的适配，非 DeepTutor 原有）：有概念级导学判定的测项按 concept
- * 走长间隔，纯测验测项按 memory 走短间隔。判据是证据形态这个事实，不是猜内容。
+ * 类型推断（我们的适配，非 DeepTutor 原有）：有概念级导学判定的测项按 concept，
+ * 纯测验测项按 memory。判据是证据形态这个事实，不是猜内容。
  */
 export function inferKnowledgeType(evidences: ReadonlyArray<Evidence>): KnowledgeType {
   return evidences.some((e) => e.context.modality === 'tutor') ? 'concept' : 'memory';
