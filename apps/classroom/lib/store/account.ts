@@ -11,6 +11,17 @@
 
 import { create } from 'zustand';
 
+import { createLogger } from '@/lib/logger';
+import {
+  alreadyMerged,
+  markMerged,
+  mergeLearnerProfile,
+  mergePendingKey,
+  type ProfileFields,
+} from '@/lib/learner/merge-learner';
+
+const log = createLogger('Account');
+
 /** 与服务端 lib/accounts/store.ts 的 AccountRole 同源；两处改要一起改。 */
 export type AccountRole = 'learner' | 'manager';
 
@@ -55,6 +66,95 @@ export function adoptServerProfile(profile: unknown): void {
   } catch {
     /* 隐私模式等写不进去，不阻断 */
   }
+}
+
+/**
+ * 登录那一刻：把匿名期存在浏览器里的进度并进这个账号。**每个账号只做一次。**
+ *
+ * ## 为什么挂在这里
+ *
+ * 这是「首次带上会话 cookie」的那一下：`/api/auth` 刚发完 `Set-Cookie`，响应里带着
+ * `account` 和账号侧画像，而本地那份匿名画像还没被任何东西覆盖——再往后一步就是
+ * `window.location.reload()`，重挂载后 `refresh()` 会用服务端画像盖掉本地，
+ * 匿名进度就没了。所以合并只有这一个时机。
+ *
+ * ## 为什么只在 login、不在 register
+ *
+ * 注册那条路刻意不并。2026-08-21 的工单就是「全新注册的账号首页显示 llm_basics 0.40」——
+ * 上一个用这台浏览器的人留下的掌握度活过了注册。修法是注册时按服务端为准清空本地
+ * （`adoptServerProfile`），tests/accounts/new-account-mastery.test.tsx 钉着这个行为。
+ * 登录不一样：这个账号是谁、之前学过什么，服务端说了算，本地那份只是补充。
+ *
+ * ## 只做一次怎么保证
+ *
+ * 成功后按账号 id 写 `maic.learnerMerged@<id>` 标记（`mergeDoneKey`），下次登录直接跳过。
+ * 刷新页面本来就走不到这里——这个函数只在 `submit()` 里被调用，刷新走的是 `refresh()`。
+ * 标记是给「反复登录同一个账号」兜底的。
+ *
+ * ## 失败了会怎样
+ *
+ * 不静默。三件事一起做：本地那份**不覆盖**（它是这些进度当时唯一的落点）、
+ * 原始本地画像寄存到 `mergePendingKey` 等下次登录重试、弹窗告诉用户没并进去。
+ * 表面成功实际丢数据是这个项目最不能接受的一种失败。
+ */
+async function mergeAnonymousProgress(accountId: string, serverProfile: unknown): Promise<void> {
+  if (alreadyMerged(localStorage, accountId)) {
+    adoptServerProfile(serverProfile);
+    return;
+  }
+
+  const pendingKey = mergePendingKey(accountId);
+  let local: ProfileFields | null = null;
+  try {
+    // 上次没并成的那份优先：本地实时那份可能已经被 refresh() 用服务端画像盖过了。
+    local = JSON.parse(localStorage.getItem(pendingKey) ?? localStorage.getItem(PROFILE_KEY) ?? 'null');
+  } catch {
+    local = null; // 本地那份是坏 JSON：当作没有，退回「以服务端为准」
+  }
+
+  const { fields, adoptedConcepts, adoptedFields } = mergeLearnerProfile(
+    local,
+    (serverProfile ?? null) as ProfileFields | null,
+  );
+  if (adoptedConcepts.length === 0 && adoptedFields.length === 0) {
+    // 本地没带来任何东西，没必要为一份和服务端等价的画像发一次写请求。
+    adoptServerProfile(serverProfile);
+    try {
+      localStorage.removeItem(pendingKey);
+    } catch {
+      /* 存储不可用，标记与寄存都尽力而为 */
+    }
+    markMerged(localStorage, accountId);
+    return;
+  }
+
+  // 先上行再落本地：账号是画像的单一真源（lib/accounts/profiles.ts），
+  // 服务端没收下就不算「并进账号」了，本地写成功只会让人以为并成了。
+  const res = await postAuth({ action: 'save-profile', profile: fields }).catch(() => null);
+  if (!res?.ok) {
+    const why = res ? `服务端返回 HTTP ${res.status}` : '网络不通';
+    log.error(`匿名进度并入账号失败（${why}），本地那份已保留，下次登录重试`);
+    try {
+      if (local) localStorage.setItem(pendingKey, JSON.stringify(local));
+    } catch {
+      /* 存储不可用：寄存不了也不能再往下走成功流程 */
+    }
+    // 阻塞式提示：紧接着就是整页 reload，toast 活不到用户看见。
+    window.alert(
+      `本地进度没能并进你的账号（${why}）。\n` +
+        `这台电脑上的 ${adoptedConcepts.length} 项学习记录还留在本机，下次登录会自动重试。`,
+    );
+    return;
+  }
+
+  try {
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(fields));
+    localStorage.removeItem(pendingKey);
+  } catch {
+    /* 隐私模式等写不进去，不阻断——服务端已经收下了 */
+  }
+  markMerged(localStorage, accountId);
+  log.info(`匿名进度已并入账号：概念 ${adoptedConcepts.length} 项，字段 ${adoptedFields.length} 项`);
 }
 
 interface AccountState {
@@ -118,7 +218,13 @@ export const useAccountStore = create<AccountState>((set, get) => ({
       account?: AccountInfo;
     };
     if (!res.ok) return { ok: false, message: data.error ?? '请求失败' };
-    adoptServerProfile(data.profile);
+    // 学习者登录：先把匿名期的本地进度并进账号，再走换身份那套。
+    // 注册与管理者不并，理由见 mergeAnonymousProgress 的注释。
+    if (action === 'login' && data.account?.role === 'learner') {
+      await mergeAnonymousProgress(data.account.id, data.profile);
+    } else {
+      adoptServerProfile(data.profile);
+    }
     // 换了分区，整页重挂载；管理者直接落到管理端，别让他先看一眼学习端再自己找路
     const home = ROLE_HOME[data.account?.role ?? 'learner'];
     if (data.account?.role === 'manager') window.location.assign(home);
