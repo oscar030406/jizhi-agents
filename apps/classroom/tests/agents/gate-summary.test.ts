@@ -77,7 +77,10 @@ describe('summarizeGate', () => {
         s.publish + s.publishWithWarnings + s.blocked + s.undecided + s.unaudited,
         `${file} 分桶漏了场景`,
       ).toBe(scenes.length);
-      expect(s.sentence, `${file} 句子里的场景数与文件对不上`).toContain(`${scenes.length} 个场景`);
+      // 0 场景走上面「空课程不编数字」的措辞，不含数字
+      expect(s.sentence, `${file} 句子里的场景数与文件对不上`).toContain(
+        scenes.length === 0 ? '本课没有场景' : `${scenes.length} 个场景`,
+      );
     }
   });
 });

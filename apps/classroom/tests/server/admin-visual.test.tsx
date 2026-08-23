@@ -130,14 +130,13 @@ describe('语料库结论卡', () => {
       <DomainIntakeSummary
         intakes={[
           intake({
-            domain: 'odoo',
             gates: { retrievable: false, vocabulary: true, graph: false, itemMapping: false },
             chunks: 0,
           }),
         ]}
       />,
     );
-    expect(html).toContain('企业管理系统 Odoo');
+    expect(html).toContain('时序数据库 IoTDB');
     expect(html).toContain('语料没进检索库，暂时生成不出课');
     expect(html).toContain('1/4 道闸');
   });

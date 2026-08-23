@@ -479,7 +479,7 @@ async function readIntakePanel(corpus: string, checkups: Map<string, Checkup>): 
 }
 
 /** 上屏的三栏：主语料 + 两个跨大类的新域。顺序固定，主语料在最左当参照。 */
-export const SHOWCASE_CORPORA = ['ai', 'iotdb', 'odoo'] as const;
+export const SHOWCASE_CORPORA = ['ai', 'smart-manufacturing', 'iotdb'] as const;
 
 export async function readGeneralizationPanels(): Promise<DomainPanel[]> {
   const checkups = await readCheckups();

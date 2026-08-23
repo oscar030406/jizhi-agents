@@ -41,24 +41,16 @@ const SMALL_SAMPLE_NOTE = '小样本体检，非对外指标';
 
 /**
  * 脚注里每个未上屏语料的一句话定性。
- *
- * 原来这四个混成一句「规模不足以支撑一门课」，当场就能被推翻——课程墙上那两门课
- * 正是拿 rag-adv 和 vecdb 生成的（`data/classrooms/c3HH74qwAH.json`、`sVnMPbeeXn.json`）。
- * 所以分开写：前两个是 AI 大类内部的课程扩展语料（有课，但不跨大类），
- * 后两个才是流水线跑通时的先期小样。没登记的库走默认那句，不替它下结论。
+ * 2026-08-23 泛化域收敛后盘上不再有未上屏库，表清空但机制保留：
+ * 没登记的库走默认那句，不替它下结论。
  */
-const OTHER_CORPUS_NOTES: Record<string, string> = {
-  vecdb: 'AI 大类内部的课程扩展语料，课程墙上已有课程用它生成，不跨大类。',
-  'rag-adv': 'AI 大类内部的课程扩展语料，课程墙上已有课程用它生成，不跨大类。',
-  'pv-ops': '接入流水线跑通时建的先期小样，规模不足以支撑一门课。',
-  'cold-chain-ops': '接入流水线跑通时建的先期小样，规模不足以支撑一门课。',
-};
+const OTHER_CORPUS_NOTES: Record<string, string> = {};
 
 /** 一域一色，全页冷色三支。 */
 const TONES: Record<string, { soft: string; deep: string }> = {
   ai: { soft: 'bg-purple-soft', deep: 'text-purple-deep' },
+  'smart-manufacturing': { soft: 'bg-green-soft', deep: 'text-green-deep' },
   iotdb: { soft: 'bg-blue-soft', deep: 'text-blue-deep' },
-  odoo: { soft: 'bg-green-soft', deep: 'text-green-deep' },
 };
 
 function tone(corpus: string) {
