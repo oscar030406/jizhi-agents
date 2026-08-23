@@ -34,6 +34,7 @@ import { expandSlideTemplate, type SlideSlotSpec } from './slide-templates';
 import { mdToElements, cleanLectureMarkdown } from './md-to-elements';
 import {
   lintAdaptation,
+  scrubScaffoldHtml,
   tierFromDirective,
   buildRewriteDirective,
   checkRewriteIntegrity,
@@ -731,7 +732,33 @@ async function generateSlideBySlots(
   };
 }
 
+/**
+ * 三档降级出来的成品统一过一遍脚手架清除。
+ *
+ * 讲义路有 `runAdaptationLintLoop`，槽位路和自由版面路此前一条机械检查都没有——
+ * 线上那一屏四个「本段目标：」正是从槽位路出去的。挂在这里而不是各路各挂一次：
+ * 三条路的出口都在这儿，漏一条就等于没挂（**这个坑今天已经踩了三次**）。
+ */
 async function generateSlideContent(
+  ...args: Parameters<typeof generateSlideContentRaw>
+): Promise<GeneratedSlideContent | null> {
+  const content = await generateSlideContentRaw(...args);
+  if (!content?.elements?.length) return content;
+  const dropped: string[] = [];
+  const elements = content.elements.map((el) => {
+    if (el.type !== 'text' || typeof (el as { content?: unknown }).content !== 'string') return el;
+    const scrubbed = scrubScaffoldHtml((el as unknown as { content: string }).content);
+    if (!scrubbed.dropped.length) return el;
+    dropped.push(...scrubbed.dropped);
+    return { ...el, content: scrubbed.html };
+  });
+  if (dropped.length) {
+    log.warn(`[脚手架清除] ${args[0].title} 删掉 ${dropped.length} 段元话语：${dropped.join(' | ')}`);
+  }
+  return { ...content, elements: elements as PPTElement[] };
+}
+
+async function generateSlideContentRaw(
   outline: SceneOutline,
   aiCall: AICallFn,
   assignedImages?: PdfImage[],

@@ -27,6 +27,10 @@ import type {
   ScenePipelineMeta,
 } from '@/lib/types/generation';
 import { extractVerifiables, verifyContent } from '@/lib/generation/content-verify';
+import {
+  coherenceDirective,
+  coherenceFromOutlines,
+} from '@/lib/generation/course-coherence';
 import { createLogger } from '@/lib/logger';
 
 // 跨场景摘录去重：同一门课（stageId）里每段教材原文只整段出现一次，后续场景回指。
@@ -89,6 +93,7 @@ export async function POST(req: NextRequest) {
       languageDirective,
       requirements,
       stream,
+      usedTemplateIds: rawUsedTemplateIds,
     } = body as {
       outline: SceneOutline;
       allOutlines: SceneOutline[];
@@ -105,7 +110,13 @@ export async function POST(req: NextRequest) {
       requirements?: UserRequirements;
       /** 讲义流式分支（SSE 增量），slide 专用；不合格自动回落非流式 */
       stream?: boolean;
+      /** 本课已用过的教具模板 id（同课形态去重信号） */
+      usedTemplateIds?: unknown;
     };
+
+    const usedTemplateIds = Array.isArray(rawUsedTemplateIds)
+      ? rawUsedTemplateIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
+      : [];
 
     // Validate required fields
     if (!rawOutline) {
@@ -257,9 +268,15 @@ export async function POST(req: NextRequest) {
       effectiveOutline.concepts = sceneConcepts;
     }
     if (learnerPlan) {
+      // 逐屏路的一致性状态从 allOutlines 现算（`coherenceFromOutlines`）。
+      // 不接这一步，类比换喻体、同一数字例反复推演在这条路上照旧——
+      // 批量路治好了，逐屏路没治，同一个坑位第三次。
+      const { frame, progress } = coherenceFromOutlines(allOutlines, effectiveOutline.id);
+      progress.widgets = usedTemplateIds;
       effectiveOutline.description =
         (effectiveOutline.description ?? '') +
-        blueprintDirective(learnerPlan, requirements!.learnerProfile!);
+        blueprintDirective(learnerPlan, requirements!.learnerProfile!) +
+        coherenceDirective(frame, progress);
       const mix = learnerPlan.blueprint?.resource_mix;
       log.info(
         `Adapted "${effectiveOutline.title}" for ${learnerPlan.blueprint?.learner_type} ` +
@@ -460,6 +477,7 @@ export async function POST(req: NextRequest) {
       targetLanguage: userLocale || undefined,
       userRequirements: requirements,
       allowProceduralSkill: vocationalActive,
+      usedTemplateIds,
     });
 
     if (!content) {

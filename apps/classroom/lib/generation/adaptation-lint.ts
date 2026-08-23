@@ -674,6 +674,23 @@ function v(x: Omit<Violation, 'tier'>, tier: Tier | null): Violation {
  *
  * 词表只收**明确是元话语**的：「本段目标」是规划标签，「学习目标」是
  * 教材里常见的正经小节标题，不能一起拦。
+ *
+ * ## 词表打地鼠打不完
+ *
+ * 拦掉「本段目标」之后，同题对照课上模型换了马甲：4/5 屏开头变成
+ * 「**导读：本段通过食堂排队类比，解释什么是……**」，屏 6 还留着「**P7:**」。
+ * 词换了，行为没换——所以下面三组是**模式**不是词表：屏号编址、
+ * 行首元话语标签、句内自指。
+ *
+ * ## 三组都量过误报
+ *
+ * 1704 块主语料（`knowledge_index.jsonl`）上：屏号 0、元话语标签 0、自指 0。
+ * 量掉的一条记在这里免得有人再加回来——**「本节/本章 + 介绍/将」55 处（3.23%），
+ * 全是教材正经写法**（「本节将讨论…」「本章介绍…」）。自指只收
+ * 本段/本屏/本页/这一段/这一屏这类**屏级**词：教材不按屏组织，不会这么写。
+ * 「下面这段代码会…」也踩过一次，所以「下面这段」不收。
+ *
+ * 新规则进这里之前先跑一遍误报，零误报才许进。
  */
 const SCAFFOLD_LEAK = [
   /(?:^|\n)\s*\**\s*本段(?:目标|要点|任务|安排|重点)\s*[:：]/,
@@ -683,12 +700,38 @@ const SCAFFOLD_LEAK = [
   /(?:^|\n)\s*\**\s*(?:输出|回答)(?:格式|要求)\s*[:：]/,
 ];
 
+/** 屏号/页号编址泄漏：「P7:」「屏 3：」——内部编址不该出现在学习者眼前。 */
+const SCAFFOLD_SCREEN_NO = /(?:^|\n)\s*\**\s*(?:P|屏|页|Scene|Slide)\s*\d+\s*[:：]/;
+
+/**
+ * 行首元话语标签：「导读：」「写作思路：」这类领句。
+ *
+ * 只收**描述写作行为**的标签。「定义：」「注意：」「例：」「步骤：」是教材
+ * 正经领句，不在名单里。
+ */
+const SCAFFOLD_META_LABEL =
+  /(?:^|\n)\s*\**\s*(?:导读|引导语|概要|内容概要|段落概述|写作思路|讲解思路|教学设计|本段导读|承上启下)\s*[:：]/;
+
+/**
+ * 句内自指：屏级指代词 + 描述动词，例如「本段通过食堂排队类比，解释…」。
+ *
+ * 不限行首——换成「导读：」开头照样拦得住，这正是打地鼠打不完的那一路。
+ */
+const SCAFFOLD_SELF_REF =
+  /(?:本段|本屏|本页|这一段|这一屏)[^。；！？\n]{0,12}?(?:通过|采用|将|会|旨在|意在|试图|带你|帮助你|介绍|讲解|解释|说明|阐述|围绕|聚焦|分析|探讨)/;
+
 /** 正文里有没有规划标签。返回命中的那一行（去掉首尾空白），没有就返回 null。 */
 export function findScaffoldLeak(text: string): { line: number; quote: string } | null {
   const lines = text.split('\n');
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (SCAFFOLD_LEAK.some((re) => re.test('\n' + line))) {
+    const probe = '\n' + line;
+    if (
+      SCAFFOLD_LEAK.some((re) => re.test(probe)) ||
+      SCAFFOLD_SCREEN_NO.test(probe) ||
+      SCAFFOLD_META_LABEL.test(probe) ||
+      SCAFFOLD_SELF_REF.test(line)
+    ) {
       return { line: i + 1, quote: line.trim().slice(0, 60) };
     }
   }
@@ -1252,4 +1295,47 @@ export function formatViolations(list: Violation[]): string {
       .map((x) => `${x.ruleId}@${x.line}(${x.zone} ${x.value}/${x.threshold})`)
       .join(' ') || '无'
   );
+}
+
+/**
+ * 从 canvas 元素的 HTML 正文里清掉脚手架泄漏段。
+ *
+ * `runAdaptationLintLoop` 只挂在讲义流（markdown 形态）。槽位路与自由版面路
+ * 产出的是 `PPTElement` 的 HTML `content`，一条机械检查都没跑过——
+ * 线上那一屏四个「本段目标：」就是从这条路出去的。**同一份内容两种形态、
+ * 处理只覆盖一种**，与判官吃到字体名同一族。
+ *
+ * 这里不发模型调用：泄漏段整段都是元话语，删掉即可，改写没有信息可留。
+ *
+ * **安全阀**：删完不足原文一半、或删空了，就整个放弃并原样返回。
+ * 宁可留一句「本段目标」，也不能把一屏内容删没。
+ */
+export function scrubScaffoldHtml(html: string): { html: string; dropped: string[] } {
+  if (!html.includes('本') && !/[Pp屏页]\s*\d+\s*[:：]/.test(html) && !html.includes('导读')) {
+    return { html, dropped: [] }; // 快路径：绝大多数元素连候选词都没有
+  }
+  // 按块边界切：`</p>`、`<br>`、换行。保留分隔符，拼回去形状不变。
+  const parts = html.split(/(<\/p>|<br\s*\/?>|\n)/i);
+  const dropped: string[] = [];
+  const kept: string[] = [];
+  for (const part of parts) {
+    const plain = part
+      .replace(/<[^>]*>/g, '')
+      .replace(/&nbsp;/g, ' ')
+      .trim();
+    if (plain && findScaffoldLeak(plain)) {
+      dropped.push(plain.slice(0, 60));
+      continue; // 连同它的闭合标签一起丢；后面 kept 里剩下的标签仍成对
+    }
+    kept.push(part);
+  }
+  if (!dropped.length) return { html, dropped: [] };
+
+  const next = kept.join('');
+  const plainLen = (s: string) => s.replace(/<[^>]*>/g, '').trim().length;
+  if (plainLen(next) < plainLen(html) / 2) {
+    // 删得太多，多半是判错了或整屏都是元话语——放弃，别把屏删空
+    return { html, dropped: [] };
+  }
+  return { html: next, dropped };
 }

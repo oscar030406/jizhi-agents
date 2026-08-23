@@ -164,3 +164,44 @@ export function extractWorkedExample(title: string, keyPoints?: readonly string[
   if (nums.length < 2) return null; // 一个数字构不成「推演」
   return `${title}：${nums.slice(0, 4).join(' / ')}`;
 }
+
+/** 大纲里跟一致性有关的那几个字段，够用就行。 */
+interface OutlineLike {
+  id: string;
+  title: string;
+  keyPoints?: string[];
+}
+
+/**
+ * 从整份大纲算出这一屏该带的一致性状态。
+ *
+ * 客户端逐屏路（`fetchSceneContent`）是无状态 HTTP，服务端每次只看见一屏——
+ * 但请求里本来就带着 `allOutlines`，前面几屏做过什么从大纲就能算，
+ * 不用客户端另外累加一份传上来。
+ *
+ * 比批量路那个逐屏累加器还准一点：并发预取时同批在飞的屏互相看不见，
+ * 累加器会漏；大纲是生成前就定死的，谁在前谁在后不受并发影响。
+ *
+ * 类比取**整份大纲里第一个**认得出的，不是「当前屏之前」的——
+ * 全课统一类比得全课一个口径，第一屏和第五屏必须拿到同一个。
+ */
+export function coherenceFromOutlines(
+  allOutlines: readonly OutlineLike[],
+  currentId: string,
+): { frame: CourseFrame; progress: CourseProgress } {
+  const frame: CourseFrame = {};
+  for (const o of allOutlines) {
+    frame.analogy = extractAnalogy(o.keyPoints);
+    if (frame.analogy) break;
+  }
+  if (!frame.analogy) delete frame.analogy;
+
+  const progress = emptyProgress();
+  for (const o of allOutlines) {
+    if (o.id === currentId) break; // 只算前面的屏，当前屏自己不算「已讲过」
+    progress.concepts.push(o.title);
+    const worked = extractWorkedExample(o.title, o.keyPoints);
+    if (worked) progress.workedExamples.push(worked);
+  }
+  return { frame, progress };
+}

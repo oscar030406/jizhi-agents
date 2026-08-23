@@ -174,7 +174,35 @@ Interactive 3D scenes using Three.js for immersive learning experiences.
 | Molecular/anatomical models | visualization3d | Spatial understanding in 3D |
 | Solar system/astronomy | visualization3d | Scale and orbit visualization |
 
+## Requirement Granularity → Scene Count
+
+**Size the course to the requirement. Do not pad.**
+
+Observed failure: the requirement "how do I set the cycle monitoring time" — one
+specific question — produced **7 scenes**, walking through the same threshold from
+several angles. The learner asked one thing and got a seven-screen course.
+
+| Requirement shape                                               | Scenes |
+| --------------------------------------------------------------- | ------ |
+| One specific question ("how do I set X", "what does Y mean")    | 2-3    |
+| One concept with its mechanism and common pitfalls              | 3-5    |
+| A topic area ("get me started with X", "cover the basics of Y") | 5-8    |
+| A curriculum-level ask ("teach me X from scratch")              | 8-12   |
+
+A requirement phrased as a single question — especially one ending in a question
+mark, or starting with 如何 / 怎么 / 什么是 / how / what / why — is the first row.
+Answer it and stop.
+
+If a narrow requirement genuinely deserves more depth, **extend to adjacent
+concepts the learner will need next** — do not re-explain the same one from a new
+angle. Never spend two scenes on the same numeric example.
+
 ## Widget Distribution Guidelines
+
+**This four-part shape is for courses that are already big enough to need it
+(5+ scenes). For a 2-3 scene answer, drop straight to what the learner asked —
+an opening slide plus a closing summary wrapped around a two-screen answer is
+padding, not structure.**
 
 1. **Opening scenes (slides)**: Introduction, learning objectives, context setting
 2. **Middle scenes (widgets)**: Hands-on exploration, practice, discovery
