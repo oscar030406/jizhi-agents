@@ -237,3 +237,28 @@ def test_ui_intake_inherits_previous_declaration(kb_sandbox, monkeypatch):
         "第二趟没重复声明，被剔除的文件又回到索引里了——声明还是没有约束力"
     )
     assert any("沿用上一次接入的声明" in m for m in _receive_msgs(run)), _receive_msgs(run)
+
+
+def test_dropping_a_previously_declared_prefix_is_reported(kb_sandbox, monkeypatch):
+    """重投时少写了上次声明过的前缀，要点名报出来。
+
+    沿用是全有或全无（填了新声明就一条旧的都不继承）——这个语义本身是对的，
+    能合并就永远删不掉一条前缀了。但少掉了不吭声不行：iotdb 现有 readiness 带着
+    两条 AI-capability 前缀，重投时填 22 条新的，那两条会静默消失。
+    """
+    docs = {"keep.md": BODY, "drop.md": BODY.replace("巡检", "标定"), "other.md": BODY.replace("巡检", "并网")}
+    _receive_with(kb_sandbox, monkeypatch, docs, corpus="scope-c", exclude=["drop.md", "other.md"])
+
+    # 第二趟只声明了其中一条，另一条没再提。
+    run2 = _receive_with(
+        kb_sandbox,
+        monkeypatch,
+        {"extra.md": BODY.replace("巡检", "变频"), "other.md": docs["other.md"]},
+        corpus="scope-c",
+        append=True,
+        exclude=["drop.md"],
+    )
+    msgs = _receive_msgs(run2)
+    assert any("other.md" in m and "这次没再声明" in m for m in msgs), msgs
+    # 说到做到：没再声明的那个确实入库了，警告不是空话
+    assert _slug("other.md") in _stems(kb_sandbox, "scope-c")

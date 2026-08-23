@@ -550,6 +550,23 @@ def _stage_receive(run: IntakeRun) -> dict[str, Any]:
             _read_json(KB / f"{run.corpus}_intake" / "readiness.json")
         )
         inherited = bool(excluded)
+    # 沿用是**全有或全无**：填了新声明就一条旧的都不继承。
+    # 这个语义是对的——能合并就永远删不掉一条前缀了。但**少掉了不吭声**不行：
+    # 重投一个曾经声明过剔除的库时，人多半只是没想起旧的那几条，
+    # 不是真要把它们放回来（iotdb 现有 readiness 就带着两条 AI-capability 前缀）。
+    if excluded and not inherited:
+        before = remembered_exclusions(_read_json(KB / f"{run.corpus}_intake" / "readiness.json"))
+        dropped = [p for p in before if p not in excluded]
+        if dropped:
+            run.emit(
+                "receive",
+                "stage_warning",
+                f"上一次声明过、这次没再声明的前缀有 {len(dropped)} 条："
+                + "、".join(dropped)
+                + "。**它们这次会照常入库。** 若只是没想起来，撤掉重投时把它们一并填上。",
+                scope_dropped=dropped,
+            )
+
     manifest.accepted, scoped_out = apply_exclusions(manifest.accepted, excluded)
     run.ctx["scoped_out"] = {"prefixes": excluded, "files": scoped_out}
     if excluded:
