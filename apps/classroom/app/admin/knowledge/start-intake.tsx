@@ -145,6 +145,12 @@ export function StartIntake() {
    *  会不会碰既有库），只在表单勾一下、确认时只字不提，与当年「涉及实操
    *  不回显」同一族问题。 */
   const append = pending?.get('append') === 'true';
+  /** 剔除声明的条数。与引擎 parse_exclusions 同口径（换行或逗号分条），
+   *  只用于决定点回显——真正的解析仍归引擎一处。 */
+  const excludeCount = String(pending?.get('exclude') ?? '')
+    .split(/[\n,]/)
+    .map((s) => s.trim())
+    .filter(Boolean).length;
 
   function edit(i: number, patch: Partial<{ label: string; audience: string }>) {
     setTiers((prev) => prev.map((t, j) => (j === i ? { ...t, ...patch } : t)));
@@ -337,6 +343,23 @@ export function StartIntake() {
           )}
         </div>
 
+        {/* 疆域的「范围」半边：这个域明确不教什么。字段直通引擎的 exclude Form 字段
+            （桥不解析）。声明是库的属性——留空时引擎沿用这个库上一次声明过的那份；
+            但**一旦填了就是全量替换**，上次声明过、这次没写的前缀会被丢掉（引擎会在
+            ①站报警告点名）。所以这里明说「填就填全」。 */}
+        <label className="block text-[11px] text-muted-foreground">
+          这个域明确不教什么（选填）：一行一条路径前缀，命中的文件在收料时按声明剔除，
+          且不算就绪度缺口。整个目录写目录名，单个文件写完整相对路径。
+          留空则沿用这个库上一次接入时的声明；<strong className="font-medium">要改就写全</strong>
+          ——填了任何一条，上次声明里没重复写的就不再生效。
+          <textarea
+            name="exclude"
+            rows={4}
+            placeholder={'SQL-Manual/Keywords.md\nAI-capability'}
+            className={`${FIELD} mt-1 font-mono leading-relaxed`}
+          />
+        </label>
+
         <fieldset className="rounded-lg border border-border/70 bg-muted/30 px-3 py-3">
           <legend className="px-1 text-[11px] font-medium text-foreground">
             这批语料的学习者分几档？
@@ -498,6 +521,13 @@ export function StartIntake() {
                 第一步是把仓库取下来，这一步可能要等几分钟，也可能失败；失败了改用上传压缩包。
               </li>
             )}
+            {/* 剔除声明也要在决定点回显：填了就是全量替换上次的声明，这个差别
+                与「追加/新建」同级，不能只在表单里小字带过。 */}
+            <li className="text-muted-foreground">
+              {excludeCount > 0
+                ? `剔除声明 ${excludeCount} 条：命中的文件在收料时按声明剔除。这份声明会整体取代这个库上一次的声明。`
+                : '没填剔除声明：沿用这个库上一次接入时声明过的那份（第一次接入则没有）。'}
+            </li>
             {trial ? (
               <li className="rounded-lg border border-amber-300/70 bg-amber-50 px-3 py-2 text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-200">
                 <span className="font-medium">试跑体检开</span>
