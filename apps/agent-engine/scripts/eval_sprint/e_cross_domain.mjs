@@ -30,34 +30,57 @@
  *
  * ## 特征词是怎么挖的
  *
- * 一个词算某库的特征词，要同时满足四条：
+ * 一个词算某库的特征词，只要两条：
  *   · 在本库出现 ≥ 20 次
- *   · 在另外两库**一次都不出现**
- *   · 在本库 ≥ 5 份不同源文档里出现（挡掉某一张表刷出来的局部残渣）
- *   · 不是通用教学用词（见下）
+ *   · 在另外两库合计出现 ≤ 本库的 2%
  *
- * ### 第四条是踩了坑之后加的
+ * **就这两条。另外三条试过，全都砍了——每一条都杀了信号。**
  *
- * 一版只有前三条，拿盘上已有课程试判据（零 API，`--scan-existing`）当场翻车：
- * 命中最多的词是「大家好」——它是制造侧语料的特征词（那批是视频口播转写体，
- * 开口就是「大家好」），而主域教材是书面语，一次都没出现过。
- * 同理还有 `sql`、`语句`、`关键字`、`precision`：它们在另外两库确实是 0 次，
- * 但那反映的是**语体差异，不是领域差异**。按这种词判泄漏，每门课都在「泄漏」。
+ * ## 三条过滤是怎么被砍掉的（2026-08-24，一轮验一条）
  *
- * 第四条用盘上**已经生成的那些课**当「通用教学语体」的参照系：
- * 一个词要是在超过 10% 的已生成课程里出现过，它就是通用词，不算领域标记。
- * 「大家好」「sql」这样被滤掉了；「鱼香」「rclcpp」「datanode」留了下来。
+ * 【砍掉一 · 拿已生成的课当「通用教学语体」参照】
+ *   动机正当：`--scan-existing` 抓到命中最多的词是「大家好」——它确实是制造侧
+ *   语料的特征词（那批是视频口播转写体），但那是语体差异不是领域差异。
+ *   于是想拿盘上几十门已生成课当参照，把通用词滤掉。
+ *   **结果 `transformer`、`llm`、`ros2`、`plc` 全被当成通用词滤掉了**——
+ *   那些课本来就是讲这些主题的。**我拿靶子当了尺子。**
  *
- * 参照集偏主域（已生成的课多半是主域的），所以它对主域术语的过滤更狠——
- * 这会**降低**「别域词漏进主域课」之外方向的灵敏度，是已知的偏。
+ * 【砍掉二 · 要求「另外两库出现 0 次」】
+ *   想得更严一点。结果 `plc` 在 iotdb 语料里偶然出现 1 次就被一票否决。
+ *   一次无关的提及不该抹掉一个领域的核心词。退回 ≤2%。
  *
- * 剩下的残渣不剔除，它们对泄漏检测反而最强：书本页脚（`鱼香`/`小鱼微信`）、
- * 表格坐标（`t08`）、排版宏（`mathbf`）——「transformer」还可能在 iotdb 课里
- * 合理出现，「鱼香」不可能。
+ * 【砍掉三 · 要求横跨 ≥5 份源文档】
+ *   动机是挡掉「某一张表刷出来的」局部残渣（如 iotdb 的表格坐标 `t08`）。
+ *   两头都错：`plc` 出现 385 次却**只在 1 份源文档里**（PLC 那部分语料是
+ *   一整本扫描教材、就一个文件），整个 PLC 领域被灭；而 `t08` 横跨 33 份文档，
+ *   **本来就挡不住**。既没起作用，又杀了信号。
  *
- * 仍有少数会误报（实测残余：`语句`、`关键字`、`precision`）。
+ * ## 抓住这三条靠的是阳性对照，不是读代码
+ *
+ * 判据只输出「别域命中」时，一个坏掉的判据看起来永远像好消息——全是 0。
+ * 拿三门**域特定需求**的课（P4 走读产物）去验「本域命中应当明显非 0」，
+ * SM 那门是 0，判据当场露馅。**只会输出 0 的指标必须先证明它测得出非 0。**
+ *
+ * 修好之后的阳性对照：SM 高速计数器本域 14（`plc`×5、`i0.0`×4、`s7-1200`×1）、
+ * iotdb 权限本域 12、ai RAG 本域 107（`rag`×83），别域全是 1–2 次语体误报。
+ *
+ * ## 本域命中是别域命中的分母，两个一起看
+ *
+ * 一门完全没有领域内容的通用课，别域命中天然是 0——**那和「干净地隔离」
+ * 是同一个数字、相反的意思**。实测：中性需求生成的两门课别域命中 3 和 6，
+ * 看着像有点串味；本域命中是 0 和 1，才知道课里压根没有领域内容。
+ *
+ * ## 一条与结论有关的语料事实：三个库不互斥
+ *
+ * 主语料 44% 是具身智能内容（752/1704 块，含 `embodied_ros2` 190 块）。
+ * `ros2` 在 ai 86 块 / sm 373 块；`机械臂` 在 ai 有 94 块，**比 sm 的 52 块还多**。
+ * 真正互斥的是 `PLC`（ai 0 / sm 174）与 `gazebo`（ai 0 / sm 109）。
+ * 所以「跨大类泛化」这个说法，**ai↔SM 那一对是有重叠的**，iotdb 才是干净的跨大类。
+ *
+ * 剩下的残渣（书本页脚 `鱼香`、表格坐标 `t08`、排版宏 `mathbf`）不剔除——
+ * 它们对泄漏检测反而最强：`transformer` 还可能在 iotdb 课里合理出现，「鱼香」不可能。
+ * 仍有少数会误报（`语句`、`关键字`、`precision`、`大家好`）。
  * **所以报告里命中词一律原样列出**，只报一个总数是不负责任的。
- * 这一条是**辅助判据**，主判据是判官盲猜领域。
  *
  * 跑法（cwd 必须是 apps/classroom）：
  *   node --import tsx ../agent-engine/scripts/eval_sprint/e_cross_domain.mjs --terms-only
@@ -206,19 +229,38 @@ export function mineSignatureTerms(corpora, { registerRef = null } = {}) {
     const terms = new Set();
     for (const [t, n] of mine) {
       if (n < 20) continue;
-      if ((docs.get(corpus).get(t)?.size ?? 0) < 5) continue;
       let elsewhere = 0;
       for (const other of corpora) {
         if (other !== corpus) elsewhere += freq.get(other).get(t) ?? 0;
       }
-      if (elsewhere > 0) continue; // 真正的领域标记应当在别的库一次都不出现
-      if ((ref.counts.get(t) ?? 0) > ref.max) continue; // 通用教学用词，不是领域标记
+      // 只留这两条。**另外三条试过，全都杀了信号**——见文件头「三条过滤是怎么被砍掉的」。
+      if (elsewhere > Math.max(1, n * 0.02)) continue;
       terms.add(t);
     }
     const sample = [...terms].sort((a, b) => (mine.get(b) ?? 0) - (mine.get(a) ?? 0)).slice(0, 15);
     out[corpus] = { terms, sample, chunks: chunkCount.get(corpus) };
   }
   return out;
+}
+
+/**
+ * 一门课的正文里，命中了多少**本库**的特征词。
+ *
+ * **这是别域命中的分母，缺了它整条判据会给出相反的结论。**
+ * 一门完全没有领域内容的通用课，别域命中天然是 0——那和「干净地隔离」
+ * 是同一个数字、相反的意思。实测：中性需求生成的两门课别域命中 3 和 6，
+ * 看着像有点串味；一看本域命中是 0 和 1，才知道课里压根没有领域内容。
+ */
+export function ownHits(body, ownCorpus, sig) {
+  const counts = new Map();
+  for (const raw of body.match(TOKEN) ?? []) {
+    const t = norm(raw);
+    if (sig[ownCorpus]?.terms.has(t)) counts.set(t, (counts.get(t) ?? 0) + 1);
+  }
+  const rows = [...counts.entries()]
+    .map(([term, n]) => ({ term, n }))
+    .sort((a, b) => b.n - a.n);
+  return { rows, distinct: rows.length, total: rows.reduce((s, r) => s + r.n, 0) };
 }
 
 /** 一门课的正文里，命中了哪些**别的库**的特征词。 */
@@ -370,6 +412,7 @@ async function main() {
       const body = course ? courseBody(course, { maxChars: 40000 }) : '';
       const readings = course ? allReadings(course, null) : null;
       const leak = course ? foreignHits(body, corpus, sig) : null;
+      const own = course ? ownHits(body, corpus, sig) : null;
       rows.push({
         script: 'e_cross_domain',
         corpus,
@@ -378,8 +421,17 @@ async function main() {
         dry: DRY,
         readings,
         leak,
+        own,
         body,
       });
+      if (own) {
+        console.log(
+          `  本域特征词命中 ${own.total} 次 / ${own.distinct} 个不同词` +
+            (own.rows.length
+              ? `｜${own.rows.slice(0, 6).map((r) => `${r.term}×${r.n}`).join(' ')}`
+              : '（一个都没有——这门课没有领域内容，下面那个别域数因此读不出意义）'),
+        );
+      }
       if (leak) {
         console.log(
           `  别域特征词命中 ${leak.total} 次 / ${leak.distinct} 个不同词` +
@@ -480,12 +532,14 @@ function reportMd(rows, sig, budget, stopped, floor) {
     Object.entries(sig)
       .map(([c, s]) => `| ${c} | ${s.chunks} | ${s.terms.size} | ${s.sample.slice(0, 10).join('、')} |`)
       .join('\n') +
-    '\n\n| 课出自 | 别域命中次数 | 不同词数 | 命中了什么 |\n|---|---:|---:|---|\n' +
+    '\n\n**本域命中是别域命中的分母，两列必须一起读**——一门没有领域内容的通用课，别域命中天然是 0，那和「隔离干净」是同一个数字、相反的意思。\n\n' +
+    '| 课出自 | 本域命中 | 别域命中 | 本域词 | 别域词 |\n|---|---:|---:|---|---|\n' +
     rows
       .map(
         (r) =>
-          `| ${r.corpus} | ${r.leak?.total ?? '—'} | ${r.leak?.distinct ?? '—'} | ` +
-          `${(r.leak?.rows ?? []).slice(0, 10).map((x) => `${x.term}(${x.from}×${x.n})`).join(' ') || '—'} |`,
+          `| ${r.corpus} | **${r.own?.total ?? '—'}** | ${r.leak?.total ?? '—'} | ` +
+          `${(r.own?.rows ?? []).slice(0, 6).map((x) => `${x.term}×${x.n}`).join(' ') || '（无）'} | ` +
+          `${(r.leak?.rows ?? []).slice(0, 6).map((x) => `${x.term}(${x.from}×${x.n})`).join(' ') || '（无）'} |`,
       )
       .join('\n') +
     (floor
