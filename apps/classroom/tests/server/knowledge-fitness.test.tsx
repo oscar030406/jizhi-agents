@@ -44,14 +44,30 @@ describe('语料适配性', () => {
   });
 
   it('块数不够铺一门课的库标红，且理由带得出具体数', async () => {
-    const row = await readCorpus('cold-chain-ops');
-    if (!row?.fitness) {
-      console.warn('跳过：本机没有这个库的适配性报告');
+    // 不写死库名。原来钉的是 cold-chain-ops，2026-08-23 那批垃圾域被清掉之后
+    // 这条直接红了——**测试挂在一个会被删的库上，测的就不再是判据本身**。
+    // 改成从报告里现找一个标红的库：库来来去去，「标红要带得出具体数」这条判据不变。
+    const file = await report();
+    if (!file) {
+      console.warn('跳过：本机没有 fitness.json');
       return;
     }
-    expect(row.chunks).toBeLessThan(60);
-    expect(row.fitness.light).toBe('red');
-    expect(row.fitness.why.join('')).toContain(String(row.chunks));
+    const redName = Object.entries(file.corpora).find(([, v]) => v.light === 'red')?.[0];
+    if (!redName) {
+      console.warn('跳过：本机没有标红的库');
+      return;
+    }
+    const row = await readCorpus(redName);
+    // 库删了报告还留着旧条目——`fitness` 仍在但 `chunks` 已经是 null。
+    // 只判 fitness 在不在会拿一份陈报告去比一个不存在的块数，所以两样都要求。
+    if (!row?.fitness || typeof row.chunks !== 'number') {
+      console.warn(`跳过：${redName} 的库已不在盘上（报告里还留着旧条目）`);
+      return;
+    }
+    expect(row.fitness.light, redName).toBe('red');
+    expect(row.fitness.why.join(''), `${redName} 的标红理由要带出块数`).toContain(
+      String(row.chunks),
+    );
   });
 
   it('没跑过这道闸的库为 null，卡上不出这一格——不拿占位数顶', async () => {

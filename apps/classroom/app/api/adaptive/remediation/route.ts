@@ -22,7 +22,15 @@ import { NextRequest } from 'next/server';
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { fetchEvidence } from '@/lib/generation/evidence-grounding';
+import type { LearnerBlueprint } from '@/lib/generation/learner-profile';
 import { corpusOf, fetchLearnerBlueprint } from '@/lib/generation/learner-profile';
+import {
+  parseTier,
+  pickTier,
+  quizDifficultyOf,
+  TIERS,
+  type DifficultyTier,
+} from '@/lib/quiz/item-selection';
 import type { LearnerProfileFields, SceneOutline } from '@/lib/types/generation';
 
 const log = createLogger('Remediation');
@@ -78,6 +86,70 @@ const PLANS: Record<
     quizConfig: { questionCount: 1, difficulty: 'hard', questionTypes: ['text'] },
   },
 };
+
+/**
+ * 按学习者当前水平选补救测验的难度档。
+ *
+ * 原来 `PLANS` 把难度写死成 `add_practice→easy`、`advance_challenge→hard`——
+ * 对一个已经很强的人，「再练一遍」出 easy 是浪费；对一个刚被判定要降维讲解的人，
+ * 「进阶挑战」出 hard 是把他按在墙上。档位该跟着人走。
+ *
+ * ## 为什么不是直接用 MFI 的结果覆盖
+ *
+ * `pickTier` 给的是「现在考他、信息量最大的那一档」，那是**测量**的最优。
+ * 但补救有教学意图：`add_practice` 的 brief 自己写着「难度略低于刚才那套」，
+ * `advance_challenge` 写着「进阶」。直接用 MFI 覆盖会跟这两句话打架。
+ *
+ * 所以口径是**锚点 + 相对位移**：MFI 定锚（这个人现在在哪一档），
+ * 决策定方向（再练降一档、进阶升一档）。两个信号各管各的，谁也不吃掉谁。
+ *
+ * ## 不编默认值
+ *
+ * 一条掌握度都没有时**返回 null**，调用方保留 `PLANS` 里那个写死的档。
+ * 没有数据就承认没有，不拿 0.5 当「中等水平」——那是编的。
+ */
+function adaptiveDifficulty(
+  decision: RemediationDecision,
+  profile: LearnerProfileFields | undefined,
+  blueprint: LearnerBlueprint | null,
+): { difficulty: 'easy' | 'medium' | 'hard'; because: string } | null {
+  // 两个来源都是真数据，优先画像自己那份——它直接来自这个人的作答履历
+  // （`deriveProfileFields` 从证据账本折出来的），比引擎诊断更贴近当下。
+  const fromProfile = Object.values(profile?.conceptMastery ?? {});
+  const fromEngine = Object.values(blueprint?.mastery_vector ?? {});
+  const source = fromProfile.length ? 'profile' : 'engine';
+  const values = (fromProfile.length ? fromProfile : fromEngine).filter(
+    (v): v is number => typeof v === 'number' && Number.isFinite(v),
+  );
+  if (values.length === 0) return null;
+
+  // 取整体均值，不按本屏主题取。`conceptMastery` 的键是概念名，跨域同名会撞、
+  // 与这一屏的主题也对不上——学情报告的下一步面板里记着同一件事，
+  // 拿它当主题级判据会静默算出一份看着合理的错结论。当「这个人大概什么水平」用，
+  // 这一层它站得住。
+  const mastery = values.reduce((a, b) => a + b, 0) / values.length;
+
+  // 画像给的难度带是硬边界：带外的档不该被选中，哪怕它信息量更高。
+  const band = (blueprint?.blueprint?.resource_mix?.quiz_difficulty_band ?? [])
+    .map((raw) => parseTier(raw))
+    .filter((t): t is DifficultyTier => t !== null);
+
+  const anchor = pickTier(mastery, { allowed: band });
+  const shift = decision === 'add_practice' ? -1 : decision === 'advance_challenge' ? 1 : 0;
+  const pool = band.length ? TIERS.filter((t) => band.includes(t)) : TIERS;
+  const at = pool.indexOf(anchor.tier);
+  // 位移后落在带内；带只有一档时位移无处可去，就停在锚点——
+  // 那是画像自己定的边界，不许越过去。
+  const shifted = pool[Math.min(pool.length - 1, Math.max(0, at + shift))] ?? anchor.tier;
+
+  return {
+    difficulty: quizDifficultyOf(shifted),
+    because:
+      `掌握度均值 ${mastery.toFixed(2)}（${values.length} 个概念，来源 ${source}）→ ` +
+      `信息量最大档 ${anchor.tier}，按「${decision}」位移 ${shift > 0 ? '+1' : shift < 0 ? '-1' : '0'} → ${shifted}` +
+      (band.length ? `，画像难度带 ${band.join('/')}` : '，画像未给难度带'),
+  };
+}
 
 /**
  * 测验场景标题里的通用套话。23 门课的测验场景标题实测（`data/classrooms/*.json`）：
@@ -177,6 +249,15 @@ export async function POST(req: NextRequest) {
 
     const focus = pickFocus(sceneTitle, courseTitle);
 
+    // 难度档跟着人走，不再写死。拿不到掌握度就返回 null，保留 PLANS 里那个档——
+    // 没有数据就承认没有，不编一个「中等水平」出来。
+    const adaptive = plan.quizConfig
+      ? adaptiveDifficulty(body.decision as RemediationDecision, body.learnerProfile, blueprint)
+      : null;
+    const quizConfig = plan.quizConfig
+      ? { ...plan.quizConfig, ...(adaptive ? { difficulty: adaptive.difficulty } : {}) }
+      : undefined;
+
     const outline: SceneOutline = {
       id: `remediation_${body.decision}_${Date.now()}`,
       type: plan.type,
@@ -184,17 +265,25 @@ export async function POST(req: NextRequest) {
       description,
       keyPoints: plan.keyPoints(focus),
       order: typeof body.order === 'number' && body.order > 0 ? body.order : 1,
-      ...(plan.quizConfig ? { quizConfig: plan.quizConfig } : {}),
+      ...(quizConfig ? { quizConfig } : {}),
     };
 
     log.info(
-      `Planned ${body.decision} for "${sceneTitle}" → focus "${focus}" — evidence=${evidence?.chunks.length ?? 0} weak=[${weakConcepts.join(',')}]`,
+      `Planned ${body.decision} for "${sceneTitle}" → focus "${focus}" — evidence=${evidence?.chunks.length ?? 0} weak=[${weakConcepts.join(',')}]` +
+        (adaptive
+          ? ` 难度自适应：${adaptive.because}`
+          : plan.quizConfig
+            ? ` 难度沿用预设 ${plan.quizConfig.difficulty}（掌握度一条都没有，不推断）`
+            : ''),
     );
 
     return apiSuccess({
       outline,
       evidenceCount: evidence?.chunks.length ?? 0,
       weakConcepts,
+      // 难度是怎么定的，随响应返回——界面上要说得出「为什么给你出这一档」，
+      // 而不是让人对着一个档位猜。没有掌握度时这一格为 null，同样是可对质的答案。
+      difficultyBecause: adaptive?.because ?? null,
     });
   } catch (error) {
     log.error('Remediation planning failed:', error);

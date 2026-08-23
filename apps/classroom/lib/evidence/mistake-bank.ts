@@ -30,6 +30,28 @@ export interface MistakeEntry {
    * 可选：老记录没有此字段，读取端把 undefined 当「不过滤时可见、按域过滤时归旧域桶」。
    */
   domain?: string;
+  /**
+   * 交卷时这一屏测验的难度档（`SceneOutline.quizConfig.difficulty`，easy/medium/hard）。
+   *
+   * 错题重练按 Fisher 信息量排序（`lib/quiz/item-selection.ts` 的 `rankRepractice`），
+   * 而信息量要的是**逐题难度**。这个字段是错题本里唯一能提供 b 的东西——
+   * 不存它，全池同 b，排序就退化成只按题型分，几乎没有区分度。
+   *
+   * 口径要说清：它是**屏级**的，同一场测验的错题共用一个值，所以它区分不了
+   * 同屏内的难易。真正的逐题难度要出题时写进 `QuizQuestion`，那是另一张单。
+   *
+   * 可选：老记录没有此字段，读取端按 `DEFAULT_TIER` 处理。
+   */
+  tier?: string;
+  /**
+   * 题型与选项数。信息量里的猜对率 c 由它们决定（短答 c=0 最高、四选一 0.25 最低）。
+   *
+   * 与 `tier` 一起存是有必要的：`tier` 是屏级的、同屏内恒等，
+   * **同屏错题之间的排序全靠这两格**。不存的话读取端连题型都不知道，
+   * `rankRepractice` 在同一屏的错题上会退化成按 id 排序。
+   */
+  questionType?: string;
+  optionCount?: number;
 }
 
 const KEY = 'mistakeBank';

@@ -1072,6 +1072,16 @@ export function QuizView({
             const { appendMistakes } = await import('@/lib/evidence/mistake-bank');
             const at = new Date().toISOString();
             const byId = new Map(questions.map((q) => [q.id, q]));
+            // 这一屏测验的难度档。错题重练要按 Fisher 信息量排，而信息量要 b——
+            // 错题本里唯一能提供 b 的就是它。走 outlineId 认场景对应的大纲：
+            // **不按 order 认**，Pro 模式的插入/重排会让 order 指向另一屏
+            // （AppScene.outlineId 的注释里记着这件事）。
+            // 认不到就不写这一格，读取端按缺省档处理——不编一个默认难度。
+            const stageState = useStageStore.getState();
+            const outlineId = stageState.scenes.find((s) => s.id === sceneId)?.outlineId;
+            const tier = outlineId
+              ? stageState.outlines.find((o) => o.id === outlineId)?.quizConfig?.difficulty
+              : undefined;
             appendMistakes(
               ordered
                 .filter((r) => r.status !== 'correct')
@@ -1092,6 +1102,11 @@ export function QuizView({
                       userAnswer: Array.isArray(ua) ? ua.join('、') : (ua ?? ''),
                       correctAnswer: (q.answer ?? []).join('、'),
                       answered: r.answered ?? Boolean(Array.isArray(ua) ? ua.length : ua),
+                      // 重练排序要的三格：难度档给 b，题型与选项数给猜对率 c。
+                      // tier 是屏级的（同屏错题恒等），所以同屏内的排序全靠后两格。
+                      ...(tier ? { tier } : {}),
+                      ...(q.type ? { questionType: q.type } : {}),
+                      ...(q.options?.length ? { optionCount: q.options.length } : {}),
                     },
                   ];
                 }),

@@ -15,7 +15,7 @@
  * difficulty for non-quiz scenes) is labelled 估计 everywhere it appears.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import NumberFlow, { type Format } from '@number-flow/react';
 import {
@@ -50,6 +50,7 @@ import { history, readLedger } from '@/lib/evidence/ledger';
 import { measuredKey, type Evidence } from '@/lib/evidence/types';
 import { inferKnowledgeType, qualitativePassed, replayRepetition } from '@/lib/evidence/spaced';
 import { readMistakes, type MistakeEntry } from '@/lib/evidence/mistake-bank';
+import { parseTier, rankRepractice } from '@/lib/quiz/item-selection';
 import { learnerDomain } from '@/lib/evidence/profile-bridge';
 import { belongsToDomain } from '@/lib/knowledge/use-course-domains';
 import { LEGACY_DOMAIN } from '@/lib/evidence/types';
@@ -680,7 +681,7 @@ function ReviewNextBlock({ profile }: { profile: LearnerProfileFields | null }) 
  * 正确答案的本机回放。解析在作答界面不展示（防泄答案），错后到这里才看得到——
  * 这正是它进错题本的价值。空答与答错分开标（补救方向不同）。
  */
-function MistakeBankBlock() {
+function MistakeBankBlock({ profile }: { profile: LearnerProfileFields | null }) {
   const [mistakes, setMistakes] = useState<MistakeEntry[]>([]);
   useEffect(() => {
     // 按当前画像域过滤（联动清单 C2：换库后两个知识库的错题不许混排）。
@@ -688,6 +689,50 @@ function MistakeBankBlock() {
     const current = learnerDomain() ?? LEGACY_DOMAIN;
     setMistakes(readMistakes().filter((m) => (m.domain ?? LEGACY_DOMAIN) === current));
   }, []);
+
+  /**
+   * 重练顺序：先答错的、后空答的，同类内按 Fisher 信息量降序
+   * （`lib/quiz/item-selection.ts` 的 `rankRepractice`）。
+   *
+   * 原来是按时间倒序平铺——那回答的是「最近错了什么」，而这一块要回答的是
+   * 「现在先重练哪一道」。两者不是一回事：最近错的那道可能是个手滑，
+   * 而三天前那道正卡在他能力边上。
+   *
+   * 空答排在答错之后不是 MFI 带来的，是既有判据（`lib/quiz/grading.ts`）：
+   * 空答是「不知道」该降档重讲，答了但错是「会用错」才该加练订正。
+   *
+   * 能力用画像的 `conceptMastery` **整体均值**，不按题目主题取。
+   * 理由是键空间不可靠——这张表的键是概念名，跨域同名会撞、与错题的主题也对不上
+   * （学情报告的下一步面板里记着同一件事：不要拿它当主题级判据用）。
+   * 取均值是把它当「这个人现在大概什么水平」用，这一层它站得住。
+   * 一条数据都没有时不编——`hasMastery` 为假就退回原来的时间序。
+   */
+  const masteryValues = Object.values(profile?.conceptMastery ?? {}).filter(
+    (v): v is number => typeof v === 'number' && Number.isFinite(v),
+  );
+  const hasMastery = masteryValues.length > 0;
+  const ordered = useMemo(() => {
+    if (!hasMastery) return mistakes;
+    const mean = masteryValues.reduce((a, b) => a + b, 0) / masteryValues.length;
+    const rank = new Map(
+      rankRepractice(
+        mistakes.map((m, i) => ({
+          // 用下标当 id：错题本里 questionId 会跨屏重名（不同课的 q1）。
+          id: String(i),
+          ...(parseTier(m.tier) ? { tier: parseTier(m.tier)! } : {}),
+          ...(m.questionType ? { type: m.questionType } : {}),
+          ...(m.optionCount ? { options: m.optionCount } : {}),
+          answered: m.answered,
+        })),
+        mean,
+      ).map((pick, order) => [pick.id, order] as const),
+    );
+    return [...mistakes]
+      .map((m, i) => ({ m, order: rank.get(String(i)) ?? Number.MAX_SAFE_INTEGER }))
+      .sort((x, y) => x.order - y.order)
+      .map((x) => x.m);
+  }, [mistakes, hasMastery, masteryValues]);
+
   if (mistakes.length === 0) return null;
   return (
     <div className="space-y-2 rounded-md border border-border/70 p-2.5">
@@ -695,9 +740,12 @@ function MistakeBankBlock() {
         <span className="font-medium text-foreground">错题本（{mistakes.length} 条）：</span>
         最近答错的题与解析。空答标「未作答」——那是「还不会」，建议先回讲解；
         答了但错建议直接订正重做。
+        {hasMastery
+          ? '排序按现在最值得重练的先后，不按时间。'
+          : '还没有足够的掌握度数据，暂按时间倒序。'}
       </p>
       <div className="space-y-1.5">
-        {mistakes.slice(0, 6).map((m) => (
+        {ordered.slice(0, 6).map((m) => (
           <details key={`${m.at}-${m.questionId}`} className="group text-xs">
             <summary className="flex cursor-pointer list-none items-center gap-2">
               <span className="truncate text-foreground/90">{m.prompt}</span>
@@ -1935,7 +1983,7 @@ export default function ReportPage() {
               {/* 实测掌握度不依赖引擎在线——测验数据在本机 localStorage */}
               <QuizMasteryBlock profile={profile} />
               <ReviewNextBlock profile={profile} />
-              <MistakeBankBlock />
+              <MistakeBankBlock profile={profile} />
             </div>
           </SectionCard>
 
