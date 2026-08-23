@@ -40,7 +40,7 @@ function slideScene(id: string, audit?: Partial<NonNullable<Scene['audit']>>): S
 }
 
 describe('审核账单卡', () => {
-  test('聚合各场景 audit：断言总数/修订页/幻觉率如实呈现', async () => {
+  test('聚合各场景 audit：断言总数/修订页/核验结果如实呈现', async () => {
     const scenes = [
       slideScene('1', { totalClaims: 7 }),
       slideScene('2', { totalClaims: 8, verdict: 'revised', flaggedCount: 2 }),
@@ -59,10 +59,8 @@ describe('审核账单卡', () => {
     const text = host.textContent ?? '';
     expect(text).toContain('审核智能体已核验 20 条事实断言');
     expect(text).toContain('3 页经审');
-    expect(text).toContain('1 页标记后修订放行');
-    expect(text).toContain('1 条存疑已标注');
-    // 1/20 = 5.0%
-    expect(text).toContain('5.0%');
+    expect(text).toContain('1 页修订后放行');
+    expect(text).toContain('1 条超出教材覆盖的表述已标注');
     expect(text).toContain('1 条未通过核验');
   });
 

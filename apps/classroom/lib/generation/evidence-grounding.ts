@@ -392,6 +392,22 @@ export interface ExcerptStats {
  *   ③ 真替换。
  * 三趟的遍历顺序完全一致，所以占位符序号能对齐分数矩阵的行号。
  */
+/**
+ * 摘录没贴成时留在正文里的短说明。
+ *
+ * **不是装饰，是诚实性的一部分。** 六条丢弃分支原本一律 `return ''`：
+ * 统计里记了原因，页面上一个字都没有，而提示词强制写的导语
+ * （「教材对此的原文表述是：」）还留着——线上实锤是屏 1 正文写着
+ * 「根据上述规则」而页面上根本没有规则，指代悬空。
+ *
+ * 之前用「摘录占位符残留数 = 0」验证这条链，被骗了：0 是因为剥除不是替换。
+ *
+ * 留一句带 id 的说明，学习者至少知道这里本该有引用、可以去查那个出处。
+ */
+function excerptGap(sid: string, why: string): string {
+  return `（这里本应引用教材 [${sid}]，${why}）`;
+}
+
 export async function injectExcerpts(
   content: unknown,
   bundle: EvidenceBundle,
@@ -509,7 +525,7 @@ function injectOnce(
       if (!chunk) {
         stats.unknown += 1;
         drops += 1;
-        return '';
+        return excerptGap(sid, '这一条在本次检索的证据里没找到');
       }
       // 第五道缰绳：与讲义前文不咬合就先换候选，换不到才丢。
       // 打分器没给这一条打分（桥失联 / 索引里没这块）一律放行——不打分不等于不咬合。
@@ -532,7 +548,7 @@ function injectOnce(
           if (!dry) {
             log.info(`[irrelevant] ${sid} 咬合 ${own.toFixed(3)} < ${relevance.threshold}，${pick.reason}`);
           }
-          return '';
+          return excerptGap(sid, '但那段原文与这里讲的不咬合，贴上去反而误导');
         }
       }
       if (usedIds?.has(sid) && sid !== exempt) {
@@ -543,12 +559,12 @@ function injectOnce(
       if (stats.injected >= MAX_PER_SCENE) {
         stats.capped += 1;
         drops += 1;
-        return '';
+        return excerptGap(sid, '这一屏引用已达上限，完整原文见该出处');
       }
       if (!selfContained(chunk.content)) {
         stats.rejected += 1;
         drops += 1;
-        return '';
+        return excerptGap(sid, '那段原文脱离上下文读不通，没有直接贴出');
       }
       // 第四道缰绳（摘录相关性审计：46% 的引文贴主题不咬论点）：提示词已强制
       // 「占位符前一句必须点明引用意图」，这里机械验收。
@@ -567,7 +583,7 @@ function injectOnce(
           stats.noLead += 1;
           drops += 1;
           if (!dry) log.info(`[noLead] 前一句「${lastLine.slice(-60)}」`);
-          return '';
+          return excerptGap(sid, '此处没有交代引用意图，原文未直接贴出');
         }
       }
       stats.injected += 1;

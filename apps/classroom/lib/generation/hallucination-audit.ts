@@ -180,7 +180,9 @@ function ruleOnClaims(
   if (auditFailed) {
     return {
       decision: 'publish_with_warnings',
-      rationale: '审核服务未能完成核验，本场景未经事实校验即放行，已如实标注。',
+      // 「已如实标注」是自夸尾巴：如实是底线不是功绩，说出来反而显得
+      // 「我们本可以不如实」。事实本身讲完就够。
+      rationale: '审核服务未能完成核验，这一页没有经过事实校验。',
     };
   }
   const total = claims.length;
@@ -244,6 +246,22 @@ export type AiCall = (system: string, user: string) => Promise<string>;
 
 const MAX_CONTENT_CHARS = 9000;
 
+//: 管道字段，不是教学内容。判官看见它们只会被噪声干扰。
+//:
+//: `fontName` 这条是线上实锤：canvas 槽位形态的待审文本第一行是
+//: `Microsoft YaHei`——判官第一眼看见的是字体名。那屏最终抽出 0 条断言。
+const PLUMBING_KEYS = new Set([
+  'src',
+  'audioId',
+  'fontName',
+  'fontFamily',
+  'fontColor',
+  'backgroundColor',
+  'themeColor',
+  'id',
+  'schemaVersion',
+]);
+
 /** Collect human-visible teaching text from an arbitrary scene-content JSON. */
 /**
  * 教具 HTML → 可审的教学文本。
@@ -290,7 +308,14 @@ export function extractTeachingText(content: unknown): string {
       return;
     }
     for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
-      if (key === 'src' || key === 'audioId') continue;
+      if (PLUMBING_KEYS.has(key)) continue;
+      if (key === 'content' && typeof value === 'string' && value.includes('<')) {
+        // canvas 槽位形态里，元素的 `content` 就是讲义流转出来的 HTML。
+        // 不剥标签的话判官拿到的是 `<p style="font-size: 16px;"><strong>…`——
+        // 它得先在标签堆里找出哪些是人话（线上实测这屏抽出 0 条断言）。
+        walk(stripHtmlToText(value));
+        continue;
+      }
       if (key === 'html') {
         // 教具 HTML 里的教学文本也要送审（判决书 P0 第 3 条）。
         // 这里原本是 `continue`，注释写「audited separately if ever needed」——

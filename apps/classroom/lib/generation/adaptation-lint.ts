@@ -662,6 +662,39 @@ function v(x: Omit<Violation, 'tier'>, tier: Tier | null): Violation {
 }
 
 /** L1/L2/L3 各自的规则。每条只在本档跑——没有一个指标能同时管住两条边界（规格 §2.1）。 */
+/**
+ * 提示词脚手架泄漏：模型把内部规划标签写进了正文。
+ *
+ * 线上实锤（PLC 课屏 4）：四段逐字渲染「**本段目标：……**」加粗领句。
+ * grep 提示词里没有这个词——不是模板漏了变量，是**模型对「每段先明确目标」
+ * 这类指令的表演性服从**：把规划过程当成产物写了出来。
+ *
+ * 改提示词治不了（换一版模型换个说法照样写），只能机械拦。
+ * 与档位无关：任何档位的教材正文里都不该出现这些标签。
+ *
+ * 词表只收**明确是元话语**的：「本段目标」是规划标签，「学习目标」是
+ * 教材里常见的正经小节标题，不能一起拦。
+ */
+const SCAFFOLD_LEAK = [
+  /(?:^|\n)\s*\**\s*本段(?:目标|要点|任务|安排|重点)\s*[:：]/,
+  /(?:^|\n)\s*\**\s*本节(?:目标|安排)\s*[:：]/,
+  /(?:^|\n)\s*\**\s*(?:段落|写作|生成)(?:目标|计划|规划|要求)\s*[:：]/,
+  /(?:^|\n)\s*\**\s*(?:第[一二三四五六七八九十]+段|下一段)\s*[:：]\s*(?:讲|写|说明)/,
+  /(?:^|\n)\s*\**\s*(?:输出|回答)(?:格式|要求)\s*[:：]/,
+];
+
+/** 正文里有没有规划标签。返回命中的那一行（去掉首尾空白），没有就返回 null。 */
+export function findScaffoldLeak(text: string): { line: number; quote: string } | null {
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (SCAFFOLD_LEAK.some((re) => re.test('\n' + line))) {
+      return { line: i + 1, quote: line.trim().slice(0, 60) };
+    }
+  }
+  return null;
+}
+
 function rulesFor(tier: Tier | null, m: AdaptationMetrics): Violation[] {
   const out: Violation[] = [];
   const T = THRESHOLDS;
@@ -1050,6 +1083,26 @@ function rulesFor(tier: Tier | null, m: AdaptationMetrics): Violation[] {
 export function lintAdaptation(text: string, tier: Tier | null): LintReport {
   const metrics = computeAdaptationMetrics(text);
   const violations = rulesFor(tier, metrics);
+
+  // 脚手架泄漏与档位无关：任何档位的正文里都不该出现「本段目标：」这类规划标签。
+  // 判 A 类（必须改）——它不是风格问题，是把内部过程当产物交付了。
+  const leak = findScaffoldLeak(text);
+  if (leak) {
+    violations.push({
+      ruleId: 'SCAFFOLD-LEAK',
+      cls: 'A',
+      zone: 'own',
+      line: leak.line,
+      value: 1,
+      threshold: 0,
+      quote: leak.quote,
+      message:
+        `第 ${leak.line} 行把写作规划标签写进了正文：「${leak.quote}」。` +
+        '这是给生成过程看的，不是给学习者看的。',
+      fix: '删掉这一行的标签前缀，把后面的内容直接融进正文；不要用「本段目标」「输出格式」这类元话语领句。',
+      tier,
+    });
+  }
   return {
     tier,
     metrics,

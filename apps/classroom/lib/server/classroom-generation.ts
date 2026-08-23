@@ -582,6 +582,8 @@ async function generateClassroomInner(
   };
   /** 这门课已经用过的教具模板 id，逐屏累积（同课形态去重）。 */
   const usedTemplateIds = new Set<string>();
+  /** 这门课贯穿始终的类比，第一屏定下来后传给后面每一屏。 */
+  let courseAnalogy: string | undefined;
 
   const sceneSlots: SceneSlot[] = outlines.map(() => {
     let fill!: SceneSlot['fill'];
@@ -639,7 +641,24 @@ async function generateClassroomInner(
     }
   });
 
-  async function auditAndBuildScene(p: PreparedScene) {
+  /**
+ * 从要点里认出这一屏用的类比。
+ *
+ * **不额外调模型**：那是一次多余的往返，而且抽错了比不抽更糟。
+ * 生成器写类比时通常会在 keyPoints 里留一句带比喻标记的话，取第一条即可。
+ * 认不出来就返回 undefined——不硬造，后面各屏照旧。
+ */
+const ANALOGY_MARK = /(就像|好比|相当于|类比成|可以想象成|把它想成)([^。；\n]{2,24})/;
+
+function extractAnalogy(keyPoints?: readonly string[]): string | undefined {
+  for (const point of keyPoints ?? []) {
+    const hit = ANALOGY_MARK.exec(point);
+    if (hit) return `${hit[1]}${hit[2]}`.trim();
+  }
+  return undefined;
+}
+
+async function auditAndBuildScene(p: PreparedScene) {
     const { audit: sceneAudit, content: auditedContent } = await auditSceneContent({
       sceneTitle: p.safeOutline.title,
       content: p.content,
@@ -853,7 +872,7 @@ async function generateClassroomInner(
     if (scenePlan) {
       safeOutline.description =
         (safeOutline.description ?? '') +
-        blueprintDirective(scenePlan, requirements.learnerProfile!);
+        blueprintDirective(scenePlan, requirements.learnerProfile!, courseAnalogy);
       courseBlueprint ??= scenePlan;
     }
 
@@ -895,6 +914,9 @@ async function generateClassroomInner(
     // 模板池那条路会写；上游自由 HTML 与讲义降级都没有，正好不必去重。
     const usedId = (content as { config?: { templateId?: unknown } } | null)?.config?.templateId;
     if (typeof usedId === 'string' && usedId) usedTemplateIds.add(usedId);
+    // 第一屏用了什么类比，后面每屏沿用（P1-4：一门课四段四个类比，读者
+    // 每段都要重建映射）。抽不到就不传——**不硬造类比**，要求的是「有就沿用」。
+    courseAnalogy ??= extractAnalogy(safeOutline.keyPoints);
 
     // 摘录占位符 → 教材原文，机械替换（位置模型排、内容机器贴——模型手抄必漂移）。
     // 客户端主链在 scene-content 路由里做这一步；批量路径此前漏了，落盘的课正文里

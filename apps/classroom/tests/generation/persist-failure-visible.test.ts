@@ -37,3 +37,27 @@ describe('落盘失败不许静默', () => {
     expect(src).toMatch(/log\.error\('Failed to save to storage:', error\);\s*\n\s*return false;/);
   });
 });
+
+describe('首屏审计要赶在落盘之前', () => {
+  it('落盘前等审计一个有界的窗，不是发了就跳', () => {
+    // 线上实锤：PLC 课屏 1 完全无审计记录，其余屏都有。
+    // 判官结论是 `void auditPromise.then(…)` 后台跑的，而落盘紧接着执行——
+    // 审计要十几秒，**落盘的那一份没有 audit 字段**，跳走后 updateScene
+    // 只改内存，课堂页从盘上读回来首屏就是无审计的。
+    const src = read('app/generation-preview/page.tsx');
+    const i = src.indexOf('const saved = await store.saveToStorage()');
+    expect(i).toBeGreaterThan(0);
+
+    const before = src.slice(Math.max(0, i - 1200), i);
+    expect(before).toContain('Promise.race');
+    expect(before).toContain('auditPromise');
+    expect(before).toContain('AUDIT_SETTLE_MS');
+  });
+
+  it('等待有上限——判官挂了不拖住整门课', () => {
+    const src = read('app/generation-preview/page.tsx');
+    const ms = /AUDIT_SETTLE_MS = ([\d_]+)/.exec(src)?.[1]?.replace(/_/g, '');
+    expect(Number(ms)).toBeGreaterThan(0);
+    expect(Number(ms)).toBeLessThanOrEqual(60_000);
+  });
+});

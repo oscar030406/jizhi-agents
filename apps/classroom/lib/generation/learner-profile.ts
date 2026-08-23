@@ -265,7 +265,12 @@ export function beginnerCodeFormOnly(profile: LearnerProfileInput): boolean {
  * Render the plan as a prompt directive. Kept as prose (not JSON) because it is
  * appended to a human-readable outline description that the generator reads.
  */
-export function blueprintDirective(bp: LearnerBlueprint, profile: LearnerProfileInput): string {
+export function blueprintDirective(
+  bp: LearnerBlueprint,
+  profile: LearnerProfileInput,
+  /** 这门课贯穿始终的类比。第一屏定下来之后传给后面每一屏，避免每段各自即兴。 */
+  analogy?: string,
+): string {
   const mix = bp.blueprint?.resource_mix;
   const lines: string[] = [
     `\n\n【学习者画像 · 由学情诊断 Agent 计算，必须遵守】`,
@@ -287,6 +292,21 @@ export function blueprintDirective(bp: LearnerBlueprint, profile: LearnerProfile
   // 讲解姿态跟着变软。对读者的前置假设由画像本身决定；内容选型（测验带/配比）
   // 仍走 recommended_difficulty，不动。
   const tier = presentationTier(bp, profile);
+  // 课程级类比一致性（2026-08-23 实锤：一门 PLC 课四段四个类比——
+  // 妈妈作业 → 炖汤 → 失控汽车 → 食堂微波炉，互不沿用；对照 ROS2 那门课
+  // 全程一个餐厅类比）。根因是类比要求写在档位硬要求里，每屏各自即兴，
+  // **屏与屏之间不知道彼此用过什么**——与 usedIds 同构：课程级的东西
+  // 被当成了单屏决策。
+  //
+  // 不硬造类比：定不出来就别用。要求的是「有就沿用」，不是「必须有」。
+  if (analogy) {
+    lines.push(
+      `- 【全课统一类比】这门课自始至终用同一个类比：${analogy}。` +
+        `后面每一屏要沿用它、把新概念挂到这个类比的不同部位上，` +
+        `**不要另起炉灶换一个新比喻**——四段四个类比会让读者每段都要重新建立映射。`,
+    );
+  }
+
   if (tier === 'L1') {
     lines.push(
       `- 【零基础硬要求】每个专业术语第一次出现必须立刻用一句大白话定义，不许裸用；`,

@@ -1,0 +1,124 @@
+{
+ "type": "slide",
+ "canvas": {
+  "id": "cv4sSO_Qky9tl0UsLB47x",
+  "theme": {
+   "shadow": {
+    "h": 0,
+    "v": 0,
+    "blur": 10,
+    "color": "#000000"
+   },
+   "outline": {
+    "color": "#d14424",
+    "style": "solid",
+    "width": 2
+   },
+   "fontName": "Microsoft YaHei",
+   "fontColor": "#333333",
+   "themeColors": [
+    "#5b9bd5",
+    "#ed7d31",
+    "#a5a5a5",
+    "#ffc000",
+    "#4472c4"
+   ],
+   "backgroundColor": "#ffffff"
+  },
+  "elements": [
+   {
+    "id": "text_cQSSUOMu",
+    "top": 40,
+    "left": 60,
+    "type": "text",
+    "width": 880,
+    "height": 50,
+    "rotate": 0,
+    "content": "<p style=\"font-size: 20px;\"><strong>计算步骤与验证</strong></p>",
+    "defaultColor": "#332f2b",
+    "defaultFontName": ""
+   },
+   {
+    "id": "text_S241xoXi",
+    "top": 104,
+    "left": 60,
+    "type": "text",
+    "width": 880,
+    "height": 92,
+    "rotate": 0,
+    "content": "<p style=\"font-size: 16px;\"><strong>本段目标：理解什么是合理的等待时间。</strong> 想象你在食堂等微波炉热饭。如果设定 1 分钟，饭可能没热好；设定 1 小时，又太浪费。这里的“等待上限”就是<strong>超时设置</strong>（系统允许任务运行的最长时间）。我们需要找到一个既不让任务中断，又不无限等待的数值。在工厂里，这相当于给机器动作设定一个合理的完成期限。</p>",
+    "defaultColor": "#45403a",
+    "defaultFontName": ""
+   },
+   {
+    "id": "text_SnWI_lN2",
+    "top": 210,
+    "left": 60,
+    "type": "text",
+    "width": 880,
+    "height": 92,
+    "rotate": 0,
+    "content": "<p style=\"font-size: 16px;\"><strong>本段目标：测量基础耗时并认识时间单位。</strong> 第一步，测量任务正常耗时。比如控制气缸（执行推拉动作的部件）伸出，平时需要 800 毫秒（1 秒=1000 毫秒）。这个 800 毫秒是机器正常工作的底线。如果_setting_值小于这个数字，机器还没动完就会被强制停止。因此，我们必须先知道这个基础数字是多少。</p>",
+    "defaultColor": "#45403a",
+    "defaultFontName": ""
+   },
+   {
+    "id": "text_xjG8MxBy",
+    "top": 316,
+    "left": 60,
+    "type": "text",
+    "width": 880,
+    "height": 116,
+    "rotate": 0,
+    "content": "<p style=\"font-size: 16px;\"><strong>本段目标：计算最终设定值并理解为什么要加余量。</strong> 第二步，增加<strong>缓冲余量</strong>（预留的额外时间，防止意外卡顿）。如果机械偶尔摩擦变大，可能慢 200 毫秒。所以合理值 = <span class=\"katex\"><span class=\"katex-html\" aria-hidden=\"true\"><span class=\"base\"><span class=\"strut\" style=\"height:0.7278em;vertical-align:-0.0833em;\"></span><span class=\"mord\">800</span><span class=\"mspace\" style=\"margin-right:0.2222em;\"></span><span class=\"mbin\">+</span><span class=\"mspace\" style=\"margin-right:0.2222em;\"></span></span><span class=\"base\"><span class=\"strut\" style=\"height:0.6444em;\"></span><span class=\"mord\">200</span><span class=\"mspace\" style=\"margin-right:0.2778em;\"></span><span class=\"mrel\">=</span><span class=\"mspace\" style=\"margin-right:0.2778em;\"></span></span><span class=\"base\"><span class=\"strut\" style=\"height:0.6444em;\"></span><span class=\"mord\">1000</span></span></span></span> 毫秒。这就是为什么要加缓冲：如果不加，假设某次动作用了 900 毫秒，而设定值只有 800 毫秒，系统会误判为故障。加上 200 毫秒后，即使慢到 900 毫秒，也不会触发报警。</p>",
+    "defaultColor": "#45403a",
+    "defaultFontName": ""
+   },
+   {
+    "id": "text_De5EcE8e",
+    "top": 446,
+    "left": 60,
+    "type": "text",
+    "width": 880,
+    "height": 68,
+    "rotate": 0,
+    "content": "<p style=\"font-size: 16px;\"><strong>本段目标：输入数值并验证设置是否生效。</strong> 我们可以用变量记录设定值，并在编程软件（如 TIA Portal）中输入 1000。下面是一段简单的代码逻辑，展示如何定义这个时间：</p>",
+    "defaultColor": "#45403a",
+    "defaultFontName": ""
+   },
+   {
+    "id": "text_XclKdaUi",
+    "top": 528,
+    "fill": "#332f2b",
+    "left": 60,
+    "type": "text",
+    "width": 880,
+    "height": 90,
+    "rotate": 0,
+    "content": "<p style=\"font-size: 14px; font-family: Consolas, monospace; white-space: pre-wrap;\">base_time = 800  # 基础运行时间</p><p style=\"font-size: 14px; font-family: Consolas, monospace; white-space: pre-wrap;\">buffer = 200     # 缓冲余量</p><p style=\"font-size: 14px; font-family: Consolas, monospace; white-space: pre-wrap;\">timeout = base_time + buffer  # 最终设定值</p>",
+    "lineHeight": 1.4,
+    "defaultColor": "#e8e4dd",
+    "defaultFontName": "Consolas"
+   },
+   {
+    "id": "text_taT8Azs9",
+    "top": 632,
+    "left": 60,
+    "type": "text",
+    "width": 880,
+    "height": 68,
+    "rotate": 0,
+    "content": "<p style=\"font-size: 16px;\">输入后，查看<strong>诊断缓冲区</strong>（系统记录错误信息的日志本）。如果没出现超时报警，说明设置生效。关键提示：不要设得太短，比如 200 毫秒，否则程序还没跑完就被强行停止，导致机器频繁报错停工。</p>",
+    "defaultColor": "#45403a",
+    "defaultFontName": ""
+   }
+  ],
+  "background": {
+   "type": "solid",
+   "color": "#fdfbf7"
+  },
+  "viewportSize": 1000,
+  "viewportRatio": 0.5625
+ },
+ "schemaVersion": 1
+}

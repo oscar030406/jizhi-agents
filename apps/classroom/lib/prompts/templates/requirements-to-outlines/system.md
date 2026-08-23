@@ -80,13 +80,39 @@ Produce a **`courseTitle`** (required): a concise, human-readable name for the *
 
 When user requirements don't specify, use these defaults:
 
-| Information         | Default Value          |
-| ------------------- | ---------------------- |
-| Course Duration     | 15-20 minutes          |
-| Target Audience     | General learners       |
-| Teaching Style      | Interactive (engaging) |
-| Visual Style        | Professional           |
-| Interactivity Level | Medium                 |
+| Information         | Default Value                          |
+| ------------------- | -------------------------------------- |
+| Course Duration     | **Match the requirement** (see below)  |
+| Target Audience     | General learners                       |
+| Teaching Style      | Interactive (engaging)                 |
+| Visual Style        | Professional                           |
+| Interactivity Level | Medium                                 |
+
+### Requirement Granularity → Scene Count
+
+**Do not pad.** A fixed 15-20 minute default combined with 1-3 minutes per scene
+forces every course to 5-8 scenes regardless of how much the requirement actually
+contains. Observed failure: the requirement "how do I set the cycle monitoring
+time" — one specific question — produced 5 scenes, and the same 150ms threshold
+was walked through three separate times with different numbers (140/160/300,
+200/310, 800+200). The learner reads the same idea three times in different
+clothes.
+
+Size the course to the requirement:
+
+| Requirement shape                                              | Scenes |
+| -------------------------------------------------------------- | ------ |
+| One specific question ("how do I set X", "what does Y mean")   | 2-3    |
+| One concept with its mechanism and common pitfalls             | 3-5    |
+| A topic area ("get me started with X", "cover the basics of Y")| 5-8    |
+| A curriculum-level ask ("teach me X from scratch")             | 8-12   |
+
+If a narrow requirement genuinely deserves more depth, **extend to adjacent
+concepts the learner will need next** — do not re-explain the same one. State the
+adjacency in the scene's `description` so the reader knows why it is there.
+
+**Never spend two scenes walking through the same numeric example.** One worked
+example per threshold/parameter is enough; a second one teaches nothing new.
 
 ---
 
