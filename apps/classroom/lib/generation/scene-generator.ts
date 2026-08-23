@@ -92,6 +92,12 @@ export interface SceneContentOptions {
   userRequirements?: UserRequirements;
   allowProceduralSkill?: boolean;
   /**
+   * 这门课已经用过的教具模板 id。传进来让选模板时避开重复形态——
+   * 制造域一门课两个教具全是步进器，一部分原因就是选的时候不知道用过什么。
+   * 只影响目录标注、不硬删候选（硬删会让后面几屏无模板可用）。
+   */
+  usedTemplateIds?: readonly string[];
+  /**
    * Natural-language edit instruction for whole-slide regeneration (MAIC Editor
    * agent `regenerate_scene`). When set, the slide content prompt switches to
    * EDIT MODE. slide-only; ignored by other scene types.
@@ -138,19 +144,53 @@ export async function generateSceneContent(
     targetLanguage,
     userRequirements,
     allowProceduralSkill = false,
+    usedTemplateIds = [],
     editDirective,
     baselineContent,
   } = options;
 
-  // Unified path for interactive scenes
+  // 教具三层降级：模板池（质量下限）→ 六类自由 HTML（泛化上限）→ 讲义。
+  // interactive 返回 null 会被批量侧 shouldRetryResult 同参重试后整屏丢弃，
+  // 只有三层全失败才允许 null。
   if (outline.type === 'interactive') {
-    // 职教实训教具（procedural-skill）是显式开关控制的独立特性，仍走原 HTML 生成路径
+    // 职教实训教具（procedural-skill）是显式开关控制的独立特性，直接走 HTML 生成
     if (outline.widgetType === 'procedural-skill') {
       return generateWidgetContent(outline, aiCall, languageDirective, { allowProceduralSkill });
     }
-    // 模板池参数化：LLM 只「选模板 + 填参数」，不再现场手写 HTML
-    //（widget-quality-workstream 病灶 3：裸生成 HTML 无门禁、extractHtml 失败重试卡死课程）
-    return generateTemplateWidgetContent(outline, aiCall, languageDirective);
+
+    const fromTemplate = await generateTemplateWidgetContent(
+      outline,
+      aiCall,
+      languageDirective,
+      usedTemplateIds,
+    );
+    if (fromTemplate) return fromTemplate;
+
+    // 二层：按大纲的 widgetType 走六类专用提示词自由生成 HTML
+    log.warn(
+      `Template pool had nothing for "${outline.title}" (${outline.widgetType ?? 'no type'}); ` +
+        'falling back to upstream free-form widget generation',
+    );
+    const fromUpstream = await generateWidgetContent(outline, aiCall, languageDirective, {
+      allowProceduralSkill,
+    });
+    if (fromUpstream) return fromUpstream;
+
+    // 三层：教具两条路都做不出来，退成讲义。**宁可讲清楚也别整屏丢弃**——
+    // 学习者看到少了一屏，比看到一个空白教具或什么都没有要好。
+    log.warn(`Both widget paths failed for "${outline.title}"; degrading to lecture slide`);
+    return generateSlideContent(
+      { ...outline, type: 'slide' },
+      aiCall,
+      assignedImages,
+      imageMapping,
+      visionEnabled,
+      generatedMediaMapping,
+      agents,
+      languageDirective,
+      editDirective,
+      baselineContent,
+    );
   }
 
   switch (outline.type) {
@@ -1255,12 +1295,14 @@ export async function generateTemplateWidgetContent(
   outline: SceneOutline,
   aiCall: AICallFn,
   languageDirective?: string,
+  /** 这门课已经用过的模板 id。只影响目录里的标注，不硬删候选（见 buildTemplateCatalogText）。 */
+  usedTemplateIds: readonly string[] = [],
 ): Promise<GeneratedInteractiveContent | null> {
   const prompts = buildPrompt(PROMPT_IDS.INTERACTIVE_TEMPLATE_SELECT, {
     title: outline.title,
     description: outline.description,
     keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
-    templateCatalog: buildTemplateCatalogText(),
+    templateCatalog: buildTemplateCatalogText(usedTemplateIds),
     languageDirective: languageDirective || '',
   });
   if (!prompts) {

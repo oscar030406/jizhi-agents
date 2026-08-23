@@ -2179,12 +2179,20 @@ def execute(run: IntakeRun) -> None:
         # （当下走不到：体检时 ①-⑤ 全 skipped、⑥⑦ 是 optional，hard_failed 恒假。
         # 留这道闸是因为下一个人给某站去掉 optional 时不会想起这里。）
         removed = [] if run.record["options"].get("checkup") else _cleanup_partial(run.corpus)
+        # C25：失败之后管理者最需要知道的是「现在能不能重来」。
+        # 半成品三处（corpora / <库>_intake / 金标）已经清干净，同名可以直接重投——
+        # 不说清楚的话人会被 `_reserve_corpus` 的「已经建过了」挡住，
+        # 以为库还占着名字，卡在那里不知道下一步。
+        retry_hint = (
+            f"半成品已清理（{len(removed)} 处），" if removed else "没有留下半成品，"
+        ) + f"「{run.corpus}」这个库名可以直接重新投币，不用换名字。"
         run.emit(
             "run",
             "run_failed",
-            f"run 失败：{first}",
+            f"run 失败：{first}\n{retry_hint}",
             error=first,
             cleaned=removed,
+            retriable=True,
         )
     else:
         _refresh_corpus_caches()

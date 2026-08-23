@@ -580,6 +580,9 @@ async function generateClassroomInner(
     promise: Promise<Awaited<ReturnType<typeof auditAndBuildScene>> | undefined>;
     fill: (v: Promise<Awaited<ReturnType<typeof auditAndBuildScene>> | undefined>) => void;
   };
+  /** 这门课已经用过的教具模板 id，逐屏累积（同课形态去重）。 */
+  const usedTemplateIds = new Set<string>();
+
   const sceneSlots: SceneSlot[] = outlines.map(() => {
     let fill!: SceneSlot['fill'];
     const promise = new Promise<Awaited<ReturnType<typeof auditAndBuildScene>> | undefined>(
@@ -860,6 +863,10 @@ async function generateClassroomInner(
           agents,
           languageDirective,
           allowProceduralSkill: vocationalActive,
+          // 这门课前面几屏用过的教具形态。不传的话选模板时不知道用过什么，
+          // 同题材自然选到同一个——制造域一门课两个教具全是步进器，
+          // 这是其中一半原因（另一半是模板池 8 个里 5 个 AI 域专属）。
+          usedTemplateIds: [...usedTemplateIds],
           // PBL 场景走的是 Vercel AI SDK 的 agentic loop（`lib/pbl/generate-pbl.ts`），
           // 它要的是 LanguageModel 实例本身，不是这里的 `sceneAiCall` 闭包。
           // 这三个字段批量路径此前一个都没传，于是**任何 pbl 大纲在这条路上必然失败**：
@@ -884,6 +891,10 @@ async function generateClassroomInner(
       log.warn(`Skipping scene "${safeOutline.title}" — content generation failed`);
       continue;
     }
+    // 记下这屏用了哪个模板，下一屏选的时候避开。`config.templateId` 只有
+    // 模板池那条路会写；上游自由 HTML 与讲义降级都没有，正好不必去重。
+    const usedId = (content as { config?: { templateId?: unknown } } | null)?.config?.templateId;
+    if (typeof usedId === 'string' && usedId) usedTemplateIds.add(usedId);
 
     // 摘录占位符 → 教材原文，机械替换（位置模型排、内容机器贴——模型手抄必漂移）。
     // 客户端主链在 scene-content 路由里做这一步；批量路径此前漏了，落盘的课正文里

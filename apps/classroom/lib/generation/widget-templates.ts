@@ -263,11 +263,20 @@ Do not supply coordinates — the component computes the layout.`,
 ];
 
 /** 拼出提示词用的模板目录文本。Example 由 sample 序列化，与校验器同源。 */
-export function buildTemplateCatalogText(): string {
-  return WIDGET_TEMPLATES.map(
-    (t) =>
-      `### ${t.id}\nDefault name: ${t.label}\nUse when: ${t.topic}\n${t.paramsDoc}\nExample:\n${JSON.stringify(t.sample)}`,
-  ).join('\n\n');
+export function buildTemplateCatalogText(usedIds: readonly string[] = []): string {
+  // 已用过的**标注不删**：一门 12 屏的课如果只剩 3 个模板可选，硬删会让后面几屏
+  // 无模板可用、掉进二层甚至三层降级。标注让模型优先换形态，实在合适再重复用。
+  //
+  // 为什么要这个：制造域一门课两个教具全是步进器——一部分原因是模板池 8 个里
+  // 5 个 AI 域专属（三层轮的二层治泛化），另一部分是选模板时**不知道这门课
+  // 已经用过什么**，同一个题材自然选到同一个。
+  const used = new Set(usedIds);
+  return WIDGET_TEMPLATES.map((t) => {
+    const mark = used.has(t.id)
+      ? '\n（这门课已经用过这个形态——除非明显更合适，优先换一个）'
+      : '';
+    return `### ${t.id}\nDefault name: ${t.label}\nUse when: ${t.topic}${mark}\n${t.paramsDoc}\nExample:\n${JSON.stringify(t.sample)}`;
+  }).join('\n\n');
 }
 
 // ==================== 参数校验（LLM 输出是不可信输入） ====================

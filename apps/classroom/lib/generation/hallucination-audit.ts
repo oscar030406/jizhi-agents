@@ -245,6 +245,27 @@ export type AiCall = (system: string, user: string) => Promise<string>;
 const MAX_CONTENT_CHARS = 9000;
 
 /** Collect human-visible teaching text from an arbitrary scene-content JSON. */
+/**
+ * 教具 HTML → 可审的教学文本。
+ *
+ * 只要人眼在页面上读得到的那部分：去掉 `<script>` / `<style>` 整块，
+ * 标签换成空格，实体还原常见几个。**不引 DOM 解析器**——这段在服务端跑，
+ * 而且我们要的不是结构只是文字。
+ */
+function stripHtmlToText(html: string): string {
+  return html
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function extractTeachingText(content: unknown): string {
   const parts: string[] = [];
   const seen = new Set<unknown>();
@@ -269,8 +290,19 @@ export function extractTeachingText(content: unknown): string {
       return;
     }
     for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
-      // Raw widget HTML is audited separately if ever needed; skip the blob.
-      if (key === 'html' || key === 'src' || key === 'audioId') continue;
+      if (key === 'src' || key === 'audioId') continue;
+      if (key === 'html') {
+        // 教具 HTML 里的教学文本也要送审（判决书 P0 第 3 条）。
+        // 这里原本是 `continue`，注释写「audited separately if ever needed」——
+        // **那个 separately 从来没有发生**：实测一个 simulation 教具只抽出 6 个字
+        // （名字），正文全丢，六类自由 HTML 的机制描述、数字、归因一条都不过审核门。
+        //
+        // 剥标签取文本，不送整坨 HTML：整坨会让判官把 class 名、内联样式、
+        // 脚本变量当教学内容判，噪声淹掉真断言；而且 HTML 动辄几十 KB，
+        // 撞 MAX_CONTENT_CHARS 会把别的字段挤出去。
+        if (typeof value === 'string') walk(stripHtmlToText(value));
+        continue;
+      }
       walk(value);
     }
   };

@@ -1161,3 +1161,36 @@ def test_已完成的run不动(sandbox):
     long_ago = time.time() - domain_intake.ORPHAN_RUN_AFTER_SECONDS - 60
     os.utime(run_dir / "run.json", (long_ago, long_ago))
     assert domain_intake.sweep_orphan_runs() == []
+
+
+def test_失败后告诉管理者可以直接重投(sandbox):
+    """C25：干净重投这条路本来就通（`_cleanup_partial` 清三处、零残留、
+    同名放行），**缺的是没人告诉管理者**。
+
+    不说清楚的话人会被 `_reserve_corpus` 的「已经建过了」挡住，
+    以为库还占着名字，卡在那里不知道下一步——机制通了但用不上，
+    和「建了没接线」是一回事。
+    """
+    from pathlib import Path as _Path
+
+    src = _Path(domain_intake.__file__).read_text(encoding="utf-8")
+    assert "可以直接重新投币" in src, "失败事件要说清能不能重来"
+    assert "retriable=True" in src, "机器可读的标记也要有，管理端据它决定要不要给重投按钮"
+
+
+def test_清理干净到同名可以重投(sandbox):
+    """`_cleanup_partial` 清完之后 `_reserve_corpus` 必须放行——
+    这两个函数是一对，中间漏一点残留就永远重投不了。"""
+    for path in (
+        domain_intake.CORPORA_DIR / "retryme",
+        domain_intake.KB / "retryme_intake",
+        domain_intake.GOLD_DIR / "retryme",
+    ):
+        path.mkdir(parents=True)
+        (path / "leftover.json").write_text("{}", encoding="utf-8")
+
+    removed = domain_intake._cleanup_partial("retryme")
+    assert len(removed) == 3
+
+    # 清完立刻能重投——不抛就是放行
+    domain_intake._reserve_corpus("retryme")

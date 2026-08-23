@@ -443,28 +443,73 @@ describe('generateSceneContent — interactive template flow', () => {
     expect(content?.widgetType).toBe('template');
   });
 
-  it('returns null after two invalid attempts (degrade to lecture)', async () => {
+  // 下面两条原本断言 `toBeNull()`，而测试名写的是「degrade to lecture」——
+  // 名字、代码注释、widget-templates.ts 的文档三处都说会降级成讲义，
+  // 实现却返回 null、上游重试 6 次后整屏丢弃。**连测试都在替这个谎言背书。**
+  // 三层轮落地后改成锁真降级：模板池 → 上游自由 HTML → 讲义。
+
+  /** 讲义那层要的是 markdown 正文，不是 JSON。够长才过 `cleanLectureMarkdown`。 */
+  const LECTURE_MD = [
+    '## 这一节讲什么',
+    '',
+    '注意力机制的核心是让模型在处理每个位置时，能够回看序列里的其他位置。',
+    '传统的循环网络只能顺序传递信息，越远的依赖越容易衰减；注意力直接算两两之间的相关度，',
+    '距离不再是障碍。',
+    '',
+    '## 为什么这样设计',
+    '',
+    '把查询、键、值三个角色分开，是为了让「我要找什么」和「我能提供什么」解耦。',
+    '同一份表示既当键又当值时，模型没有办法表达「这个位置对定位有用，但内容要取别处」。',
+  ].join('\n');
+
+  it('模板池两次都解析不了时，降级链真的走到讲义并出内容', async () => {
+    // 原来这条叫「returns null after two invalid attempts (degrade to lecture)」，
+    // 名字写降级、断言却是 `toBeNull()`——**测试在替谎言背书**：
+    // 代码注释、模块文档、测试名四处都说会降级成讲义，实现返回 null、
+    // 上游重试 6 次整屏丢弃。有测试守着，后来人更不会怀疑。
+    let calls = 0;
+    const aiCall: AICallFn = async () => {
+      calls += 1;
+      // 前两次是模板池（选模板 + 带错误重试一次），喂垃圾让它选不出；
+      // 之后的调用属于二层/三层，喂合法讲义 markdown。
+      return calls <= 2 ? '不是 JSON 的回复' : LECTURE_MD;
+    };
+
+    const content = await generateSceneContent(interactiveOutline(), aiCall, {});
+    expect(calls).toBeGreaterThan(2);
+    expect(content).not.toBeNull();
+    // 降到讲义之后就不该还是教具形态。联合类型里只有 interactive 分支有
+    // widgetType，用 in 收窄——直接点属性 tsc 不认。
+    expect(content && 'widgetType' in content ? content.widgetType : undefined).not.toBe(
+      'template',
+    );
+  });
+
+  it('模型明说没有合适模板时不重试，但继续往下降级', async () => {
+    let calls = 0;
+    const aiCall: AICallFn = async () => {
+      calls += 1;
+      return calls === 1
+        ? JSON.stringify({ templateId: null, reason: '无匹配模板' })
+        : LECTURE_MD;
+    };
+
+    const content = await generateSceneContent(interactiveOutline(), aiCall, {});
+    // 明说选不出就别浪费第二次调用——模板池这层只调一次
+    expect(calls).toBeGreaterThan(1);
+    expect(content).not.toBeNull();
+  });
+
+  it('三层全失败时返回 null——做不出来就是做不出来', async () => {
+    // 这条守住另一头：降级链存在不等于永远有产物。
+    // 全链都喂垃圾时返回 null 是诚实的，外层重试与「跳过这一屏」照旧。
     let calls = 0;
     const aiCall: AICallFn = async () => {
       calls += 1;
       return '不是 JSON 的回复';
     };
-
-    const content = await generateSceneContent(interactiveOutline(), aiCall, {});
-    expect(calls).toBe(2);
-    expect(content).toBeNull();
-  });
-
-  it('returns null without retry when the model reports no fit', async () => {
-    let calls = 0;
-    const aiCall: AICallFn = async () => {
-      calls += 1;
-      return JSON.stringify({ templateId: null, reason: '无匹配模板' });
-    };
-
-    const content = await generateSceneContent(interactiveOutline(), aiCall, {});
-    expect(calls).toBe(1);
-    expect(content).toBeNull();
+    expect(await generateSceneContent(interactiveOutline(), aiCall, {})).toBeNull();
+    expect(calls).toBeGreaterThan(2);
   });
 });
 
