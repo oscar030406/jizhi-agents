@@ -102,11 +102,31 @@ def main() -> int:
             # 只有三位以上字符才当键：单个「0」「1」这种会把整份文档扫成火海
             if head and len(head.group().rstrip("%")) >= 3:
                 stale_map.setdefault(head.group(), mid)
+    # 文件级豁免：数据表里的数字撞上陈旧值时，行内豁免用不上——
+    # `| q6 | 4 | 0.250 | 0.300 | ... |` 这种行加不进「无关」两个字，加了就是把数据写脏。
+    # 实测撞过一次：DINA 对账表里的 guess 参数 0.300 撞上 api_hallucination_v2 的陈旧值。
+    # 所以给一个文件级出口，**必须点名指标 id 并写理由**——写不出理由的豁免不该给。
+    #   <!-- check_metrics: 陈旧值豁免 api_hallucination_v2 理由：本文的 0.300 是 DINA 猜测率参数 -->
+    exempt_re = re.compile(r"<!--\s*check_metrics:\s*陈旧值豁免\s+([\w,\s]+?)\s+理由：(.+?)-->")
+
     if stale_map:
         pattern = re.compile("|".join(re.escape(s) for s in stale_map))
         for f in iter_scan_files():
             text = f.read_text(encoding="utf-8", errors="replace")
+            exempt_ids = {
+                mid.strip()
+                for m in exempt_re.finditer(text)
+                for mid in m.group(1).split(",")
+                if mid.strip()
+            }
+            for bad_id in exempt_ids - set(metrics):
+                failures.append(
+                    f"{f.relative_to(REPO)} 豁免了一个不存在的指标 id「{bad_id}」——"
+                    "写错 id 的豁免会变成永久盲区"
+                )
             for hit in set(pattern.findall(text)):
+                if stale_map[hit] in exempt_ids:
+                    continue
                 # 两类豁免：
                 # (1) 历史勘误语境——行内出现「作废/勘误/旧/曾/事故」等
                 # (2) **别人的数字**——行内出现 arXiv / 论文 / et al. / 文献引用标记。

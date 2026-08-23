@@ -2,6 +2,10 @@ import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
   output: process.env.VERCEL ? undefined : 'standalone',
+  // next dev 会锁住 .next/dev，同一个项目目录起不了第二个实例。
+  // 消融试验要在不同 env 下并行跑几档，各自给一个 distDir 就能各起各的。
+  // 不设这个变量时行为一字不变。
+  distDir: process.env.NEXT_DIST_DIR || '.next',
   transpilePackages: ['mathml2omml', 'pptxgenjs', '@openmaic/importer'],
   // These agent packages do a runtime `import(specifier)` with a computed
   // specifier (to lazily load node:fs/os/path without breaking browser/Vite
