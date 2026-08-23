@@ -29,6 +29,7 @@ CLAUDE.local.md
 /.next/
 # 消融试验给每一档单开一个 distDir（ablation_topup.ps1），构建产物不进仓。
 /.next-ablation*/
+/.next-crossdomain*/
 /out/
 
 # production
