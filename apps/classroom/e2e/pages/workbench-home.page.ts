@@ -3,15 +3,16 @@ import type { Page, Locator } from '@playwright/test';
 /**
  * 登录后的首页工作台（`app/page.tsx` 的登录态分支）。
  *
- * 与 `home.page.ts` 不是一回事：那个对的是**未登录**首页。账户系统恒开
- * （`accountsEnabled()` 永远 true），所以匿名访客拿到的是公共落地页，
- * 上面根本没有造课输入框——造课入口只在登录后出现。
+ * 账户系统恒开（`accountsEnabled()` 永远 true），匿名访客拿到的是公共落地页
+ * （`components/home/public-landing.tsx`），上面根本没有造课输入框——
+ * 造课入口只在登录后出现，所以走这个页面对象的用例都得先有会话
+ * （真登录，或 `mockApi.mockSignedIn()`）。
  */
 export class WorkbenchHomePage {
   readonly page: Page;
   /**
-   * 顶栏品牌字标。原先老用例断的是 `img[alt="OpenMAIC"]`，那张图早随品牌换成
-   * 「集智」时删了——现在字标是一段纯文字，不是图片。工作台里只出现这一处。
+   * 顶栏品牌字标。老用例断的是 `img[alt="OpenMAIC"]`，那张图随品牌换成「集智」
+   * 时就删了——现在字标是一段纯文字，不是图片。工作台里只出现这一处。
    */
   readonly wordmark: Locator;
   /** 需求输入框。工作台上唯一的 textarea。 */

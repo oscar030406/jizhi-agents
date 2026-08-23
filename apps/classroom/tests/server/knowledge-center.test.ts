@@ -63,18 +63,29 @@ describe('知识库中心', () => {
       console.warn('跳过：本机没有引擎数据目录');
       return;
     }
-    for (const name of ['iotdb', 'odoo']) {
-      const readiness = JSON.parse(
-        await fs.readFile(
-          path.join(engineDataDir(), 'knowledge_base', `${name}_intake`, 'readiness.json'),
-          'utf-8',
-        ),
-      );
+    // 遍历盘上真有的扩展库，不写死名单（odoo 被删那天这条就是这么红的）。
+    // 这一条要证的是「索引行数与就绪度自记的块数两个真源互校」，
+    // 有几个库就校几个。
+    const live = (await fs.readdir(path.join(engineDataDir(), 'knowledge_base', 'corpora')))
+      .filter((n) => !n.startsWith('.'))
+      .sort();
+    for (const name of live) {
+      let readiness;
+      try {
+        readiness = JSON.parse(
+          await fs.readFile(
+            path.join(engineDataDir(), 'knowledge_base', `${name}_intake`, 'readiness.json'),
+            'utf-8',
+          ),
+        );
+      } catch {
+        continue; // 这个库没有就绪度报告（旧命令行管线建的），无从互校
+      }
       const row = await readCorpus(name);
       // 索引行数是我们数的，corpus_index.chunks 是入库链写的。两边不等说明有一边算错了。
       expect(row?.chunks).toBe(readiness.corpus_index.chunks);
       // 卡片上的「前置边（节级）」= readiness 里 prereq_graph.clauses 的条数，
-      // 与 admin-overview.ts 的 nodeEdges 同一口径（iotdb 0、odoo 6）。
+      // 与 admin-overview.ts 的 nodeEdges 同一口径。
       expect(row?.clauses).toBe(Object.keys(readiness.prereq_graph?.clauses ?? {}).length);
     }
   });

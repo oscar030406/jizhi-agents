@@ -227,10 +227,17 @@ test.describe('#619 interactive iframe keep-alive', () => {
     // keep-alive iframe must not be added or removed again.
     await resetMutations(page);
 
-    // `.first()` because the ~280ms mode cross-fade briefly mounts both chrome
-    // layers (each with its own Pro switch).
+    // 开关按**当前模式的无障碍名**定位，不用裸 `.first()`：那 ~280ms 的模式交叉淡入
+    // 会同时挂着两层 chrome、各带一个 switch，`.first()` 有几率点到正在退场的那个，
+    // 于是「退出 Pro」这一下静默落空、后面还停在编辑态——机器忙的时候必现，
+    // 单跑却看不出来（实测：单独跑绿、全量并行跑红）。
+    // 名字来自 `header-controls.tsx`：编辑态叫 Done editing，播放态叫 Edit course。
+    const proSwitch = (name: 'Edit course' | 'Done editing') =>
+      page.getByRole('switch', { name, exact: true });
+
     // --- Trigger A: Pro mode toggle (edit chrome remounts the placeholder) ---
-    await page.getByRole('switch').first().click();
+    await proSwitch('Edit course').first().click();
+    await expect(proSwitch('Done editing').first(), '没能进入 Pro 模式').toBeVisible();
     // Since #777 the interactive iframe stays VISIBLE in edit mode — the editor
     // agent ("Edit with AI") fixes interactive HTML, so the teacher must see the
     // live page while editing. The keep-alive proof is that it is neither
@@ -239,7 +246,14 @@ test.describe('#619 interactive iframe keep-alive', () => {
     await expect(count).toHaveText('3'); // state preserved across the mode toggle
     await page.screenshot({ path: `${SHOTS}/02-pro-mode.png`, fullPage: true });
 
-    await page.getByRole('switch').first().click();
+    await proSwitch('Done editing').first().click();
+    await expect(proSwitch('Edit course').first(), '没能退回播放态').toBeVisible();
+    // 退回播放态的判据不是开关翻了，是播放态的 header 真的回来了——下面按侧栏切场景
+    // 依赖的就是这层 chrome（编辑态的左栏是 SlideNavRail，点它切的是在编辑哪一页）。
+    await expect(
+      page.getByRole('heading', { name: 'Interactive', exact: true }),
+      '播放态 header 没回来（还停在编辑态）',
+    ).toBeVisible();
     await expect(iframeEl).toBeVisible(); // back to playback
     await expect(count).toHaveText('3'); // state preserved → no reload
     // Let the ~280ms mode cross-fade fully settle: the outgoing chrome's

@@ -1,0 +1,11 @@
+{"seq":1,"ts":1787825700.000,"iso":"2026-08-23T10:15:00Z","run_id":"20260823T101500-e2e001","stage":"receive","kind":"stage_start","message":"开始接收与清洗投料"}
+{"seq":2,"ts":1787825700.400,"iso":"2026-08-23T10:15:00Z","run_id":"20260823T101500-e2e001","stage":"receive","kind":"stage_progress","message":"收到 1 个文件，正在抽正文"}
+{"seq":3,"ts":1787825702.000,"iso":"2026-08-23T10:15:02Z","run_id":"20260823T101500-e2e001","stage":"receive","kind":"stage_done","status":"done","message":"接收与清洗完成","detail":{"accepted_files":1,"accepted_chars":1024,"rejected":0},"error":""}
+{"seq":4,"ts":1787825702.010,"iso":"2026-08-23T10:15:02Z","run_id":"20260823T101500-e2e001","stage":"chunk","kind":"stage_start","message":"开始切块入库"}
+{"seq":5,"ts":1787825705.000,"iso":"2026-08-23T10:15:05Z","run_id":"20260823T101500-e2e001","stage":"chunk","kind":"stage_done","status":"done","message":"切块入库完成","detail":{"sections":9,"chunks":128},"error":""}
+{"seq":6,"ts":1787825705.020,"iso":"2026-08-23T10:15:05Z","run_id":"20260823T101500-e2e001","stage":"index","kind":"stage_start","message":"开始建检索索引"}
+{"seq":7,"ts":1787825705.030,"iso":"2026-08-23T10:15:05Z","run_id":"20260823T101500-e2e001","stage":"knowledge","kind":"stage_start","message":"开始知识整理"}
+{"seq":8,"ts":1787825707.500,"iso":"2026-08-23T10:15:07Z","run_id":"20260823T101500-e2e001","stage":"knowledge","kind":"stage_progress","message":"已抽出 24 个概念"}
+{"seq":9,"ts":1787825709.000,"iso":"2026-08-23T10:15:09Z","run_id":"20260823T101500-e2e001","stage":"index","kind":"stage_done","status":"done","message":"检索索引完成","detail":{"backend":"bm25","probe_hits":5},"error":""}
+{"seq":10,"ts":1787825710.000,"iso":"2026-08-23T10:15:10Z","run_id":"20260823T101500-e2e001","stage":"knowledge","kind":"stage_done","status":"done","message":"知识整理完成","detail":{"concepts":24,"prereq_clauses":11},"error":""}
+{"seq":11,"ts":1787825710.010,"iso":"2026-08-23T10:15:10Z","run_id":"20260823T101500-e2e001","stage":"","kind":"run_done","message":"接入完成，库已可用","detail":{}}

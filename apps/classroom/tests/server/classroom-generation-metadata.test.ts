@@ -133,6 +133,35 @@ function lastPersisted(mocks: { persistClassroom: { mock: { calls: any[][] } } }
   return calls[calls.length - 1][0];
 }
 
+/**
+ * 盘上任意一个建好索引的扩展库（不含主语料 ai）。一个都没有时返回 null。
+ *
+ * 存在的理由：这份测试要的只是「某个真库」，而库会随泛化域收敛来来去去。
+ * 写死一个名字，等它被删的那天测试就红——红的还不是判据本身。
+ */
+async function anyLiveCorpus(): Promise<string | null> {
+  const { promises: fsp } = await import('node:fs');
+  const nodePath = await import('node:path');
+  const dir = nodePath.join(
+    process.env.ENGINE_DATA_DIR ?? nodePath.join(process.cwd(), '..', 'agent-engine', 'data'),
+    'knowledge_base',
+    'corpora',
+  );
+  try {
+    for (const name of (await fsp.readdir(dir)).sort()) {
+      const idx = nodePath.join(dir, name, 'knowledge_index.jsonl');
+      try {
+        if ((await fsp.stat(idx)).size > 0) return name;
+      } catch {
+        /* 这个库没有索引，看下一个 */
+      }
+    }
+  } catch {
+    /* 没有引擎数据目录 */
+  }
+  return null;
+}
+
 describe('生成期元数据落库', () => {
   beforeEach(() => {
     // 摘录拼装是另一条线（会真去算咬合度），这条测试只看元数据，关掉它。
@@ -230,8 +259,17 @@ describe('生成期元数据落库', () => {
     mocks.fetchEvidence.mockResolvedValue(evidence);
     mocks.fetchLearnerBlueprint.mockResolvedValue(blueprint);
 
-    await generate({ learnerProfile: { ...profile, corpus: 'odoo' } });
-    expect(lastPersisted(mocks).generation.profile.corpus).toBe('odoo');
+    // 库名不写死。原来钉的是 odoo，2026-08-23 泛化域收敛把它删掉之后这条就红了
+    // ——**这一条要证的是「选了库就记进元数据」，不是「odoo 必须存在」**。
+    // 生成链开跑前有一道闸会拒绝没建索引的库（classroom-generation.ts 的
+    // corpusUnavailableReason），所以这里必须挑一个盘上真有的。
+    const corpus = await anyLiveCorpus();
+    if (!corpus) {
+      console.warn('跳过：本机一个建好索引的扩展库都没有');
+      return;
+    }
+    await generate({ learnerProfile: { ...profile, corpus } });
+    expect(lastPersisted(mocks).generation.profile.corpus).toBe(corpus);
 
     mocks.persistClassroom.mockClear();
     await generate({ learnerProfile: profile });

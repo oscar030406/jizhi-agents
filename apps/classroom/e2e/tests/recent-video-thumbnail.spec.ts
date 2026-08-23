@@ -176,7 +176,39 @@ async function seedVideoThumbnailStage({
   await page.goto('/', { waitUntil: 'networkidle' });
 }
 
+/**
+ * 点开卡片后确认真的进了这门课。
+ *
+ * 原来这里还要在课堂里再找一次 `[data-video-element] video[controls]`。
+ * 那个东西现在课堂里不存在了：2026-08-03 起学习者端的 slide 场景**只有讲义一种形态**
+ * （`components/stage/scene-renderer.tsx` 的分支），播放态渲染 `LectureSceneView`，
+ * 它只把文字和图片收进阅读流；画布那条路（`ScreenCanvas` → `BaseVideoElement`）
+ * 除白板外已经没有调用方。所以这一段只断「点卡片进的是这门课」，
+ * 视频本身的解析由上面首页缩略图那几条断（缩略图走的是同一个 mediaRef 解析）。
+ */
+async function expectOpenedClassroom(page: Page, courseName: string) {
+  await expect(
+    page.getByRole('heading', { name: courseName, level: 1 }),
+    '点卡片后没进到这门课的课堂',
+  ).toBeVisible({ timeout: 15_000 });
+}
+
+/**
+ * 首页「最近学习」卡上的视频缩略图。
+ *
+ * 这三条过去整组红在同一处：它们从**匿名首页**找课程卡，而账户系统恒开
+ * （`accountsEnabled()` 直接 return true），匿名访客拿到的是公共落地页——
+ * 上面根本没有最近学习这一栏。卡片只在登录后的工作台上，所以先把会话桩装上。
+ */
 test.describe('Home recent video thumbnails', () => {
+  // 两件事都要先于任何导航做掉：seed helper 第一件事就是 goto('/')。
+  test.beforeEach(async ({ page, mockApi }) => {
+    await mockApi.mockSignedIn();
+    // 「最近学习」在工作台上是折叠区，默认收起，课程卡要展开才渲染
+    // （收起时首屏只有「继续上次」那张英雄卡，它不是 CourseCard）。
+    await page.addInitScript(() => localStorage.setItem('recentClassroomsOpen', 'true'));
+  });
+
   test('renders generated video thumbnails and opens the card from the preview area', async ({
     page,
   }) => {
@@ -195,11 +227,7 @@ test.describe('Home recent video thumbnails', () => {
 
     await card.click({ position: { x: 24, y: 24 } });
     await page.waitForURL(`**/classroom/${TEST_STAGE_ID}`);
-
-    const classroomVideo = page.locator('[data-video-element] video[controls]');
-    await expect(classroomVideo).toHaveCount(1);
-    await expect(classroomVideo).toBeVisible({ timeout: 10_000 });
-    await expect(classroomVideo).toHaveAttribute('src', /^blob:/);
+    await expectOpenedClassroom(page, 'Video preview');
   });
 
   test('falls back from legacy gen_vid_1 refs to the single stored video media file', async ({
@@ -224,11 +252,7 @@ test.describe('Home recent video thumbnails', () => {
 
     await card.click({ position: { x: 24, y: 24 } });
     await page.waitForURL(`**/classroom/${LEGACY_STAGE_ID}`);
-
-    const classroomVideo = page.locator('[data-video-element] video[controls]');
-    await expect(classroomVideo).toHaveCount(1);
-    await expect(classroomVideo).toBeVisible({ timeout: 10_000 });
-    await expect(classroomVideo).toHaveAttribute('src', /^blob:/);
+    await expectOpenedClassroom(page, 'Video preview');
   });
 
   test('does not fall back to another video when the exact legacy ref failed', async ({ page }) => {

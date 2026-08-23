@@ -290,7 +290,10 @@ function StageCard({ stage }: { readonly stage: StageView }) {
   const chunks = stage.id === 'chunk' ? stage.detail?.chunks : undefined;
   const thin = typeof chunks === 'number' && stage.status === 'done' && chunks < THIN_CORPUS_CHUNKS;
   return (
-    <section className="rounded-2xl border border-border bg-card p-4 shadow-card">
+    <section
+      data-testid="intake-run-stage"
+      className="rounded-2xl border border-border bg-card p-4 shadow-card"
+    >
       <header className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-1">
         <h3 className="text-sm font-medium">
           <span className="mr-1 text-muted-foreground">{station(stage.order)}</span>
@@ -714,7 +717,10 @@ export function IntakeRunView({
           回放读的是这次 run 落盘的全量事件，按事件顺序等速重演（不按真实时长——一次 run 的
           相邻事件常常只差几毫秒）。上面的泳道与每站产出跟着游标一起回到当时的样子。
         </p>
-        <ol className="max-h-96 space-y-1 overflow-y-auto rounded-2xl border border-border bg-card p-4 font-mono text-[11px] leading-relaxed shadow-card">
+        <ol
+          data-testid="intake-run-events"
+          className="max-h-96 space-y-1 overflow-y-auto rounded-2xl border border-border bg-card p-4 font-mono text-[11px] leading-relaxed shadow-card"
+        >
           {events.slice(0, shown).map((e) => (
             <li key={e.seq} className="flex gap-2">
               <span className="w-8 shrink-0 tabular-nums text-muted-foreground">{e.seq}</span>

@@ -2,6 +2,7 @@ import type { Page } from '@playwright/test';
 
 import { test, expect } from '../fixtures/base';
 import { KnowledgeIntakePage } from '../pages/knowledge-intake.page';
+import { IntakeRunPage } from '../pages/intake-run.page';
 import { WorkbenchHomePage } from '../pages/workbench-home.page';
 import { GenerationPreviewPage } from '../pages/generation-preview.page';
 import { ClassroomPage } from '../pages/classroom.page';
@@ -34,6 +35,12 @@ import { E2E_CORPUS, E2E_CORPUS_LABEL, E2E_RUN_ID } from '../fixtures/test-data/
  * 生成三站、判官、学情诊断、域清单、库名单、需求自述抽取全部 page.route 截掉。
  * 唯一走真实服务端的是注册/登录（本机文件账户库，不联网、不过模型）——
  * 管理端和造课入口都要登录态，这道闸没有旁路。
+ *
+ * run 详情页是个例外：它是服务端组件、直接读引擎数据目录，`page.route` 够不着。
+ * 它在这里有数，是因为 `playwright.config.ts` 把 `ENGINE_DATA_DIR` 指到了
+ * `e2e/fixtures/engine-data/`。**那棵树里没有一个字节来自真引擎**，
+ * 所以 ① 的那几条断的是「读盘 → 推状态 → 上屏」这条链走不走得通，
+ * 不是「引擎真的跑完了八站」。别拿这一页的 e2e 截图当线上证据。
  *
  * ## 报错要指得出卡在第几环
  *
@@ -110,13 +117,65 @@ test.describe('主线 happy path', () => {
       await intake.confirm();
 
       // 发起成功的用户可见结果就是跳到这次 run 的观看页。
-      // 注：run 详情页本身是服务端读引擎数据目录的，桩伸不进去，
-      // 所以这一环只验到「请求被接受、页面跟着走了」。
       await page.waitForURL(new RegExp(`/admin/knowledge/runs/${E2E_RUN_ID}$`), {
         timeout: 15_000,
       });
 
       expect(probe.intakeCorpus, '① 接入：表单提交上去的库名不是页面上填的那个').toBe(E2E_CORPUS);
+
+      // ── run 详情页：这一页是服务端组件、直接读引擎数据目录，page.route 的桩
+      //    伸不进去。它有数是因为 playwright.config 把 ENGINE_DATA_DIR 指到了
+      //    e2e/fixtures/engine-data/，下面每一个数字都出自那两个文件。
+      //    **所以这几条断的是「读盘 → 推状态 → 上屏」这条链，不是引擎真跑了。**
+      const run = new IntakeRunPage(page);
+
+      await expect(run.identity, '① 接入：run 详情页没印出「库名 · run 号」那一行').toBeVisible();
+
+      // 泳道的价值全在「并行画成并行」。③检索索引 与 ④知识整理 都只依赖 ②切块，
+      // 编排器同时发车——页面必须把它们放进同一波并标出来。画成串行就是错的。
+      await expect(
+        page.getByText('第 3 波 · 2 站（并行）'),
+        '① 接入：泳道没把同一波的两站标成并行（并行被画成串行，这一页就白做了）',
+      ).toBeVisible();
+      await expect(
+        run.stageCard('检索索引'),
+        '① 接入：检索索引这一站没标出与别的站同时在跑（事件里两站区间是重叠的）',
+      ).toContainText('与另外 1 站同时在跑');
+
+      // 每站实数：卡上的数字来自事件 detail，不是页面自己编的占位。
+      await expect(
+        run.stageCard('切块入库'),
+        '① 接入：切块站没显示证据块数（每站产出卡没吃到事件里的 detail）',
+      ).toContainText('证据块');
+      await expect(run.stageCard('切块入库'), '① 接入：证据块数不是 128').toContainText('128');
+
+      // 事件流：落盘 11 条，页面就该显示 11 条。
+      await expect(run.eventCount(11, 11), '① 接入：事件流计数不是 11 / 11 条').toBeVisible();
+      await expect(run.eventList.locator('li'), '① 接入：事件流列表不是 11 行').toHaveCount(11);
+
+      // 回放：拖游标不是播一段动画，是拿前 n 条事件重新推一遍状态。
+      // 所以退回第 5 条时，泳道里第 6、7 条才开跑的两站必须回到「等待上游」——
+      // 这才证明回放与直播走的是同一条 deriveView，而不是另做的一份演出。
+      await run.replayCursor.focus();
+      await run.replayCursor.press('Home');
+      await expect(run.eventCount(0, 11), '① 接入：游标推到起点后计数没归零').toBeVisible();
+      await expect(
+        run.eventList,
+        '① 接入：游标在起点时事件流没出空态那一行',
+      ).toContainText('（游标在起点，还没有事件）');
+
+      for (let i = 0; i < 5; i++) await run.replayCursor.press('ArrowRight');
+      await expect(run.eventCount(5, 11), '① 接入：游标走到第 5 条时计数没跟上').toBeVisible();
+      await expect(run.eventList.locator('li'), '① 接入：游标在第 5 条时列出的不是 5 行').toHaveCount(
+        5,
+      );
+      await expect(
+        run.stageCard('知识整理'),
+        '① 接入：回放退回第 5 条时，第 7 条才开跑的知识整理站没退回「等待上游」（回放没走 deriveView，只是播了段动画）',
+      ).toContainText('等待上游');
+
+      await run.replayCursor.press('End');
+      await expect(run.eventCount(11, 11), '① 接入：游标推回末尾后没回到最终态').toBeVisible();
     });
 
     // ── ② 课程生成 ──────────────────────────────────────────────────────

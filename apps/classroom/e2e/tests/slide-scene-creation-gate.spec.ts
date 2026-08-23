@@ -1,10 +1,14 @@
 import { test, expect } from '../fixtures/base';
-import { HomePage } from '../pages/home.page';
+import { WorkbenchHomePage } from '../pages/workbench-home.page';
 import { GenerationPreviewPage } from '../pages/generation-preview.page';
 import { ClassroomPage } from '../pages/classroom.page';
-import { createSettingsStorage } from '../fixtures/test-data/settings';
+import { createSettingsStorage, USABLE_PROVIDERS_CONFIG } from '../fixtures/test-data/settings';
 
-const SETTINGS_STORAGE = createSettingsStorage({ sidebarCollapsed: false });
+// 造课按钮要「有一个可用的服务商」才亮：apiKey + baseUrl + 至少一个模型，缺一样点不动。
+const SETTINGS_STORAGE = createSettingsStorage({
+  sidebarCollapsed: false,
+  providersConfig: USABLE_PROVIDERS_CONFIG,
+});
 
 /**
  * Scene creation is enabled in the slide editor: the inter-thumb "+" insertion
@@ -13,6 +17,9 @@ const SETTINGS_STORAGE = createSettingsStorage({ sidebarCollapsed: false });
  * slide is authored via the script timeline / MAIC Agent.) This test guards
  * that the entry points stay available — flip SCENE_CREATION_ENABLED off and it
  * fails.
+ *
+ * 造课这一段走登录后的工作台：账户系统恒开，匿名访客拿到的是公共落地页，
+ * 上面没有造课按钮——旧写法从匿名首页点「进入课堂」，第一步就点不着。
  */
 test.describe('Slide editor — scene creation (enabled)', () => {
   test.beforeEach(async ({ page, mockApi }) => {
@@ -20,13 +27,15 @@ test.describe('Slide editor — scene creation (enabled)', () => {
       localStorage.setItem('settings-storage', settings);
     }, SETTINGS_STORAGE);
     await mockApi.setupGenerationMocks();
+    // 造课入口只在登录后出现。这条用例不碰服务端账户库，用桩把会话查询接管掉。
+    await mockApi.mockSignedIn();
   });
 
   test('Pro mode rail exposes insert + duplicate alongside rename/delete', async ({
     page,
   }, testInfo) => {
     // Generate a classroom through the mocked pipeline.
-    const home = new HomePage(page);
+    const home = new WorkbenchHomePage(page);
     await home.goto();
     await home.fillRequirement('讲解光合作用');
     await home.submit();

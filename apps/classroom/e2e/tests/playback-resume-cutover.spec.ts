@@ -98,20 +98,30 @@ test('playback cursor persists to device KV and survives a fresh page', async ({
   await page.goto(`/classroom/${STAGE_ID}`);
   await expect(page.getByTestId('scene-title').first()).toBeAttached({ timeout: 30_000 });
 
-  // The central play affordance is a non-semantic motion.div overlay
-  // (canvas-area.tsx z-[102]); click it to start the lecture.
-  const overlayPlay = page.locator('div[class*="z-[102]"] div.pointer-events-auto').first();
-  await overlayPlay.waitFor({ state: 'visible', timeout: 15_000 });
-  await overlayPlay.click();
-
-  // Speech actions advance on reading-time timers; the cursor save is
-  // debounced 1s behind progress.
-  await expect
-    .poll(async () => (await readCursor(page))?.sceneId ?? null, {
-      timeout: 60_000,
-      message: 'the device cursor should be persisted while the lecture plays',
-    })
-    .toBe(SCENE_ID);
+  // 起播走底部工具条上的 Play 按钮。原来点的是画布中央那个 `z-[102]` 的
+  // motion.div 遮罩——那个遮罩已经没有了（全仓搜不到 `z-[102]`），
+  // 现在唯一的起播入口就是工具条这一个，它有 aria-label，不必按 class 猜。
+  //
+  // `exact: true` 不能省：`getByRole` 的 name 默认是**子串**匹配，而侧栏那个
+  // 场景条目的无障碍名是「第 1 页 Playback E2E Scene」——里头就有 "Play"。
+  // 不加 exact，`.first()` 拿到的是侧栏条目，点它只是切场景，起播按钮根本没被碰到
+  // （实测：连点 12 次、24 秒，光标一次都没落盘）。
+  //
+  // 按钮先上屏、播放引擎后建好（引擎在当前场景加载完那一拍才 new 出来），
+  // 早按的那一下会被 `handlePlayPause` 开头的 `if (!engine) return` 吞掉，
+  // 界面上没有任何反馈——所以按到光标真的落盘为止，而不是按一下就干等。
+  // `autoPlayLecture: true` 单独不起播（实测），起播这一下必须是人点的。
+  // 讲稿动作按阅读时长推进，光标写盘还比进度晚 1 秒防抖。
+  const play = page.getByRole('button', { name: 'Play', exact: true });
+  await play.first().waitFor({ state: 'visible', timeout: 15_000 });
+  await expect(async () => {
+    // 播起来之后按钮的 aria-label 变成 Pause，这里就不会再点第二下。
+    if (await play.count()) await play.first().click();
+    expect(
+      (await readCursor(page))?.sceneId ?? null,
+      'the device cursor should be persisted while the lecture plays',
+    ).toBe(SCENE_ID);
+  }).toPass({ timeout: 60_000, intervals: [500, 1000, 2000] });
 
   // Fresh page = empty sessionStorage → the KV cursor is the resume source
   // and must still be readable.

@@ -13,7 +13,7 @@ async function seedDatabase(page: import('@playwright/test').Page) {
   await page.addInitScript((settings) => {
     localStorage.setItem('settings-storage', settings);
   }, SETTINGS_STORAGE);
-  // locale 种子统一在 e2e/fixtures/base.ts 里下（英文断言：'Theme' / 'Light' / 'Settings'）。
+  // locale 种子统一在 e2e/fixtures/base.ts 里下（英文断言：'Theme' / 'Light' / 'Fullscreen'）。
 
   // Navigate to home page first — this causes Dexie to open/create the DB at v8
   // with the correct schema. We wait for network idle to ensure Dexie is done.
@@ -162,112 +162,94 @@ test.describe('Classroom Interaction', () => {
     await expect(page.getByRole('heading', { name: '光反应' })).toBeVisible();
   });
 
-  test('caps and restores the non-presentation roundtable draft height', async ({ page }) => {
+  /**
+   * 圆桌输入框的草稿：长草稿不许把输入条撑爆，关掉再开草稿还在。
+   *
+   * 这条用例原来打的是圆桌的**非放映**分支（`roundtable-non-presentation-*`）。
+   * 那套 DOM 现在进不去了：2026-08-03「导学大一统」之后，圆桌只在放映态挂载
+   * （`PlaybackChromeRoot` 里的 `mode === 'playback' && isPresenting`），
+   * 而圆桌组件一进去就 `if (isPresenting) return 放映分支`——非放映那半棵树
+   * 一个渲染路径都没有了；常规播放的输入已经迁到右栏导学（`chat-area.tsx`）。
+   * 所以断言跟着搬到**放映态的输入条**：同一个 T 键、同一份草稿状态，
+   * 只是高度上限从 100px 变成 80px，且靠 `field-sizing: content` 自己长而不是 JS 改内联高度。
+   *
+   * 放映态要真的进全屏（`requestFullscreen`），Playwright 的 Chromium 支持，
+   * 点击带用户手势所以不会被浏览器策略拒掉。
+   */
+  test('放映态输入条：长草稿封顶 80px，关掉再开草稿还在', async ({ page }) => {
     const classroom = new ClassroomPage(page);
     await classroom.goto(TEST_STAGE_ID);
     await classroom.waitForLoaded();
+    await expect(classroom.sidebarScenes.first()).toBeVisible({ timeout: 15_000 });
+
+    // 圆桌只在放映态挂载，T 键的监听器也在圆桌里——不先进放映，按 T 什么都不会发生。
+    await page.getByRole('button', { name: 'Fullscreen' }).click();
+    await expect
+      .poll(() => page.evaluate(() => !!document.fullscreenElement), {
+        timeout: 10_000,
+        message: '没能进入放映态（全屏请求被拒）',
+      })
+      .toBe(true);
 
     await page.keyboard.press('T');
     const textarea = page.getByPlaceholder('Type your message...', { exact: true });
-    const inputStage = page.getByTestId('roundtable-non-presentation-input-stage');
-    await expect(textarea).toBeVisible();
+    await expect(textarea, '按 T 没打开圆桌输入条').toBeVisible();
 
     const readMetrics = () =>
       textarea.evaluate((element) => {
-        const computedStyle = getComputedStyle(element);
-        const containingPanel = element.closest<HTMLElement>(
-          '[data-testid="roundtable-non-presentation-input-panel"]',
-        );
-        if (!containingPanel) {
-          throw new Error('Could not find the non-presentation roundtable input panel');
-        }
-
-        const overflowHiddenCard = containingPanel.closest<HTMLElement>(
-          '[data-testid="roundtable-non-presentation-card"]',
-        );
-        if (!overflowHiddenCard) {
-          throw new Error('Could not find the roundtable overflow-hidden card');
-        }
-
-        const cardStyle = getComputedStyle(overflowHiddenCard);
-        if (
-          cardStyle.overflow !== 'hidden' ||
-          cardStyle.overflowX !== 'hidden' ||
-          cardStyle.overflowY !== 'hidden'
-        ) {
-          throw new Error('The roundtable clipping card must hide overflow');
-        }
-
-        const panelRect = containingPanel.getBoundingClientRect();
-        const cardRect = overflowHiddenCard.getBoundingClientRect();
+        const style = getComputedStyle(element);
         return {
-          computedHeight: computedStyle.height,
-          computedMaxHeight: computedStyle.maxHeight,
-          computedOverflowY: computedStyle.overflowY,
-          computedFieldSizing: computedStyle.getPropertyValue('field-sizing'),
-          inlineHeight: element.style.height,
-          inlineFieldSizing: element.style.getPropertyValue('field-sizing'),
+          computedMaxHeight: style.maxHeight,
+          computedFieldSizing: style.getPropertyValue('field-sizing'),
           boundingRectHeight: element.getBoundingClientRect().height,
           clientHeight: element.clientHeight,
           scrollHeight: element.scrollHeight,
-          containingPanelHeight: panelRect.height,
-          panelTop: panelRect.top,
-          cardTop: cardRect.top,
-          cardHeight: cardRect.height,
-          cardOverflow: cardStyle.overflow,
         };
       });
 
-    await expect(inputStage).toHaveCSS('transform', 'none');
     const initialMetrics = await readMetrics();
-    const longDraft = Array.from({ length: 24 }, (_, index) => `Line ${index + 1}`).join('\n');
+    expect(initialMetrics.computedMaxHeight, '输入条没有高度上限，长草稿会把它撑爆').toBe('80px');
 
+    const longDraft = Array.from({ length: 24 }, (_, index) => `Line ${index + 1}`).join('\n');
     await textarea.fill(longDraft);
-    await expect.poll(async () => (await readMetrics()).inlineHeight).toBe('100px');
+    await expect
+      .poll(async () => (await readMetrics()).scrollHeight > (await readMetrics()).clientHeight, {
+        message: '24 行草稿没有溢出——说明它把输入条撑高了，而不是被上限截住',
+      })
+      .toBe(true);
     const longDraftMetrics = await readMetrics();
 
-    await test.info().attach('roundtable textarea pre-post metrics', {
+    await test.info().attach('presentation textarea metrics', {
       body: JSON.stringify({ initialMetrics, longDraftMetrics }, null, 2),
       contentType: 'application/json',
     });
 
     const metricSummary = JSON.stringify({ initialMetrics, longDraftMetrics });
     expect(
-      longDraftMetrics.panelTop,
-      `Roundtable input panel must stay inside its overflow-hidden card: ${metricSummary}`,
-    ).toBeGreaterThanOrEqual(longDraftMetrics.cardTop);
-    expect(longDraftMetrics.cardOverflow).toBe('hidden');
-    expect(
-      longDraftMetrics.computedFieldSizing,
-      `Roundtable textarea metrics: ${metricSummary}`,
-    ).not.toBe('content');
-    expect(
-      longDraftMetrics.inlineFieldSizing,
-      `Roundtable textarea metrics: ${metricSummary}`,
-    ).toBe('');
-    expect(longDraftMetrics.inlineHeight).toBe('100px');
-    expect(longDraftMetrics.computedMaxHeight).toBe('100px');
-    expect(longDraftMetrics.computedOverflowY).toBe('auto');
-    expect(longDraftMetrics.boundingRectHeight).toBeLessThanOrEqual(100);
-    expect(longDraftMetrics.scrollHeight).toBeGreaterThan(longDraftMetrics.clientHeight);
+      longDraftMetrics.boundingRectHeight,
+      `长草稿把输入条撑过了 80px 上限：${metricSummary}`,
+    ).toBeLessThanOrEqual(80);
 
+    // 短草稿要缩回去：高度是跟着内容走的，不是一路只涨不落。
     await textarea.fill('Short line');
     await expect
       .poll(async () => (await readMetrics()).clientHeight)
       .toBeLessThan(longDraftMetrics.clientHeight);
-    await expect.poll(async () => (await readMetrics()).inlineHeight).not.toBe('100px');
 
+    // 关掉再开，草稿还在——Escape 只收面板，不清空已经写的字。
     await textarea.fill(longDraft);
     await page.keyboard.press('Escape');
     await expect(textarea).toBeHidden();
 
     await page.keyboard.press('T');
     await expect(textarea).toBeVisible();
-    await expect(textarea).toHaveValue(longDraft);
-    await expect.poll(async () => (await readMetrics()).inlineHeight).toBe('100px');
+    await expect(textarea, 'Escape 之后再开，草稿被清空了').toHaveValue(longDraft);
+    await expect
+      .poll(async () => (await readMetrics()).boundingRectHeight)
+      .toBeLessThanOrEqual(80);
   });
 
-  test('keeps body spacing stable for header menus and settings modal', async ({ page }) => {
+  test('课堂顶栏主题菜单开合不改变 body 的横向留白', async ({ page }) => {
     const classroom = new ClassroomPage(page);
     await classroom.goto(TEST_STAGE_ID);
     await classroom.waitForLoaded();
@@ -297,17 +279,21 @@ test.describe('Classroom Interaction', () => {
     };
 
     // 语言切换器已于 2026-08-16 撤除（界面统一简体中文），原本这里先开一次
-    // 语言菜单。同一条不变量（Radix 菜单开合不动 body 宽度）由下面的主题菜单
-    // 与设置弹窗继续覆盖，故只删这一段、不删用例。
+    // 语言菜单。设置弹窗这一半也没了：客户端的模型服务商设置面板整块撤掉了
+    // （服务商改由服务端 `/api/server-providers` 下发），课堂顶栏现在只剩
+    // 主题菜单、协同控制台链接、Pro 开关和导出——**全站再没有一个可达的
+    // Radix 模态弹层**，`locked: true` 那一半没有承载它的界面了。
+    //
+    // 剩下主题菜单这一半仍然值钱：它是 `modal={false}` 的 Radix 菜单，
+    // 一旦有人把它改成模态，Radix 会给 body 打上 `data-scroll-locked` 并塞进
+    // 补偿滚动条的 padding-right，整页横跳一下——这条就是钉住这件事的。
     await page.getByRole('button', { name: 'Theme' }).click();
     await expect(page.getByRole('menuitem', { name: 'Light' })).toBeVisible();
     await expectBodyScrollState(false);
 
     await page.keyboard.press('Escape');
     await expect(page.getByRole('menuitem', { name: 'Light' })).toBeHidden();
-
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: 'Settings' })).toBeVisible();
-    await expectBodyScrollState(true);
+    // 收起来之后也要复原：菜单关掉却留下 padding，同样是横跳。
+    await expectBodyScrollState(false);
   });
 });

@@ -1,10 +1,14 @@
 import { test, expect } from '../fixtures/base';
-import { HomePage } from '../pages/home.page';
+import { WorkbenchHomePage } from '../pages/workbench-home.page';
 import { GenerationPreviewPage } from '../pages/generation-preview.page';
 import { ClassroomPage } from '../pages/classroom.page';
-import { createSettingsStorage } from '../fixtures/test-data/settings';
+import { createSettingsStorage, USABLE_PROVIDERS_CONFIG } from '../fixtures/test-data/settings';
 
-const SETTINGS_STORAGE = createSettingsStorage({ sidebarCollapsed: false });
+// 造课按钮要「有一个可用的服务商」才亮：apiKey + baseUrl + 至少一个模型，缺一样点不动。
+const SETTINGS_STORAGE = createSettingsStorage({
+  sidebarCollapsed: false,
+  providersConfig: USABLE_PROVIDERS_CONFIG,
+});
 
 /**
  * PR3b — slide content surface completion (#647). Verifies the new
@@ -12,6 +16,9 @@ const SETTINGS_STORAGE = createSettingsStorage({ sidebarCollapsed: false });
  * the slide-background insert item, z-order on the element bar, and the
  * image-type bar (replace/flip). Icon-class selectors keep the
  * assertions locale-independent.
+ *
+ * 造课这一段走登录后的工作台：账户系统恒开，匿名访客拿到的是公共落地页，
+ * 上面没有造课按钮——旧写法从匿名首页点「进入课堂」，第一步就点不着。
  */
 test.describe('Slide content surface (#647)', () => {
   test.beforeEach(async ({ page, mockApi }) => {
@@ -19,18 +26,16 @@ test.describe('Slide content surface (#647)', () => {
       localStorage.setItem('settings-storage', settings);
     }, SETTINGS_STORAGE);
     await mockApi.setupGenerationMocks();
+    // 造课入口只在登录后出现。这条用例不碰服务端账户库，用桩把会话查询接管掉。
+    await mockApi.mockSignedIn();
   });
 
   test('background, z-order, and image bar surface in Pro mode', async ({ page }, testInfo) => {
     // Generate a classroom through the mocked pipeline, then enter Pro mode.
-    const home = new HomePage(page);
+    const home = new WorkbenchHomePage(page);
     await home.goto();
-    // Dismiss the "What's New" changelog modal that overlays the home page on
-    // first load (it intercepts the submit button otherwise).
-    await page
-      .getByRole('button', { name: /got it|知道了/i })
-      .click({ timeout: 5_000 })
-      .catch(() => {});
+    // 原来这里先关一次「What's New」更新弹层。那个弹层已经没有了（全仓搜不到它的
+    // 按钮文案），留着只是每跑一次白等 5 秒的超时，删掉。
     await home.fillRequirement('讲解光合作用');
     await home.submit();
     await page.waitForURL(/\/generation-preview/);
