@@ -64,8 +64,12 @@ const LABELS: Record<string, string> = {
  * 不该再回来改这个文件（那正是「工程师替系统干活」的那一段）。
  */
 function registryLabel(domain: string): string | undefined {
-  const label = domainRegistryEntry(domain)?.label?.trim();
-  return label || undefined;
+  const entry = domainRegistryEntry(domain);
+  const label = entry?.label?.trim();
+  // label 与目录名相同是引擎的退化写法（label_source: corpus_name，老库没有中文名）
+  // ——那不是名字，是占位。放行它会盖掉下面兜底表里的真中文名（ai 实测中招）。
+  if (!label || label === entry?.corpus) return undefined;
+  return label;
 }
 
 /**

@@ -531,6 +531,13 @@ export async function readCorporaWithDrift(): Promise<{
   corpora: CorpusOverview[];
   drift: string[];
 }> {
+  // 先灌域注册清单：这页的卡标题与漂移提示都走 domainLabel，而服务端那份
+  // 内存视图只有 /api/domains 或课程域推导被请求过才有人灌——没人灌时新库
+  // 上屏就是裸英文目录名（smart-manufacturing 第一次重投后实测撞上）。
+  // 动态 import 照抄 course-domains.ts：domain-registry 反向 import 本文件的
+  // enginePath，静态引会成环。
+  const { readDomainRegistry } = await import('@/lib/server/domain-registry');
+  await readDomainRegistry().catch(() => null);
   const [corpora, snapshot] = await Promise.all([readCorpora(), readSnapshotCorpora()]);
   return { corpora, drift: snapshotDrift(corpora, snapshot) };
 }

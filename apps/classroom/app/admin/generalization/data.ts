@@ -482,6 +482,10 @@ async function readIntakePanel(corpus: string, checkups: Map<string, Checkup>): 
 export const SHOWCASE_CORPORA = ['ai', 'smart-manufacturing', 'iotdb'] as const;
 
 export async function readGeneralizationPanels(): Promise<DomainPanel[]> {
+  // 与 readCorporaWithDrift 同一个坑：面板名走 domainLabel，先灌注册清单，
+  // 否则重投出来的新库在这页上是裸英文目录名。
+  const { readDomainRegistry } = await import('@/lib/server/domain-registry');
+  await readDomainRegistry().catch(() => null);
   const checkups = await readCheckups();
   const [main, ...rest] = await Promise.all([
     readMainPanel(checkups),

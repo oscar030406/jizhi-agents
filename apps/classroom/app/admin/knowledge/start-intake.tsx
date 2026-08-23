@@ -448,6 +448,16 @@ export function StartIntake() {
               ：给新库建嵌入索引，按 token 计费；不开则用 TF-IDF 检索。
             </span>
           </label>
+          {/* 引擎的 extract_concepts 一直有，表单里一直没有——SM 与 iotdb 重投
+              都因此少了概念词表和前置图（就绪度两道闸直接 ✗）。与 exclude 同一族缺口。 */}
+          <label className="flex items-start gap-2 text-[11px] leading-relaxed">
+            <input type="checkbox" name="extract_concepts" value="true" className="mt-0.5" />
+            <span>
+              <span className="font-medium text-foreground">概念词表与前置图</span>
+              ：从语料里抽概念词表、建章节前置关系图，就绪度的两道闸看它们——调 LLM，按 token
+              计费。
+            </span>
+          </label>
           {/* E31 T0：追加。此前「补几篇文档进已有的库」的唯一出路是整库重建，
               而重建会让 source_id 重新编号——旧课正文里的出处集体指向别的段落，
               课看着没变，引文全错位。追加只接在后面，既有块一个字节不动。
@@ -551,6 +561,11 @@ export function StartIntake() {
             {vector && (
               <li className="text-muted-foreground">
                 向量索引开：按块数调一次嵌入接口。这一站是旁路，失败只记告警、不判 run 失败。
+              </li>
+            )}
+            {pending?.get('extract_concepts') === 'true' && (
+              <li className="text-muted-foreground">
+                概念词表与前置图开：④整理知识站会调 LLM 抽词表、建前置图，按 token 计费。
               </li>
             )}
           </ul>
