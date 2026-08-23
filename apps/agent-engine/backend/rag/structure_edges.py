@@ -67,15 +67,30 @@ _ASSET = re.compile(r"\.(?!md$)[A-Za-z0-9]{1,5}$")
 
 def page_refs(text: str) -> list[str]:
     """一篇文档里指向**同语料其它页面**的相对引用。"""
-    out: list[str] = []
-    for raw in _XREF_ANGLE.findall(text):
-        out.append(raw)
-    for raw in _XREF_MD.findall(text):
-        target = raw.split("#", 1)[0].strip()
+    return [target for target, _pos in page_refs_at(text)]
+
+
+def page_refs_at(text: str) -> list[tuple[str, int]]:
+    """同上，但带每次出现的**字符位置**。
+
+    位置这一格是为了让每次引用拿到**自己那句话**。原来 `_context` 用
+    `text.find(needle)` 找第一次出现，同一页多次引用同一目标时，
+    每次拿回来的都是同一句——审表上两条不同的边贴着一模一样的引文，
+    就是这么来的（iotdb 那份表的第 1、2 条）。判「详见」还是「请先」
+    靠的正是那句话，取错了句子等于判据本身是错的。
+    """
+    out: list[tuple[str, int]] = []
+    for m in _XREF_ANGLE.finditer(text):
+        out.append((m.group(1), m.start()))
+    for m in _XREF_MD.finditer(text):
+        target = m.group(1).split("#", 1)[0].strip()
         if not target or _NOT_A_PAGE.match(target) or _ASSET.search(target):
             continue
-        out.append(target)
+        out.append((target, m.start()))
+    out.sort(key=lambda x: x[1])
     return out
+
+
 #: markdown 标题，用来给章取中文名。
 HEADING = re.compile(r"^#{1,6}\s+(.+?)\s*$", re.MULTILINE)
 
@@ -170,11 +185,15 @@ PREREQ_MARK = re.compile(
 )
 
 
-def _context(text: str, needle: str) -> str:
+def _context(text: str, needle: str, at: int | None = None) -> str:
     """引用出现处前后各一小段，压成一行。**这一格是人工抽检最省时间的东西**：
     章名只能告诉你两章叫什么，引用当时那句话才告诉你链接为什么存在——
-    「需要先启用 X」是前置，「更多细节参见 X」不是。"""
-    i = text.find(needle)
+    「需要先启用 X」是前置，「更多细节参见 X」不是。
+
+    `at` 是这次出现的位置。不给就退回找第一次出现——那会让同一页的多次引用
+    共用同一句话，判据取错句子等于判据是错的（见 `page_refs_at`）。
+    """
+    i = at if at is not None else text.find(needle)
     if i < 0:
         return ""
     lo = max(0, i - CONTEXT_CHARS)
@@ -202,20 +221,26 @@ def link_intent(context: str) -> str:
     return "unknown"
 
 
-def xref_counts(files: dict[str, str]) -> tuple[Counter, int, int, dict]:
-    """章间引用计数。-> (Counter[(源章, 目标章)], 引用总数, 未跨章数, 上下文样例)
+def xref_counts(files: dict[str, str]) -> tuple[Counter, int, int, dict, dict]:
+    """章间引用计数。-> (计数, 引用总数, 未跨章数, 上下文样例, 措辞分布)
 
     计的是**全部**跨章引用，不按措辞过滤——过滤器（`link_intent`）证据不足，见其文档。
     已知代价：纯按链接数计会把「详见 X」这种指路网络也算成前置网络，
     实测方向正确率只有 48%（21 条人工初审 10 条对）。这是当前这一层的真实精度，
     所以产出的边一律 `reviewed: false`、只作软前置、不拦人。
+
+    **措辞分布（第五个返回值）只记不判**：每条边的引用里有几次是「详见」族、
+    几次是「请先」族、几次认不出。记它是为了让「这条规则值多少」能被算出来——
+    在此之前，想知道过滤后的正确率只能把整条链重跑一遍，而重跑要花钱。
+    要不要按它过滤，等一批**不是写规则的人标的**边（见 `link_intent` 文档）。
     """
     pair: Counter = Counter()
     contexts: dict[tuple[str, str], list[str]] = defaultdict(list)
+    intents: dict[tuple[str, str], Counter] = defaultdict(Counter)
     total = same = 0
     for rel, text in files.items():
         src = chapter_of(rel)
-        for target in page_refs(text):
+        for target, at in page_refs_at(text):
             total += 1
             resolved = resolve(rel, target)
             # `.md` 结尾的引用已经带文件名，不能再补一层，否则父目录算错一级
@@ -229,10 +254,11 @@ def xref_counts(files: dict[str, str]) -> tuple[Counter, int, int, dict]:
                 same += 1
                 continue
             pair[(src, dst)] += 1
-            snippet = _context(text, target)
+            snippet = _context(text, target, at)
+            intents[(src, dst)][link_intent(snippet)] += 1
             if len(contexts[(src, dst)]) < 3 and snippet:
                 contexts[(src, dst)].append(snippet)
-    return pair, total, same, dict(contexts)
+    return pair, total, same, dict(contexts), {k: dict(v) for k, v in intents.items()}
 
 
 def structural_edges(
@@ -242,7 +268,7 @@ def structural_edges(
 
     返回 [{prereq, target, links, back_links, because}]，按引用次数降序。
     """
-    pair, _total, _same, contexts = xref_counts(files)
+    pair, _total, _same, contexts, intents = xref_counts(files)
     seen: set[tuple[str, str]] = set()
     edges: list[dict] = []
     for (src, dst), n_fwd in pair.items():
@@ -262,6 +288,10 @@ def structural_edges(
             "back_links": n_back,
             "because": f"「{src}」的页面 {n_fwd} 次引用「{dst}」，反向 {n_back} 次",
             "contexts": contexts.get((src, dst), []),
+            # 这条边的引用里，措辞各占几次。**只记不判**——按它过滤要等
+            # 一批不是写规则的人标的边（见 `link_intent`）。记下来是为了
+            # 「过滤能带来多少」这件事能算，而不是每问一次就重跑一遍链。
+            "intents": intents.get((src, dst), {}),
         })
     edges.sort(key=lambda e: -e["links"])
     return edges
@@ -278,7 +308,7 @@ def probe(root: Path) -> dict:
     """一次性给出这份语料的结构信号清单。调用侧据此决定走哪条路径。"""
     files = load_markdown(root)
     plane = chapter_plane(files)
-    pair, total, same, _ctx = xref_counts(files)
+    pair, total, same, _ctx, _intents = xref_counts(files)
     edges = structural_edges(files)
     return {
         "files": len(files),
