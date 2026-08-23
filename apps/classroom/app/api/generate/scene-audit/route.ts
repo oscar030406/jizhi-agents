@@ -14,6 +14,7 @@ import { NextRequest } from 'next/server';
 import { auditSceneContent } from '@/lib/generation/hallucination-audit';
 import { fetchEvidence, evidenceForJudge } from '@/lib/generation/evidence-grounding';
 import { corpusOf } from '@/lib/generation/learner-profile';
+import { isAuditGateEnabled } from '@/lib/config/feature-flags';
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { buildAuditPanel } from '@/lib/server/audit-panel';
@@ -59,6 +60,13 @@ export async function POST(req: NextRequest) {
       corpus,
     );
 
+    // 消融开关：`AUDIT_GATE=0` 时逐屏路也跳过审核，与整课路同一口径。
+    // 两条路都要挡——只挡一条的话消融跑出来的「关审核门」那一档，
+    // 其实有一半的屏还在被审。
+    if (!isAuditGateEnabled()) {
+      log.warn(`[消融] AUDIT_GATE=0，"${outline.title}" 跳过事实审核，本屏不带判词`);
+      return apiSuccess({ content, audit: null });
+    }
     const { audit, content: auditedContent } = await auditSceneContent({
       sceneTitle: outline.title,
       content,

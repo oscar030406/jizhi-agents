@@ -12,6 +12,7 @@ import { judgeRole } from '@/components/agents/judge-labels';
 import { isIncrementalReauditEnabled } from '@/lib/config/feature-flags';
 import { parseJsonResponse } from '@/lib/generation/json-repair';
 import { mergeNumericBypass } from './numeric-claims';
+import { isNumericBypassEnabled } from '@/lib/config/feature-flags';
 
 export type ClaimVerdict = 'supported' | 'uncertain' | 'incorrect';
 
@@ -473,6 +474,9 @@ async function runJudge(
   // 都碰不到，**看起来是「这一屏没问题」，实际是「这一屏没被看过」**。
   // 补进来的一律 uncertain 且永不判 incorrect：旁路只知道这里有个带单位的数，
   // 不知道它对不对；查无对照就弃权，判错会触发修订环去改一个可能本来正确的参数。
+  // 消融开关：`NUMERIC_BYPASS=0` 时判官抽到什么就是什么，不补漏也不弃权。
+  // 关掉等于让带单位的数字回到「没人看过」的状态——这正是要量的那一档。
+  if (!isNumericBypassEnabled()) return judged;
   return mergeNumericBypass(judged, teachingText, evidence, (claim, reason) => ({
     claim,
     verdict: 'uncertain' as ClaimVerdict,

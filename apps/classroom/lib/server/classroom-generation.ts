@@ -14,6 +14,10 @@ import {
 import type { AICallFn } from '@/lib/generation/pipeline-types';
 import type { AgentInfo } from '@/lib/generation/pipeline-types';
 import { getDefaultAgents } from '@/lib/orchestration/registry/store';
+import {
+  isAuditGateEnabled,
+  isCourseCoherenceEnabled,
+} from '@/lib/config/feature-flags';
 import { createLogger } from '@/lib/logger';
 import { isProviderKeyRequired } from '@/lib/ai/providers';
 import { resolveClassroomWebSearchConfig } from '@/lib/server/web-search-config';
@@ -597,7 +601,9 @@ async function generateClassroomInner(
   // 三张课程级表一次算定（类比 / 数字例登记 / 概念引入顺序），逐屏原样下发。
   // 原来只有类比、还是边生成边捡的——**边捡的东西会随生成顺序漂**，
   // 而这三样恰恰是「全课必须一致」的东西，漂了就是要治的病本身。
-  const frame: CourseFrame = courseFrameFromOutlines(outlines);
+  // 消融开关：`COURSE_COHERENCE=0` 时不算三表、也不拼指令，回到「每屏各自即兴」。
+  const coherenceOn = isCourseCoherenceEnabled();
+  const frame: CourseFrame = coherenceOn ? courseFrameFromOutlines(outlines) : {};
   const progress = emptyProgress();
   /** 教具形态去重仍用 Set 收，进提示词时转成清单。 */
   const usedTemplateIds = new Set<string>();
@@ -660,6 +666,24 @@ async function generateClassroomInner(
 
   
 async function auditAndBuildScene(p: PreparedScene) {
+    // 消融开关：`AUDIT_GATE=0` 时整条审核门不跑——不调判官、不写 `scene.audit`。
+    // **只有显式设成 '0' 才走这条**，默认与设错值一律照常审核
+    // （实验开关拼错时该退回生产行为，不该悄悄把审核门关掉）。
+    if (!isAuditGateEnabled()) {
+      log.warn(`[消融] AUDIT_GATE=0，"${p.safeOutline.title}" 跳过事实审核，本屏不带判词`);
+      const actions = await withGenerationRetry(
+        () =>
+          generateSceneActions(p.safeOutline, p.content, sceneAiCall, {
+            agents,
+            languageDirective,
+          }),
+        {
+          label: `scene ${p.index + 1}/${outlines.length} actions`,
+          onRetry: (event) => reportSceneRetry(p.index, p.safeOutline.title, 'actions', event),
+        },
+      );
+      return { p, sceneAudit: undefined, gatedContent: p.content, actions };
+    }
     const { audit: sceneAudit, content: auditedContent } = await auditSceneContent({
       sceneTitle: p.safeOutline.title,
       content: p.content,
@@ -770,7 +794,9 @@ async function auditAndBuildScene(p: PreparedScene) {
         // 没有证据就整个字段不写——空对象会让读的人以为算出来是空的。
         const concepts = sceneEvidence ? sceneConceptsFromChunks(sceneEvidence.chunks) : null;
         api.scene.update(sceneId, {
-          audit: sceneAudit,
+          // 审核门关掉时整个字段不写——写一个空 audit 会让读的人
+          // 以为判官跑了且什么都没抓到（与 grounding/concepts 同一纪律）。
+          ...(sceneAudit ? { audit: sceneAudit } : {}),
           ...(grounding ? { grounding } : {}),
           ...(concepts ? { concepts } : {}),
         } as ScenePatch);
@@ -876,7 +902,7 @@ async function auditAndBuildScene(p: PreparedScene) {
       safeOutline.description =
         (safeOutline.description ?? '') +
         blueprintDirective(scenePlan, requirements.learnerProfile!) +
-        coherenceDirective(frame, progress);
+        (coherenceOn ? coherenceDirective(frame, progress) : '');
       courseBlueprint ??= scenePlan;
     }
 

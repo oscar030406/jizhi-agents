@@ -82,3 +82,44 @@ export function isIncrementalReauditEnabled(): boolean {
 export function isVoiceEnabled(): boolean {
   return readBoolean(process.env.NEXT_PUBLIC_ENABLE_VOICE);
 }
+
+// ---------------------------------------------------------------------------
+// 消融实验开关（B 消融爬升要用）
+// ---------------------------------------------------------------------------
+//
+// 这三个与上面那批 flag 的**默认方向相反**：上面是「默认关、显式开」，
+// 这三个是「默认开、显式关」——它们关掉的是已经在生产里跑着的能力，
+// 存在的唯一理由是拿掉某一层看看质量掉多少（消融爬升那张图）。
+//
+// 所以判据一律写成 `!== '0'`：**只有显式设成字符串 `0` 才改路径**，
+// 未设、空串、`false`、拼错的值一概按开处理。与 `LECTURE_SCENE_MODE` /
+// `SLIDE_TEMPLATE_MODE` 同一口径——实验开关拼错时应该退回生产行为，
+// 而不是悄悄把生产能力关掉。
+//
+// 不用上面的 `readBoolean`：那个是「默认关」的语义，套过来会让一个拼错的值
+// 变成「关掉审核门」。方向反了就不该复用同一个原语。
+
+/**
+ * 事实审核门。关掉时生成链原样返回正文、不调判官、不写 `scene.audit`。
+ * 默认开——线上课程的审核徽标与报告页的接地率都靠它。
+ */
+export function isAuditGateEnabled(): boolean {
+  return process.env.AUDIT_GATE !== '0';
+}
+
+/**
+ * 课程一致性（蓝图三表 + 逐屏累积）。关掉时不算 `CourseFrame`、
+ * 也不把 `coherenceDirective` 拼进提示词，回到「每屏各自即兴」。
+ * 默认开。
+ */
+export function isCourseCoherenceEnabled(): boolean {
+  return process.env.COURSE_COHERENCE !== '0';
+}
+
+/**
+ * 数字断言的正则旁路。关掉时判官抽到什么就是什么，不补漏、不弃权。
+ * 默认开——关掉等于让带单位的数字重新回到「没人看过」的状态。
+ */
+export function isNumericBypassEnabled(): boolean {
+  return process.env.NUMERIC_BYPASS !== '0';
+}

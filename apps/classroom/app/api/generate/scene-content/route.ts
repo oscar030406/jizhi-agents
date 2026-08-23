@@ -31,7 +31,9 @@ import { extractVerifiables, verifyContent } from '@/lib/generation/content-veri
 import {
   coherenceDirective,
   coherenceFromOutlines,
+  emptyProgress,
 } from '@/lib/generation/course-coherence';
+import { isCourseCoherenceEnabled } from '@/lib/config/feature-flags';
 import { createLogger } from '@/lib/logger';
 
 // 跨场景摘录去重：同一门课（stageId）里每段教材原文只整段出现一次，后续场景回指。
@@ -272,12 +274,16 @@ export async function POST(req: NextRequest) {
       // 逐屏路的一致性状态从 allOutlines 现算（`coherenceFromOutlines`）。
       // 不接这一步，类比换喻体、同一数字例反复推演在这条路上照旧——
       // 批量路治好了，逐屏路没治，同一个坑位第三次。
-      const { frame, progress } = coherenceFromOutlines(allOutlines, effectiveOutline.id);
+      // 消融开关：`COURSE_COHERENCE=0` 时不算状态、也不拼指令。
+      const coherenceOn = isCourseCoherenceEnabled();
+      const { frame, progress } = coherenceOn
+        ? coherenceFromOutlines(allOutlines, effectiveOutline.id)
+        : { frame: {}, progress: emptyProgress() };
       progress.widgets = usedTemplateIds;
       effectiveOutline.description =
         (effectiveOutline.description ?? '') +
         blueprintDirective(learnerPlan, requirements!.learnerProfile!) +
-        coherenceDirective(frame, progress);
+        (coherenceOn ? coherenceDirective(frame, progress) : '');
       const mix = learnerPlan.blueprint?.resource_mix;
       log.info(
         `Adapted "${effectiveOutline.title}" for ${learnerPlan.blueprint?.learner_type} ` +
