@@ -80,6 +80,8 @@ class IntakeManifest:
     #: 正经讲的就是注入，正文里必然出现这些字样，拒收等于把讲安全的教材挡在门外。
     #: 处置权留给管理者——他知道自己传的是什么书。
     injection_hits: list[dict] = field(default_factory=list)
+    #: 剥掉的许可样板段数（`strip_license_blocks`）。剥了要报——静默改正文是另一种病。
+    license_blocks_stripped: int = 0
 
     @property
     def accepted_chars(self) -> int:
@@ -111,17 +113,17 @@ def read_body(path: Path) -> str:
     编码严格读：非 utf-8 的二进制在这一行就抛，由 `triage` 退回并写明理由。
     """
     if path.suffix.lower() == ".pdf":
-        return extract_pdf(path).text
+        return strip_license_blocks(extract_pdf(path).text)[0]
     text = path.read_text(encoding="utf-8")
     if path.suffix.lower() != ".rst":
-        return text
+        return strip_license_blocks(text)[0]
     scripts = str(Path(__file__).resolve().parents[2] / "scripts")
     if scripts not in sys.path:
         sys.path.insert(0, scripts)
     from rst_to_markdown import convert  # type: ignore[import-not-found]
 
     body, _hit, _miss = convert(path, {})
-    return body
+    return strip_license_blocks(body)[0]
 
 
 def normalize_rst_dir(root: Path) -> list[tuple[str, str]]:
@@ -180,6 +182,16 @@ def triage(root: Path) -> IntakeManifest:
             except (UnicodeDecodeError, OSError) as err:
                 manifest.rejected.append((relative, f"读取失败：{type(err).__name__}"))
                 continue
+            # read_body 已经剥完了，这里对原文再数一遍只为报数量。多读一次文件换一个
+            # 说得出口的数字：静默改正文是另一种静默回退。
+            try:
+                manifest.license_blocks_stripped += strip_license_blocks(
+                    path.read_text(encoding="utf-8")
+                )[1]
+            except (UnicodeDecodeError, OSError):
+                pass
+        # 门槛判的是**剥完之后**的正文。iotdb 那 41 个空壳就是靠 800 多字符的
+        # ASF 声明顶过这道门的——剥掉之后它们自己落选，不用另维护一份删除清单。
         if len(text.strip()) < MIN_USEFUL_CHARS:
             manifest.rejected.append((relative, f"正文不足 {MIN_USEFUL_CHARS} 字符，疑似占位文件"))
             continue
@@ -408,3 +420,125 @@ def detect_license(root: Path) -> LicenseInfo:
 # 附带一条判据更正：调研按许可否掉的几个候选，真正该用的否决理由不是许可——
 # TDengine 是「部分章节写的是闭源企业版功能，内容无法本地复现」（幻觉率进不了分母）；
 # 人社部标准是「职业等级 ≠ 文本难度，是不同的轴」。按内容可核性重排，结论不变。
+
+
+# --------------------------------------------------------------- 疆域范围：明说不教的部分
+
+
+def parse_exclusions(raw: str | list[str] | None) -> list[str]:
+    """把管理端填的「本域不教什么」拆成路径前缀清单。
+
+    一行一条，也容忍逗号分隔和多余空白。空串返回空列表——**空列表与「没声明」是同一件事**，
+    调用方靠这个区分要不要沿用上一次的声明。
+    """
+    if raw is None:
+        return []
+    items = raw if isinstance(raw, list) else re.split(r"[\n,]", str(raw))
+    out: list[str] = []
+    for item in items:
+        s = str(item).strip().replace("\\", "/").lstrip("./")
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
+def apply_exclusions(
+    accepted: list[TriagedFile], prefixes: list[str]
+) -> tuple[list[TriagedFile], list[str]]:
+    """按前缀把声明不教的文件从收料清单里摘出来。
+
+    与 `scripts/ingest_domain.py` 同一套判据（`relative.startswith(前缀)`），
+    整条完整路径本身也是自己的前缀，所以逐个文件点名和整个目录剔除用同一格填。
+
+    返回 (留下的, 被剔的相对路径)。**被剔的要单列，不能混进「格式不支持」的退回清单**——
+    混在一起就读不出哪些是我们主动不教的。
+    """
+    if not prefixes:
+        return accepted, []
+    keep: list[TriagedFile] = []
+    scoped_out: list[str] = []
+    for f in accepted:
+        if any(f.relative.startswith(pre) for pre in prefixes):
+            scoped_out.append(f.relative)
+        else:
+            keep.append(f)
+    return keep, scoped_out
+
+
+def remembered_exclusions(readiness: dict | None) -> list[str]:
+    """上一次接入声明过的剔除前缀。
+
+    这是「声明只活在命令行参数里」那个坑的补丁：`--exclude` 生效一次就丢，
+    后来用 `--index-only` 补建索引时没人把它捡回来，被声明剔除的文件原样回到库里
+    （实测 iotdb 12 个文件全回来了，见 docs/04-research/iotdb-scoped-out-not-enforced-20260823.md）。
+    现在没给新声明时就沿用这一份，声明因此是**库的属性**，不是某一次命令行的属性。
+    """
+    if not isinstance(readiness, dict):
+        return []
+    node = ((readiness.get("intake") or {}).get("scoped_out")) or {}
+    return parse_exclusions(node.get("prefixes") or [])
+
+
+# --------------------------------------------------------------- 许可样板：噪声，不是正文
+
+#: 判一个 HTML 注释块是不是许可样板的判据。**规则钉死在这张表上，改这里就是改口径。**
+#:
+#: 只认这七条整句特征，不认「license」「版权」这种单词——单词会命中正文里
+#: 「这个库用的是 Apache 许可」这类正常句子。整句特征只出现在样板声明里。
+_LICENSE_BOILERPLATE = (
+    "licensed to the apache software foundation",
+    "contributor license agreements",
+    "spdx-license-identifier",
+    "licensed under the apache license",
+    "permission is hereby granted, free of charge",  # MIT
+    "this work is licensed under a creative commons",
+    "gnu general public license",
+    "redistribution and use in source and binary forms",  # BSD
+)
+
+_HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)
+#: 围栏代码块。讲 HTML 注释、讲开源协议头的教材会在代码块里**原样贴一段许可声明**，
+#: 那是正文（老师正要讲它），剥掉就是内容丢失。围栏内的注释一律不动。
+_FENCE = re.compile(r"^(?P<f>```+|~~~+)[^\n]*\n.*?^(?P=f)[ \t]*$", re.S | re.M)
+
+
+def strip_license_blocks(text: str) -> tuple[str, int]:
+    """把许可样板注释块当解析级噪声剥掉，返回 (剥完的正文, 剥了几块)。
+
+    ## 为什么做在读取层而不是出一份删除清单
+
+    iotdb 有 41 个文件剥掉 front matter 和许可块之后正文 0 字符，
+    它们能进库纯粹因为 ASF 那段注释有 800 多字符，把 `MIN_USEFUL_CHARS = 200`
+    顶了过去。出一份文件名清单去删，等于给每个新语料都手工维护一份清单；
+    而在这里剥掉之后，`triage` 紧跟着的 200 字符门槛自己就把空壳挡下了——
+    **判据只有一个，还是原来那个**。全仓 3,202 块里 259 块含完整 ASF 声明，
+    剥完块数降到 3,015（docs/04-research/iotdb-corpus-curation-20260823.md）。
+
+    ## 只剥这一种，别的都不碰
+
+    1. 只看 `<!-- -->` 注释块，正文里的许可**句子**一律不动
+       （「本项目采用 Apache-2.0」是正常正文）。
+    2. 注释块内容要命中 `_LICENSE_BOILERPLATE` 里的整句特征才剥。
+    3. 围栏代码块里的注释不剥——讲协议头的教材会原样贴一段，那是正文。
+    """
+    if "<!--" not in text:
+        return text, 0
+    fences = [(m.start(), m.end()) for m in _FENCE.finditer(text)]
+
+    def in_fence(pos: int) -> bool:
+        return any(a <= pos < b for a, b in fences)
+
+    stripped = 0
+
+    def repl(m: re.Match[str]) -> str:
+        nonlocal stripped
+        if in_fence(m.start()):
+            return m.group(0)
+        low = m.group(0).lower()
+        if not any(sig in low for sig in _LICENSE_BOILERPLATE):
+            return m.group(0)
+        stripped += 1
+        return ""
+
+    out = _HTML_COMMENT.sub(repl, text)
+    return out, stripped

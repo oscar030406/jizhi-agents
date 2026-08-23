@@ -34,6 +34,7 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
 
 from backend.integration.personalize_api import verify_internal_token
+from backend.rag.intake import parse_exclusions
 from backend.services import domain_intake, intake_sources
 
 router = APIRouter(prefix="/api/domain-intake", tags=["domain-intake"])
@@ -61,6 +62,15 @@ async def create_run(
         description=(
             "这个域教动手操作（带电/机械/化学/高温）——由投料方声明，不从语料里猜。"
             "勾了则该库生成的课程带安全提示层与「以现行国标和厂商手册为准」的说明。"
+        ),
+    ),
+    exclude: str = Form(
+        "",
+        description=(
+            "疆域的「范围」：这个域**明确不教**什么，一行一条路径前缀（也吃逗号分隔）。"
+            "整个目录写目录名，单个文件写完整相对路径。明说不教的不算就绪度缺口，没提的才算。"
+            "留空则沿用这个库上一次接入时声明过的那份——剔除声明是库的属性，"
+            "不是某一次投币的属性（iotdb 就是因为第二趟没重复声明，12 个文件原样回到了索引里）。"
         ),
     ),
     extract_concepts: bool = Form(False, description="抽概念词表与前置图——调 LLM，真花钱，默认关"),
@@ -93,6 +103,7 @@ async def create_run(
         "corpus": corpus,
         "scope": scope,
         "tier_range": tier_range,
+        "exclude": parse_exclusions(exclude),
         "build_vector": build_vector,
         "hands_on_safety": hands_on_safety,
         "extract_concepts": extract_concepts,

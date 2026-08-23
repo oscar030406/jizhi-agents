@@ -232,3 +232,71 @@ def test_license_walk_up_is_bounded(tmp_path):
     deep = tmp_path / "a" / "b" / "c" / "d" / "e" / "f"
     deep.mkdir(parents=True)
     assert detect_license(deep).spdx == UNKNOWN_LICENSE
+
+
+# ── 许可样板剥离 ────────────────────────────────────────────────────────────
+
+ASF_HEADER = """<!--
+
+    Licensed to the Apache Software Foundation (ASF) under one
+    or more contributor license agreements.  See the NOTICE file
+    distributed with this work for additional information
+    regarding copyright ownership.  The ASF licenses this file
+    to you under the Apache License, Version 2.0 (the
+    "License"); you may not use this file except in compliance
+    with the License.  You may obtain a copy of the License at
+
+        http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing,
+    software distributed under the License is distributed on an
+    "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+    KIND, either express or implied.  See the License for the
+    specific language governing permissions and limitations
+    under the License.
+
+-->"""
+
+
+def test_license_shell_no_longer_passes_the_char_gate(tmp_path):
+    """只有 front matter + 许可声明的空壳文件，剥完就落选——不用另维护删除清单。
+
+    iotdb 有 41 个这样的文件，它们进得了库纯粹因为 ASF 那段有 800 多字符，
+    把 `MIN_USEFUL_CHARS = 200` 顶了过去。
+    """
+    from backend.rag.intake import triage
+
+    root = tmp_path / "docs"
+    root.mkdir()
+    shell = "---\nredirectTo: overview_apache.html\n---\n" + ASF_HEADER
+    assert len(shell) > 200, "这条用例的前提是空壳原文足够长，否则测的不是剥离"
+    (root / "overview.md").write_text(shell, encoding="utf-8")
+
+    manifest = triage(root)
+    assert [f.relative for f in manifest.accepted] == []
+    assert any("200 字符" in why for _rel, why in manifest.rejected)
+    assert manifest.license_blocks_stripped == 1
+
+
+def test_license_header_inside_code_fence_is_teaching_content(tmp_path):
+    """讲协议头的教材会原样贴一段许可声明。围栏里的不剥——剥了是内容丢失。"""
+    from backend.rag.intake import read_body, strip_license_blocks
+
+    body = (
+        "# 每个源文件都要贴协议头\n\n下面这一段照抄到文件开头，少了 CI 会拦：\n\n"
+        "```html\n" + ASF_HEADER + "\n```\n\n"
+        "贴的位置在 package 声明之前，注意不要放进任何函数体里面。"
+    )
+    assert strip_license_blocks(body)[1] == 0
+    path = tmp_path / "lesson.md"
+    path.write_text(body, encoding="utf-8")
+    assert "Licensed to the Apache" in read_body(path)
+
+
+def test_plain_prose_about_licences_is_untouched(tmp_path):
+    """正文里谈许可是正常内容，只有注释块里的样板才算噪声。"""
+    from backend.rag.intake import strip_license_blocks
+
+    prose = "本项目按 Apache License 2.0 发布，商用前请自行确认 NOTICE 文件的署名要求。"
+    assert strip_license_blocks(prose) == (prose, 0)
+    assert strip_license_blocks("<!-- 这条注释讲下面表格怎么读 -->\n正文")[1] == 0

@@ -501,7 +501,14 @@ def _install_figures(run: IntakeRun) -> dict[str, Any]:
 
 def _stage_receive(run: IntakeRun) -> dict[str, Any]:
     """① 投料落地 + 分诊 + 许可 + 内容去重。一个文件都收不进来就在这里失败，②之后不会动盘。"""
-    from backend.rag.intake import detect_license, normalize_rst_dir, triage
+    from backend.rag.intake import (
+        apply_exclusions,
+        detect_license,
+        normalize_rst_dir,
+        parse_exclusions,
+        remembered_exclusions,
+        triage,
+    )
 
     # 解压 / clone / 搬运——这些重活挪到了这里，不再占着 HTTP 请求路径。
     _materialize_inbox(run)
@@ -519,6 +526,43 @@ def _stage_receive(run: IntakeRun) -> dict[str, Any]:
 
     manifest = triage(run.docs_dir)
     rejected = [{"file": rel, "reason": why} for rel, why in manifest.rejected]
+
+    # 许可样板是解析级噪声，`read_body` 已经在读取时剥掉了。这里只报数——
+    # 剥了不报等于静默改正文（iotdb 全仓 259 块含 ASF 声明，剥掉后块数 3202→3015；
+    # 代码样例里的 17 处按设计留着，剥了会毁样例）。
+    if manifest.license_blocks_stripped:
+        run.emit(
+            "receive",
+            "stage_progress",
+            f"剥掉 {manifest.license_blocks_stripped} 段许可样板注释（当噪声处理，不计入正文）。"
+            "剥完再判 200 字符门槛——只有许可声明的空壳文件因此落选。",
+            license_blocks_stripped=manifest.license_blocks_stripped,
+        )
+
+    # 疆域的「范围」：管理者声明**不教**的部分在这里剔除。留空则沿用这个库上一次的声明——
+    # 剔除声明是库的属性，不是某一次投币的属性（iotdb 第二趟没重复声明，12 个文件 132 块
+    # 原样回到了索引里，见 docs/04-research/iotdb-scoped-out-not-enforced-20260823.md）。
+    # 剔除的单列、不混进「格式不支持」的退回清单——混在一起就读不出哪些是我们主动不教的。
+    excluded = parse_exclusions(run.record["options"].get("exclude"))
+    inherited = False
+    if not excluded:
+        excluded = remembered_exclusions(
+            _read_json(KB / f"{run.corpus}_intake" / "readiness.json")
+        )
+        inherited = bool(excluded)
+    manifest.accepted, scoped_out = apply_exclusions(manifest.accepted, excluded)
+    run.ctx["scoped_out"] = {"prefixes": excluded, "files": scoped_out}
+    if excluded:
+        run.emit(
+            "receive",
+            "stage_progress",
+            f"按声明剔除 {len(scoped_out)} 个文件（{len(excluded)} 条前缀"
+            + ("，沿用上一次接入的声明" if inherited else "")
+            + f"）：{('、'.join(excluded[:4]) + ('…' if len(excluded) > 4 else ''))}",
+            scoped_out=len(scoped_out),
+            scope_prefixes=excluded,
+            scope_inherited=inherited,
+        )
 
     # 去重：同内容的文件只留第一个。triage 不做这件事（它按文件判），
     # 而上传是人手选的，重复投同一份文档很常见。
@@ -604,6 +648,7 @@ def _stage_receive(run: IntakeRun) -> dict[str, Any]:
         "accepted_files": len(kept),
         "accepted_chars": manifest.accepted_chars,
         "rejected": rejected,
+        "scoped_out": run.ctx["scoped_out"],
         "license": {"spdx": lic.spdx, "evidence": lic.evidence, "unknown": lic.unknown},
     }
 
@@ -804,6 +849,8 @@ def _stage_knowledge(run: IntakeRun) -> dict[str, Any]:
             "accepted_files": len(manifest.accepted),
             "accepted_chars": manifest.accepted_chars,
             "rejected": [{"file": r, "reason": w} for r, w in manifest.rejected],
+            # 下一趟接入没给新声明时读回这里沿用（`remembered_exclusions`）。
+            "scoped_out": run.ctx.get("scoped_out") or {"prefixes": [], "files": []},
             "injection_hits": manifest.injection_hits[:50],
             "sections": len(sections),
         },
@@ -2472,6 +2519,7 @@ def _new_run(
     trial_run: bool,
     hands_on_safety: bool = False,
     append: bool = False,
+    exclude: list[str] | str | None = None,
 ) -> IntakeRun:
     """建库那条路的共同开头：库名过闸 + 空 run 对象。投料形态在这之后各走各的。
 
@@ -2480,6 +2528,8 @@ def _new_run(
     追加进一个不存在的库会建出一个只有 ①②③ 产物的半截库，
     没有词表没有金标，学习端认不出来。
     """
+    from backend.rag.intake import parse_exclusions
+
     name = corpus.strip().lower()
     if append:
         _require_corpus(name)
@@ -2496,6 +2546,7 @@ def _new_run(
             "trial_run": bool(trial_run),
             "hands_on_safety": bool(hands_on_safety),
             "append": bool(append),
+            "exclude": parse_exclusions(exclude),
         },
     )
     run.docs_dir.mkdir(parents=True, exist_ok=True)
@@ -2585,6 +2636,8 @@ def create_run(
     hands_on_safety: bool = False,
     # E31 T0：往已有库追加文档。走反向库名闸，且只跑 ①②③。
     append: bool = False,
+    # 疆域的「范围」：明确不教的路径前缀。留空则沿用这个库上一次接入时声明的那份。
+    exclude: list[str] | str | None = None,
 ) -> IntakeRun:
     """校验上传、落盘、建 run 记录。**不发车**——发车走 `start_run`。"""
     if not files:
@@ -2597,7 +2650,8 @@ def create_run(
             )
     check_budget([(safe_filename(n), len(b)) for n, b in files])
     run = _new_run(
-        corpus, scope, tier_range, build_vector, extract_concepts, trial_run, hands_on_safety, append
+        corpus, scope, tier_range, build_vector, extract_concepts, trial_run, hands_on_safety,
+        append, exclude,
     )
     used: set[str] = set()
     for raw_name, blob in files:
@@ -2626,6 +2680,8 @@ def create_run_from_dir(
     hands_on_safety: bool = False,
     # E31 T0：往已有库追加文档。走反向库名闸，且只跑 ①②③。
     append: bool = False,
+    # 疆域的「范围」：明确不教的路径前缀。留空则沿用这个库上一次接入时声明的那份。
+    exclude: list[str] | str | None = None,
 ) -> IntakeRun:
     """zip 与 git 两条路的落地口：把一棵已经解好的目录树收进 run。
 
@@ -2636,7 +2692,8 @@ def create_run_from_dir(
     from backend.services.intake_sources import collect_readable
 
     run = _new_run(
-        corpus, scope, tier_range, build_vector, extract_concepts, trial_run, hands_on_safety, append
+        corpus, scope, tier_range, build_vector, extract_concepts, trial_run, hands_on_safety,
+        append, exclude,
     )
     # 解压/落盘的字节上界：防 zip bomb 用，不是产品限额。按防崩底线的块数折算
     # （每块正文约 1.4KB），比任何真实语料都宽，只拦「解开来是几百 G」那种。
@@ -2693,6 +2750,8 @@ def create_run_deferred(
     hands_on_safety: bool = False,
     # E31 T0：往已有库追加文档。走反向库名闸，且只跑 ①②③。
     append: bool = False,
+    # 疆域的「范围」：明确不教的路径前缀。留空则沿用这个库上一次接入时声明的那份。
+    exclude: list[str] | str | None = None,
 ) -> IntakeRun:
     """**只建 run，不碰投料内容。** 解压与收集留给接收站①在后台做。
 
@@ -2708,7 +2767,8 @@ def create_run_deferred(
     目录路径或仓库地址。接收站①按它决定怎么把投料变成 `<run>/docs/`。
     """
     run = _new_run(
-        corpus, scope, tier_range, build_vector, extract_concepts, trial_run, hands_on_safety, append
+        corpus, scope, tier_range, build_vector, extract_concepts, trial_run, hands_on_safety,
+        append, exclude,
     )
     run.record["inbox"] = {"kind": inbox_kind, "ref": inbox_ref}
     # 文件清单这时还不知道——接收站①收完才填。留空数组而不是不写这个键，

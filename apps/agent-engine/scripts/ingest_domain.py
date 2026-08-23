@@ -54,7 +54,15 @@ from backend.rag.concepts import (  # noqa: E402
     vocabulary_report,
 )
 from backend.rag.difficulty import TIERS  # noqa: E402
-from backend.rag.intake import detect_license, outline_sections, read_body, triage  # noqa: E402
+from backend.rag.intake import (  # noqa: E402
+    apply_exclusions,
+    detect_license,
+    outline_sections,
+    parse_exclusions,
+    read_body,
+    remembered_exclusions,
+    triage,
+)
 from backend.rag import structure_edges as se  # noqa: E402
 from backend.services.llm_gateway import LLMGateway  # noqa: E402
 
@@ -526,15 +534,24 @@ def main() -> int:
     manifest = triage(root)
     # 疆域的「范围」：明说不教的部分在这里剔除，并单列——它与「格式不支持」是两回事，
     # 混在同一份退回清单里会让人读不出「哪些是我们主动不教的」。
-    scoped_out = []
-    if args.exclude:
-        keep = []
-        for f in manifest.accepted:
-            if any(f.relative.startswith(pre) for pre in args.exclude):
-                scoped_out.append(f.relative)
-            else:
-                keep.append(f)
-        manifest.accepted = keep
+    # 没给 --exclude 就沿用上一次接入声明过的那份。
+    # 这是「声明只活在 argv 里」那个坑的补丁：iotdb 第一趟带 --exclude 剔了 12 个文件，
+    # 第二趟 --index-only 补建索引时没人再敲一遍，12 个文件 132 块原样回到库里
+    # （docs/04-research/iotdb-scoped-out-not-enforced-20260823.md）。
+    # 现在剔除声明是**库的属性**，不是某一次命令行的属性。
+    exclude = parse_exclusions(args.exclude)
+    inherited = False
+    if not exclude:
+        prior_path = KB / f"{args.name}_intake" / "readiness.json"
+        prior_report = (
+            json.loads(prior_path.read_text(encoding="utf-8")) if prior_path.is_file() else {}
+        )
+        exclude = remembered_exclusions(prior_report)
+        inherited = bool(exclude)
+    manifest.accepted, scoped_out = apply_exclusions(manifest.accepted, exclude)
+    if inherited:
+        print(f"[范围] 沿用上一次声明的剔除前缀 {len(exclude)} 条："
+              + "、".join(exclude[:4]) + ("…" if len(exclude) > 4 else ""))
     lic = detect_license(root)
     print(f"[分诊] 收 {len(manifest.accepted)} 个文件（{manifest.accepted_chars:,} 字符），"
           f"退回 {len(manifest.rejected)} 个"
@@ -709,7 +726,7 @@ def main() -> int:
             "accepted_files": len(manifest.accepted),
             "accepted_chars": manifest.accepted_chars,
             "rejected": [{"file": r, "reason": w} for r, w in manifest.rejected],
-            "scoped_out": {"prefixes": list(args.exclude), "files": scoped_out},
+            "scoped_out": {"prefixes": list(exclude), "files": scoped_out},
             "sections": len(sections),
             "sections_scanned_for_concepts": len(picked),
         },

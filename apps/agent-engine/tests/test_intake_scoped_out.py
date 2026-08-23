@@ -21,7 +21,12 @@
 
 下面这条用例把那次「第二趟补建」照原样重放一遍：先写一份声明了 `scoped_out`
 的 readiness，再跑一次不带 `--exclude` 的 `--index-only`，看被声明剔除的文件
-有没有回到索引里。修完请去掉 `xfail`。
+有没有回到索引里。
+
+**2026-08-23 已修**：没给 `--exclude` 时从上一次的 readiness 里读回
+`intake.scoped_out.prefixes` 沿用（`backend/rag/intake.remembered_exclusions`），
+剔除声明从此是库的属性而不是某一次命令行的属性。第一条用例转绿。
+第二条仍是红的——它对的是**现有那份**索引，要等 iotdb 重投才会自己转绿。
 """
 
 from __future__ import annotations
@@ -61,12 +66,6 @@ def _slug(rel: str) -> str:
     return re.sub(r"[^0-9A-Za-z]+", "-", rel.rsplit(".", 1)[0]).strip("-").lower()
 
 
-@pytest.mark.xfail(
-    reason="剔除清单只活在 argv 里：--index-only 补建（ingest_domain.py:567-571）"
-    "不读回 readiness 的 intake.scoped_out.prefixes，被声明剔除的文件重新入库。"
-    "修完去掉 xfail。",
-    strict=True,
-)
 def test_index_only_rebuild_honours_declared_scope(tmp_path, monkeypatch):
     """重放 iotdb 那两趟：第一趟声明剔除，第二趟补建索引把它捡了回来。"""
     docs = tmp_path / "docs"
@@ -132,3 +131,109 @@ def test_iotdb_index_has_no_scoped_out_chunks():
         f"{len(wanted)} 个被声明剔除的文件里有 "
         f"{len({s.rsplit('#', 1)[0] for s in leaked})} 个仍在索引，共 {len(leaked)} 块"
     )
+
+
+# ── 服务端接入链（管理端 UI 投币走的就是这条） ──────────────────────────────
+#
+# CLI 那条修好不等于 UI 那条也修好：2026-08-23 之前服务端**根本没有剔除这一格**，
+# 表单、options、①站过滤一个都没有——从管理端投币压根没地方声明「本域不教什么」。
+# 所以下面这两条不是重复用例，它们盯的是另一条链。
+
+from backend.services import domain_intake  # noqa: E402
+
+
+def _receive_with(sandbox_kb, monkeypatch, files: dict[str, str], **options):
+    """跑到①站为止，返回 (run, 落库后的 source_id stem 集合)。"""
+    payload = [(n, b.encode("utf-8")) for n, b in files.items()]
+    run = domain_intake.create_run(payload, corpus=options.pop("corpus", "scope-demo"), **options)
+    domain_intake.execute(run)
+    return run
+
+
+@pytest.fixture()
+def kb_sandbox(tmp_path, monkeypatch):
+    import backend.rag.retriever as retriever
+    from backend.integration import personalize_service
+
+    kb = tmp_path / "knowledge_base"
+    corpora = kb / "corpora"
+    corpora.mkdir(parents=True)
+    monkeypatch.setattr(domain_intake, "KB", kb)
+    monkeypatch.setattr(domain_intake, "RUNS_DIR", kb / "intake_runs")
+    monkeypatch.setattr(domain_intake, "CORPORA_DIR", corpora)
+    monkeypatch.setattr(domain_intake, "GOLD_DIR", tmp_path / "eval" / "kc_gold_derived")
+    monkeypatch.setattr(retriever, "CORPORA_DIR", corpora)
+    monkeypatch.setattr(personalize_service, "KB_DIR", kb)
+    domain_intake._ensure_scripts_path()
+    monkeypatch.setattr(ingest_domain, "KB", kb)
+    retriever.refresh_corpora()
+    yield kb
+    retriever.refresh_corpora()
+
+
+def _receive_msgs(run) -> list[str]:
+    lines = run.events_path.read_text(encoding="utf-8").splitlines()
+    return [json.loads(x)["message"] for x in lines if json.loads(x)["stage"] == "receive"]
+
+
+def _stems(kb, corpus: str) -> set[str]:
+    index = kb / "corpora" / corpus / "knowledge_index.jsonl"
+    return {r["source_id"].rsplit("#", 1)[0] for r in read_index_rows(index)}
+
+
+DOCS = {"keep.md": BODY, "drop.md": BODY.replace("巡检", "标定")}
+
+
+def test_ui_intake_honours_declared_exclusions(kb_sandbox, monkeypatch):
+    """管理端声明「本域不教 drop.md」，被声明的文件不许进索引。"""
+    run = _receive_with(kb_sandbox, monkeypatch, DOCS, corpus="scope-a", exclude=["drop.md"])
+
+    record = json.loads(run.record_path.read_text(encoding="utf-8"))
+    assert record["status"] == "done", record["error"]
+
+    stems = _stems(kb_sandbox, "scope-a")
+    assert _slug("keep.md") in stems
+    assert _slug("drop.md") not in stems, "声明剔除的文件仍然进了索引"
+
+    # 事件流里要说得出剔了几个——静默生效等于没声明。
+    assert any("按声明剔除 1 个文件" in m for m in _receive_msgs(run)), _receive_msgs(run)
+
+    # 剔除单列，不混进「格式不支持」的退回清单。
+    detail = record["stages"]["receive"]["detail"]
+    assert detail["scoped_out"]["files"] == ["drop.md"]
+    assert not any(r["file"] == "drop.md" for r in detail["rejected"])
+
+    readiness = json.loads(
+        (kb_sandbox / "scope-a_intake" / "readiness.json").read_text(encoding="utf-8")
+    )
+    assert readiness["intake"]["scoped_out"] == {"prefixes": ["drop.md"], "files": ["drop.md"]}
+
+
+def test_ui_intake_inherits_previous_declaration(kb_sandbox, monkeypatch):
+    """第二趟没重复声明也不许把剔掉的捡回来——这正是 iotdb 栽的那一跤。"""
+    _receive_with(kb_sandbox, monkeypatch, DOCS, corpus="scope-b", exclude=["drop.md"])
+
+    prior = json.loads(
+        (kb_sandbox / "scope-b_intake" / "readiness.json").read_text(encoding="utf-8")
+    )
+    assert prior["intake"]["scoped_out"]["prefixes"] == ["drop.md"]
+
+    # 第二趟：同一个库名追加一篇新文档，剔除声明一个字都没填。
+    # drop.md 第一趟就被剔了、从没进过索引，所以追加模式的「库里已经有了」这道闸
+    # **拦不住它**——能拦住它的只有沿用下来的声明。
+    run = _receive_with(
+        kb_sandbox,
+        monkeypatch,
+        {"extra.md": BODY.replace("巡检", "并网"), "drop.md": DOCS["drop.md"]},
+        corpus="scope-b",
+        append=True,
+    )
+    record = json.loads(run.record_path.read_text(encoding="utf-8"))
+    assert record["status"] == "done", record["error"]
+
+    stems = _stems(kb_sandbox, "scope-b")
+    assert _slug("extra.md") in stems, "追加的新文档应该照常入库"
+    assert _slug("drop.md") not in stems, (
+        "第二趟没重复声明，被剔除的文件又回到索引里了——声明还是没有约束力"
+    )
+    assert any("沿用上一次接入的声明" in m for m in _receive_msgs(run)), _receive_msgs(run)
