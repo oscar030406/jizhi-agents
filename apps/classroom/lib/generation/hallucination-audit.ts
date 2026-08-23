@@ -11,6 +11,7 @@
 import { judgeRole } from '@/components/agents/judge-labels';
 import { isIncrementalReauditEnabled } from '@/lib/config/feature-flags';
 import { parseJsonResponse } from '@/lib/generation/json-repair';
+import { mergeNumericBypass } from './numeric-claims';
 
 export type ClaimVerdict = 'supported' | 'uncertain' | 'incorrect';
 
@@ -343,6 +344,15 @@ const JUDGE_SYSTEM = `你是独立的教学内容事实审核员。你审核的�
 - uncertain：无法确认，或表述过于绝对/以偏概全
 - incorrect：与公认知识相悖（必须给出修正 fix）
 宁严勿松：模糊归因（"研究表明"无出处）、编造的具体数字、把比喻当机制陈述，都至少判 uncertain。
+
+**带数字的句子按下面的口径拆，这是硬要求**（教学内容里的参数会被学习者拿去设备上设，抽错一条比漏一条概念严重）：
+1. **条件从句不许剥离**。「超过 150ms 就停机」要整条进池，不许压成「150ms 停机」或「超时会停机」——
+   前者丢了条件、后者丢了数字，两种都让这条断言无法判对错。
+2. **阈值、单位、参数-后果各自成条**。同一句里出现「默认值是 X」「单位是 Y」「设成 Z 会导致 W」时，
+   这是三条断言不是一条：它们可以分别对错，混成一条只能给一个判定。
+3. 一次推演里互相配套的数字（「80ms 任务 + 70ms 余量 = 150ms 阈值」）算**一条**——
+   拆开之后每个数字单独看都判不了。
+4. 数字断言即使你觉得显然正确也要抽出来，不要因为「这是常识」跳过。
 只输出一个 JSON 对象，不要围栏不要解释：
 {"claims": [{"claim": "断言原文（截断到 80 字内）", "verdict": "supported|uncertain|incorrect", "reason": "一句话理由", "fix": "verdict 为 incorrect 时的修正表述"}]}
 若文本中没有事实性断言，输出 {"claims": []}。`;
@@ -455,7 +465,19 @@ async function runJudge(
     (evidence ? `参考资料：\n${evidence}\n\n` : '') +
     `教学文本：\n${teachingText}`;
   const raw = await judgeCall(system, user);
-  return parseClaims(raw);
+  const judged = parseClaims(raw);
+  if (!judged) return null;
+
+  // 正则旁路（`lib/generation/numeric-claims.ts`）：判官漏抽的带单位数字机械补进池。
+  // 抽取这一步此前没有兜底——判官没抽到的断言，后面整条链（判定/答辩/仲裁/修订）
+  // 都碰不到，**看起来是「这一屏没问题」，实际是「这一屏没被看过」**。
+  // 补进来的一律 uncertain 且永不判 incorrect：旁路只知道这里有个带单位的数，
+  // 不知道它对不对；查无对照就弃权，判错会触发修订环去改一个可能本来正确的参数。
+  return mergeNumericBypass(judged, teachingText, evidence, (claim, reason) => ({
+    claim,
+    verdict: 'uncertain' as ClaimVerdict,
+    reason,
+  })).claims;
 }
 
 // ─── Cross-validation → defense → arbitration ────────────────────────────────
