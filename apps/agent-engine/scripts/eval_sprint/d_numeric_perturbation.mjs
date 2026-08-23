@@ -351,6 +351,16 @@ function armVerdict(claims, sentence) {
 /** 判官对这句「提了异议」没有。none（没进池）算没提——它确实没说这句有问题。 */
 const objected = (v) => v === 'uncertain' || v === 'incorrect';
 
+/**
+ * 严格口径的检出：扰动版被标 **且原版明确判 supported**。
+ *
+ * 宽口径（`outcomeOf` 的 detected）把「原版根本没进池」也算成功。那不算错——
+ * 判官确实对两版反应不同：一版懒得提，一版提了。但它**没有证明原版是干净的**，
+ * 只证明判官没说话。两种读法都成立，所以两个都报，让人自己选信哪个。
+ * 只报一个数、还恰好是高的那个，是这类实验最常见的粉饰。
+ */
+const strictDetected = (pertV, origV) => objected(pertV) && origV === 'supported';
+
 /** 配对判据。detected 是唯一算成功的格子。 */
 function outcomeOf(pertV, origV) {
   if (objected(pertV) && !objected(origV)) return 'detected';
@@ -381,6 +391,9 @@ function scorePair(pair, pertClaims, origClaims) {
     orig,
     outcomeOff: outcomeOf(pert.off, orig.off),
     outcomeOn: outcomeOf(pert.on, orig.on),
+    // 严格口径落进每一行，报告才好两个口径并排出。
+    strictOff: strictDetected(pert.off, orig.off),
+    strictOn: strictDetected(pert.on, orig.on),
   };
 }
 
@@ -388,11 +401,19 @@ function scorePair(pair, pertClaims, origClaims) {
 
 const OUTCOMES = ['detected', 'bothFlagged', 'bothClean', 'inverted'];
 
-function tally(rows, pick) {
+function tally(rows, pick, strictPick) {
   const counts = Object.fromEntries(OUTCOMES.map((o) => [o, 0]));
   for (const r of rows) counts[pick(r)] += 1;
   const n = rows.length;
-  return { n, ...counts, rate: n ? counts.detected / n : null };
+  // strict：原版必须明确判 supported 才算检出（宽口径把「原版没进池」也算了）。
+  const strict = strictPick ? rows.filter(strictPick).length : null;
+  return {
+    n,
+    ...counts,
+    rate: n ? counts.detected / n : null,
+    strict,
+    strictRate: n && strict != null ? strict / n : null,
+  };
 }
 
 /**
@@ -573,10 +594,10 @@ function reportMd(c) {
   const types = Object.keys(c.byType).sort();
 
   const row = (label, rs) => {
-    const off = tally(rs, (r) => r.outcomeOff);
-    const on = tally(rs, (r) => r.outcomeOn);
+    const off = tally(rs, (r) => r.outcomeOff, (r) => r.strictOff);
+    const on = tally(rs, (r) => r.outcomeOn, (r) => r.strictOn);
     const ci = bootCI(rs.map((r) => (r.outcomeOff === 'detected' ? 1 : 0)));
-    return `| ${label} | ${off.n} | ${off.detected} | ${pct(off.rate)} | ${
+    return `| ${label} | ${off.n} | ${off.detected} | ${pct(off.rate)} | ${pct(off.strictRate)} | ${
       ci ? `${pct(ci.lo)}–${pct(ci.hi)}` : '—'
     } | ${off.bothFlagged} | ${off.bothClean} | ${off.inverted} | ${pct(on.rate)} |`;
   };
@@ -657,13 +678,21 @@ ${c.jobs.length} 次调用。
 判据：**扰动版被判 incorrect/uncertain 且原版判 supported** 才算一次成功检出（\`detected\`）。
 两版都被标（\`bothFlagged\`）不算成功——那正是第一版量到却没显出来的那一格。
 
+**两个口径并排报，别只看高的那个：**
+- **宽**（\`detected\`）：扰动版被标、原版**没被标**。原版「根本没进断言池」也算在里面——
+  判官确实对两版反应不同（一版懒得提、一版提了），但这**没有证明原版是干净的**。
+- **严**：扰动版被标、原版**明确判 supported**。这才是「判官看过原句、认了，改了数就不认」。
+
+两者之差全部来自「原版没进池」的那些配对，进池率见下面的覆盖表。
+只报宽口径是这类实验最常见的粉饰。
+
 判官回复解析失败 **${failed}/${c.rows.length}** 对，已从下面所有率的分母里剔除
 （明细 jsonl 里留了回复开头 200 字，直接能看出它在说什么）。${
     c.incomplete ? `另有 ${c.incomplete} 对因成本闸中途停、缺一档回复，未计入。` : ''
   }
 
-| 扰动类型 | 配对数 | detected | 分辨率(旁路关) | 自助 95% 区间 | bothFlagged | bothClean | inverted | 分辨率(旁路开) |
-|---|---:|---:|---:|:--:|---:|---:|---:|---:|
+| 扰动类型 | 配对数 | detected | 分辨率·宽(旁路关) | 分辨率·严(旁路关) | 自助 95% 区间 | bothFlagged | bothClean | inverted | 分辨率·宽(旁路开) |
+|---|---:|---:|---:|---:|:--:|---:|---:|---:|---:|
 ${types.map((t) => row(t, usable.filter((r) => r.type === t))).join('\n')}
 ${row('**合计**', usable)}
 
@@ -774,6 +803,26 @@ function selftest() {
   ok(outcomeOf('none', 'none') === 'bothClean', '两版都没进池也算漏检');
   ok(outcomeOf('supported', 'incorrect') === 'inverted', '原版被标扰动版放行 = 反了');
   ok(outcomeOf('incorrect', 'none') === 'detected', '原版没进池不算「提了异议」');
+
+  // 严格口径：宽口径把「原版没进池」也算成功，严格口径要求原版明确判 supported。
+  // 两者之差就是「判官压根没看这句」的那些配对，报告里必须分得开。
+  ok(strictDetected('incorrect', 'supported'), '原版判 supported、扰动版判错 = 严格检出');
+  ok(strictDetected('uncertain', 'supported'), 'uncertain 也算提了异议，严格口径同样认');
+  ok(!strictDetected('incorrect', 'none'), '原版没进池不算严格检出——没证明原句是干净的');
+  ok(!strictDetected('supported', 'supported'), '扰动版没被标就不是检出');
+  ok(!strictDetected('incorrect', 'uncertain'), '原版本来就被标，那是 bothFlagged 不是检出');
+  {
+    // 一宽一严必须真的差得出来，否则加这一列等于没加。
+    const rows = [
+      { strictOff: true, outcomeOff: 'detected' },
+      { strictOff: false, outcomeOff: 'detected' },
+      { strictOff: false, outcomeOff: 'bothClean' },
+      { strictOff: false, outcomeOff: 'bothClean' },
+    ];
+    const t = tally(rows, (r) => r.outcomeOff, (r) => r.strictOff);
+    ok(t.rate === 0.5, `宽口径应 50%，实得 ${t.rate}`);
+    ok(t.strictRate === 0.25, `严格口径应 25%，实得 ${t.strictRate}`);
+  }
 
   // 5. 旁路那一档：判官全没抽到时，旁路把带单位的数字补进池并标 uncertain
   const pair = { origScreen: screen, pertScreen, original: sent, perturbed: pert, type: 'value_x2' };
