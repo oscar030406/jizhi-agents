@@ -53,6 +53,17 @@ def test_边上带措辞分布():
     assert edge["intents"] == {"seealso": 2, "prereq": 1}
 
 
+def test_判措辞只看本句_不吃邻句():
+    """宽窗口会把邻句卷进来。「请先」是唯一能把边留下来的信号，
+    串味等于凭邻居那句话留下这条边——Odoo 上实测六成的 prereq 命中是这么来的。"""
+    files = {
+        "a/x.md": "详见 [基础](../b/y.md)。请先准备好环境再动手。详见 [基础](../b/y.md)。",
+    }
+    (edge,) = structural_edges(files, min_links=2)
+    # 两次引用都在「详见」句里，隔壁那句「请先」不算数
+    assert edge["intents"] == {"seealso": 2}
+
+
 def test_措辞只记不判_产出条数不变():
     """路障：记分布不许改变哪些边被产出。改了就是偷偷接了过滤器。"""
     files = {

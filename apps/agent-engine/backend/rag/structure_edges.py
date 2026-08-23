@@ -201,6 +201,29 @@ def _context(text: str, needle: str, at: int | None = None) -> str:
     return " ".join(text[lo:hi].split())
 
 
+#: 句子边界。判措辞只看引用**所在那一句**，不看窗口里凑巧挨着的邻句。
+_SENT_BOUND = re.compile(r"[。！？；\n]")
+
+
+def _sentence(text: str, at: int, needle_len: int) -> str:
+    """引用所在的那一句（左右各最多 2×CONTEXT_CHARS 兜底，防超长无标点段落）。
+
+    与 `_context` 分工明确：`_context` 是给**人**看的引文，窗口宽一点更好读；
+    这一个是给 `link_intent` 判措辞用的，窗口必须收到句内。
+
+    实测差别很大：Odoo 上宽窗口判出 234 次「请先」族，收到句内只剩 87 次——
+    **六成是邻句串味**。而「请先」是唯一能把一条边留下来的信号，
+    串味等于凭邻居的句子留下这条边。
+    """
+    lo, floor = at, max(0, at - CONTEXT_CHARS * 2)
+    while lo > floor and not _SENT_BOUND.match(text[lo - 1]):
+        lo -= 1
+    hi, ceil = at + needle_len, min(len(text), at + needle_len + CONTEXT_CHARS * 2)
+    while hi < ceil and not _SENT_BOUND.match(text[hi]):
+        hi += 1
+    return " ".join(text[lo:hi].split())
+
+
 def link_intent(context: str) -> str:
     """从引用周围那句话判这条链接是「前置」还是「参见」。零 LLM。
 
@@ -255,7 +278,8 @@ def xref_counts(files: dict[str, str]) -> tuple[Counter, int, int, dict, dict]:
                 continue
             pair[(src, dst)] += 1
             snippet = _context(text, target, at)
-            intents[(src, dst)][link_intent(snippet)] += 1
+            # 判措辞只看引用所在那一句；给人看的引文仍用宽窗口（见 `_sentence`）
+            intents[(src, dst)][link_intent(_sentence(text, at, len(target)))] += 1
             if len(contexts[(src, dst)]) < 3 and snippet:
                 contexts[(src, dst)].append(snippet)
     return pair, total, same, dict(contexts), {k: dict(v) for k, v in intents.items()}
