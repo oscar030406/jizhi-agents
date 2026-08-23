@@ -1194,3 +1194,50 @@ def test_清理干净到同名可以重投(sandbox):
 
     # 清完立刻能重投——不抛就是放行
     domain_intake._reserve_corpus("retryme")
+
+
+# ── 并发投币串行化（C24）────────────────────────────────────
+
+def test_同时只跑一条接入链(sandbox, monkeypatch):
+    """每条 run 自己开 3 线程的池，跨 run 原本没有任何控制——两人同时投币
+    就是 6 线程抢 2 核。**2026-08-22 那次整机饱和（连 sshd 都发不出协议 banner、
+    失联十几分钟）就是这么来的**。
+    """
+    import threading as _t
+
+    peak = {"n": 0}
+    live = {"n": 0}
+    guard = _t.Lock()
+    release = _t.Event()
+
+    def fake_execute(run):
+        with guard:
+            live["n"] += 1
+            peak["n"] = max(peak["n"], live["n"])
+        release.wait(timeout=5)
+        with guard:
+            live["n"] -= 1
+
+    monkeypatch.setattr(domain_intake, "execute", fake_execute)
+
+    runs = []
+    for i in range(3):
+        r = domain_intake.create_run(_files({f"a{i}.md": TWO_DOCS["chapter-one.md"].encode()}),
+                                     corpus=f"conc{i}")
+        runs.append(domain_intake.start_run(r))
+
+    time.sleep(0.3)
+    assert peak["n"] == 1, f"同时在跑 {peak['n']} 条链——闸没生效"
+    release.set()
+    time.sleep(0.5)
+
+
+def test_排队时告诉管理者前面还有几个(sandbox):
+    """排队和卡死在界面上长得一模一样——不说清楚就等于没做
+    （投币口那次「转了八分钟只有三个字」的教训）。"""
+    from pathlib import Path as _Path
+
+    src = _Path(domain_intake.__file__).read_text(encoding="utf-8")
+    assert "run_queued" in src
+    assert "前面还有" in src
+    assert "不用重投，轮到就自动开始" in src, "要说清不必人工干预"

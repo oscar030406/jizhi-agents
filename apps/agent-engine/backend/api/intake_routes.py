@@ -226,6 +226,9 @@ def stages() -> dict[str, Any]:
             for sid, spec in domain_intake.STAGES.items()
         ],
         "event_kinds": [
+            # 排队等闸（C24：一次只跑一条链）。观看端见到它应当显示「排队中」
+            # 而不是「进行中」——两者在界面上长得一样就等于没做这件事。
+            "run_queued",
             "run_start",
             "stage_start",
             "stage_progress",

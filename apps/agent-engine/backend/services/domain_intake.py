@@ -2619,8 +2619,52 @@ def create_checkup_run(corpus: str, scope: str = "") -> IntakeRun:
     return run
 
 
+#: 同时只许跑一条接入链。
+#:
+#: 每条 run 自己开 3 线程的池，跨 run 原本没有任何控制——两人同时投币就是
+#: 6 线程抢 2 核。**2026-08-22 那次整机饱和（连 sshd 都发不出协议 banner、
+#: 失联十几分钟）就是这么来的**：一份验证包与一次真实投币撞在一起。
+#:
+#: 串行而不是拒绝：管理者只是来早了，拒了他会以为系统坏了。
+_CHAIN_GATE = threading.Semaphore(1)
+
+#: 正在排队等着开跑的 run。只用于给等待者报「前面还有几个」——
+#: 不说清楚的话排队和卡死在界面上长得一模一样。
+_CHAIN_WAITING: list[str] = []
+_CHAIN_WAITING_LOCK = threading.Lock()
+
+
+def _run_with_gate(run: IntakeRun) -> None:
+    """拿到闸再跑。等待期间把队列位置告诉管理者。"""
+    with _CHAIN_WAITING_LOCK:
+        ahead = len(_CHAIN_WAITING)
+        _CHAIN_WAITING.append(run.run_id)
+
+    if ahead or not _CHAIN_GATE.acquire(blocking=False):
+        run.emit(
+            "run",
+            "run_queued",
+            f"前面还有 {max(ahead, 1)} 个接入在跑，这条先排队。"
+            "这台机器只有 2 核，同时跑两条链会把彼此都拖慢，"
+            "所以一次只放一条进去——不用重投，轮到就自动开始。",
+            ahead=max(ahead, 1),
+        )
+        _CHAIN_GATE.acquire()
+
+    with _CHAIN_WAITING_LOCK:
+        if run.run_id in _CHAIN_WAITING:
+            _CHAIN_WAITING.remove(run.run_id)
+    try:
+        execute(run)
+    finally:
+        _CHAIN_GATE.release()
+
+
 def start_run(run: IntakeRun) -> IntakeRun:
-    threading.Thread(target=execute, args=(run,), name=f"intake-{run.run_id}", daemon=True).start()
+    # 走闸不直接 execute：同时只跑一条链（C24），排队时告诉管理者前面还有几个。
+    threading.Thread(
+        target=_run_with_gate, args=(run,), name=f"intake-{run.run_id}", daemon=True
+    ).start()
     return run
 
 
