@@ -1,0 +1,85 @@
+# 提示词回归门：动了 lib/prompts 才跑，掉分就红。
+#
+# 为什么单开一个 workflow 而不是塞进 apps/classroom/.github/workflows/ci.yml：
+# GitHub 只认仓库根目录下的 .github/workflows，classroom 那份是 fork 带过来的，
+# 在本仓库根本不会被触发。往那儿加等于加了个永远不跑的门。
+#
+# ── 这里只跑离线层，不打任何模型接口 ──────────────────────────────
+# 门禁跑的两层（静态体检 + tests/prompts）全在磁盘上算，零 token、零外部依赖。
+# 判官打分那层**故意不进 CI**，两个原因：
+#   1. 花真钱。一轮换域体检约 30 万 token（docs/05-evidence/kb-architecture-decision-20260816.md），
+#      每个 PR 跑一遍谁也扛不住，而且 API key 得进仓库 secrets。
+#   2. 带噪。判官排名跨基准会漂、重测一致不等于正确，拿它当合并闸门会把随机波动
+#      判成回归（依据见 docs/04-research/prompt-generalization-research-20260823.md 第二节）。
+# 所以判官那层留人工，改完提示词自己在本地跑，把结果贴进 PR：
+#
+#   # 编排/白板评测（要先起 dev server，要模型 key）
+#   cd apps/classroom
+#   PORT=3100 pnpm dev &
+#   EVAL_CHAT_MODEL=<provider:model> EVAL_SCORER_MODEL=<provider:model> \
+#     pnpm eval:whiteboard --base-url http://localhost:3100 --scenario econ-tech-innovation
+#
+#   # 换域体检（要 classroom 与引擎两个进程同时在，要 AI_SERVICE_TOKEN）
+#   cd apps/agent-engine
+#   python scripts/run_corpus_checkup.py iotdb
+# ──────────────────────────────────────────────────────────────
+
+name: Prompt Regression Gate
+
+on:
+  pull_request:
+    paths:
+      - 'apps/classroom/lib/prompts/**'
+      - 'apps/classroom/tests/prompts/**'
+      - 'apps/classroom/scripts/prompt-regression-gate.mjs'
+      - '.github/workflows/prompt-regression-gate.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/classroom/lib/prompts/**'
+      - 'apps/classroom/tests/prompts/**'
+      - 'apps/classroom/scripts/prompt-regression-gate.mjs'
+      - '.github/workflows/prompt-regression-gate.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: prompt-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    # 仓库根目录没有 package.json，pnpm 工作区的根在 apps/classroom。
+    working-directory: apps/classroom
+
+jobs:
+  gate:
+    name: 提示词回归门（离线）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          # 版本得写死：这个 action 从**仓库根**的 package.json 读 packageManager，
+          # 而我们根目录没有 package.json。这里的值跟 apps/classroom/package.json
+          # 的 packageManager 对齐，改那边记得改这里。
+          version: 10.28.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22 # 与 apps/classroom/.nvmrc 一致
+          cache: pnpm
+          cache-dependency-path: apps/classroom/pnpm-lock.yaml
+
+      # 照抄 apps/classroom/.github/workflows/ci.yml 的装法，不加 --ignore-scripts。
+      # postinstall 会构六个内部包，对只跑提示词测试来说是浪费，但没实测过砍掉之后
+      # tests/prompts 还能不能解析 @/lib 下的引用链——没验过的提速不如慢着稳。
+      - run: pnpm install --frozen-lockfile
+
+      # 先自检门禁本身：喂一棵人造的坏树，确认五类坏法都还抓得住。
+      # 顺序不能反——检查器自己坏了会静默全过，那时候后面那步的"通过"没有意义。
+      - name: 门禁自检
+        run: node scripts/prompt-regression-gate.mjs --self-test
+
+      - name: 提示词跑分
+        run: node scripts/prompt-regression-gate.mjs
