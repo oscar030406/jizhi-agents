@@ -17,6 +17,14 @@ class KnowledgeChunk(BaseModel):
     url: Optional[str] = None
     content: str
     score: float = 0.0
+    #: 整库重建时旧块不删，原样留在索引里打上这一格（增量补币 T1）。
+    #:
+    #: 为什么是 bool 而不是 `superseded_by`：重建之后顶替它的那一块，source_id 与它
+    #: **一模一样**（同一个文件、同一个节序，`_build_chunks` 的配方决定的），
+    #: 指过去等于指自己；而文件被从语料里删掉的那种情况，压根没有顶替者可指。
+    #: 我们真正知道的只有「这一块不再是活的版本」，那就只记这一件事。
+    #: 只加不减、默认 False——存量六个库的索引都不带这一格，照样解析。
+    superseded: bool = False
 
 
 class RetrievalResult(BaseModel):

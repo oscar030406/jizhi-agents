@@ -148,15 +148,72 @@ class TfidfKnowledgeRetriever:
         )
 
 
-def load_index(index_path: Path = DEFAULT_INDEX_PATH, doc_dir: Path = DEFAULT_DOC_DIR) -> List[KnowledgeChunk]:
+def load_index(
+    index_path: Path = DEFAULT_INDEX_PATH,
+    doc_dir: Path = DEFAULT_DOC_DIR,
+    *,
+    include_superseded: bool = False,
+) -> List[KnowledgeChunk]:
+    """索引的**唯一**装载口。默认只给活块，归档块（`superseded`）不返回。
+
+    整库重建之后旧块留在索引里（见 `backend.rag.ingest.write_index`）。它们的用途
+    只有一个：让已经出过的课按 source_id 还查得到出处。新课绝不该引到过期内容，
+    所以这一层默认把它们滤掉——过滤放在这里而不是各个检索器里，是因为检索侧的
+    四条路（默认 ai 的 TF-IDF、按域 TF-IDF、向量后端、`build_embedding_index.py`
+    建 npz）全都从这个函数取块。放在下游就是四份实现，改漏一份就是归档块混进新课。
+
+    `include_superseded=True` 只给按 id 精确溯源用（`lookup_source`）。
+    """
     if index_path.exists():
         chunks = []
         for line in index_path.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 chunks.append(KnowledgeChunk(**json.loads(line)))
+        # 「索引有没有内容」按原始行数判，不按过滤后的条数判：一个只剩归档块的库
+        # 应该如实报「没有可检索素材」，而不是掉头去扫 docs/ 把 markdown 现切一遍
+        # 冒充索引——那样重建失败会被伪装成成功。
         if chunks:
-            return chunks
+            return chunks if include_superseded else [c for c in chunks if not c.superseded]
     return load_markdown_chunks(doc_dir)
+
+
+def corpus_index_path(corpus: str) -> Path | None:
+    """语料名 → 索引文件路径；名字不合法返回 None。
+
+    检索器构建与按 id 溯源共用这一条。两处各写一遍 `CORPORA_DIR / name / ...`
+    迟早分叉，而「同一份数据两条读取路径只改了一条」是这个库反复吃过的亏。
+    """
+    name = corpus.strip().lower()
+    if name in DEFAULT_CORPUS_ALIASES:
+        return DEFAULT_INDEX_PATH
+    return CORPORA_DIR / name / "knowledge_index.jsonl" if CORPUS_NAME_RE.fullmatch(name) else None
+
+
+def lookup_source(source_id: str, corpus: str = "default") -> KnowledgeChunk | None:
+    """按 source_id 精确取块：**活块优先，归档兜底**。旧课渲染出处走这条。
+
+    为什么是这个优先级——重建之后同一个 id 可能有两条（活块 + 归档块，见
+    `write_index` 的「撞号是常态」）：
+
+    - 活块在：同一个文件同一个节序，通常只是内容被更新过，给最新的是对的。
+    - 活块不在（文件被移出语料、或重切之后节数变少）：给归档块。这一条就是
+      「已经出的课出处永不断链」的全部兑现方式，没有它这个 id 就是 404。
+
+    查不到返回 None——调用方该把它当死链处理，不要拿别的块顶上。
+    """
+    path = corpus_index_path(corpus)
+    if path is None:
+        return None
+    # ponytail: 每次调用全量读一遍索引。出处渲染是页面级低频操作，真成瓶颈再挂
+    # lru_cache——注意那样就得跟着 refresh_corpora 一起清，否则重建后查到的是旧的。
+    fallback = None
+    for chunk in load_index(path, path.parent / "docs", include_superseded=True):
+        if chunk.source_id != source_id:
+            continue
+        if not chunk.superseded:
+            return chunk
+        fallback = fallback or chunk
+    return fallback
 
 
 @lru_cache(maxsize=1)
@@ -165,8 +222,11 @@ def get_retriever():
     # RETRIEVER_BACKEND=tfidf 强制旧后端（消融对照）。函数内 import 破循环依赖。
     from backend.rag.embedding_retriever import maybe_embedding_retriever
 
+    # 路径显式传，别吃 load_index 的默认参数：默认参数在 def 那一刻就绑死了，
+    # 之后改模块级的 DEFAULT_INDEX_PATH（测试替身、换库）这一支照旧读老路径，
+    # 而上面那一支读的是新路径——同一个函数里两条路各读一个库，静默且难查。
     emb = maybe_embedding_retriever(DEFAULT_INDEX_PATH)
-    return emb if emb is not None else TfidfKnowledgeRetriever(load_index())
+    return emb if emb is not None else TfidfKnowledgeRetriever(load_index(DEFAULT_INDEX_PATH, DEFAULT_DOC_DIR))
 
 
 #: 冷构建单飞锁（WO-L1）。lru_cache 未命中时不锁：两个请求同时打进冷库，
@@ -183,9 +243,10 @@ def _get_corpus_retriever_cached(corpus: str):
     name = corpus.strip().lower()
     if name in DEFAULT_CORPUS_ALIASES:
         return get_retriever()
-    if not CORPUS_NAME_RE.fullmatch(name):
+    index = corpus_index_path(name)
+    if index is None:
         return None
-    root = CORPORA_DIR / name
+    root = index.parent
     try:
         from backend.rag.embedding_retriever import maybe_embedding_retriever
 

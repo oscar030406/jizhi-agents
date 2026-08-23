@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Any, Dict, Iterable, List
 
 from backend.schemas.resources import KnowledgeChunk
 
@@ -96,8 +97,57 @@ def load_markdown_chunks(doc_dir: Path) -> List[KnowledgeChunk]:
     return chunks
 
 
-def write_index(chunks: Iterable[KnowledgeChunk], output_path: Path) -> None:
+def write_index(
+    chunks: Iterable[KnowledgeChunk], output_path: Path, *, supersede: bool = True
+) -> None:
+    """落索引。**整库重建不删旧块**：既有的活块原样留下、打上 `superseded` 沉到文件末尾。
+
+    ## 不这么做会怎样
+
+    重建会让 source_id 重新编号（`{stem}#s{节序}`，节序随切块结果走）。已经出过的课
+    正文里挂着 `[docs-plc#s31]`，重建后这个号指向的是别的段落——课看着没变，引文全错位。
+    T0 的追加路径靠「既有行一个字节不动」躲开了这件事，重建路径躲不开，只能保留旧块。
+
+    ## 撞号是常态，不是异常
+
+    旧块的 source_id **一个字符都不改**——改了旧课的引用当场断链，那正是这里要防的事。
+    所以同一个 source_id 在文件里可以同时有一条活块和一条归档块。消歧规则写死在读取侧
+    （`backend.rag.retriever`）：检索只看活块；按 id 精确查是「活块优先、归档兜底」。
+
+    ## 归档层按 source_id 去重，新档盖旧档
+
+    不去重的话每重建一次就把整库复制一份——odoo 3046 块跑十轮就是三万行，
+    而且接入链每个 run 会重建**两次**（② 建库、④ 出了词表回填 concept_tags），
+    等于每接一次翻一倍。去重之后归档层恒定是「上一代活块」，涨幅封在 2×。
+
+    `supersede=False` 用于同一个 run 内的第二次重建（④ 回填）：那一代块是几分钟前
+    ② 刚写的，没出过任何一门课，把它归档只会用它盖掉真正被引用的上一代归档
+    （同号新档盖旧档）。所以回填只换活层，归档层原样不动。
+    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    # 索引损坏时宁可让重建整个失败、旧文件原样留着，也不要把解析不了的行悄悄丢掉——
+    # 丢掉的可能正是某门课的出处。load_index 本来也会在坏行上抛，不是新增的失败形态。
+    rows: List[Dict[str, Any]] = []
+    if output_path.exists():
+        rows = [
+            json.loads(line)
+            for line in output_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    archived = [row for row in rows if row.get("superseded")]
+    if supersede:
+        keep = {row.get("source_id"): row for row in archived}
+        for row in rows:
+            if row.get("superseded"):
+                continue
+            row["superseded"] = True  # 只加这一格，其余字段原样，key 顺序也不动
+            keep[row.get("source_id")] = row
+        archived = list(keep.values())
+
     lines = [chunk.model_dump_json(ensure_ascii=False) for chunk in chunks]
-    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    lines += [json.dumps(row, ensure_ascii=False) for row in archived]
+    # 先写临时文件再原子替换：写到一半断电会把索引截断，而归档层没有第二份副本。
+    tmp = output_path.parent / (output_path.name + ".writing")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    tmp.replace(output_path)
 

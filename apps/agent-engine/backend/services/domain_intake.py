@@ -921,14 +921,24 @@ def _extract_concepts(run: IntakeRun) -> tuple[list[dict], dict[str, Any], str]:
 
 
 def _backfill_concept_tags(run: IntakeRun, vocab: list[dict]) -> None:
-    """② 建库时 concept_tags 是空的，词表出来后重写一遍索引再刷缓存。"""
+    """② 建库时 concept_tags 是空的，词表出来后重写一遍索引再刷缓存。
+
+    `supersede=False` 是这里唯一的讲究：② 刚写下的那一代块，几分钟前才落盘、
+    没出过任何一门课。按重建的默认口径它会被归档，而归档层是按 source_id
+    新档盖旧档的——等于用一代从没上过屏的块，盖掉真正被旧课引用着的上一代归档。
+    回填只换活层，归档层原样不动。
+    """
     _ensure_scripts_path()
     from ingest_domain import write_corpus_index  # type: ignore[import-not-found]
 
     from backend.rag.retriever import refresh_corpora
 
     write_corpus_index(
-        run.corpus, run.ctx["sections"], vocab, run.record["options"].get("tier_range", "L1-L3")
+        run.corpus,
+        run.ctx["sections"],
+        vocab,
+        run.record["options"].get("tier_range", "L1-L3"),
+        supersede=False,
     )
     refresh_corpora()
     run.emit("knowledge", "stage_progress", f"已用 {len(vocab)} 个概念回填 concept_tags 并重建索引")

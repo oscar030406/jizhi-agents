@@ -227,7 +227,9 @@ def name_chapters(gateway, plane: dict) -> dict[str, str]:
     return names
 
 
-def write_corpus_index(name: str, sections: list, vocab: list[dict], tier_range: str) -> tuple[Path, int]:
+def write_corpus_index(
+    name: str, sections: list, vocab: list[dict], tier_range: str, supersede: bool = True
+) -> tuple[Path, int]:
     """把切好的块写成**可检索的**语料库：`data/knowledge_base/corpora/<name>/knowledge_index.jsonl`。
 
     ## 这一步以前是缺的，而它才是「领域泛化」的真卡点
@@ -248,11 +250,20 @@ def write_corpus_index(name: str, sections: list, vocab: list[dict], tier_range:
     - `difficulty` 取来源级区间的下界，**不逐 chunk 标**。逐 chunk 自动标难度实测
       没过验收（重测 κ=0.292、收敛效度 0.282），这一格保留人工输入是实测结论。
     - `concept_tags` 用词表做机械子串匹配，不调模型。
+
+    ## 重建不删旧块
+
+    既有的活块由 `write_index` 原样留下并标 `superseded`——重建会让 source_id 重新
+    编号，旧课正文里的 `[docs-plc#s31]` 会集体指向别的段落。判据与撞号处理写在
+    `backend.rag.ingest.write_index` 的文档串里。
+
+    `supersede=False` 留给同一个 run 内的第二次重建（④ 出词表后回填 concept_tags）：
+    那一代块是几分钟前刚写的，没出过课，归档它只会盖掉真正被引用的上一代。
     """
     out, chunks = _build_chunks(name, sections, vocab, tier_range)
     from backend.rag.ingest import write_index
 
-    write_index(chunks, out)
+    write_index(chunks, out, supersede=supersede)
     return out, len(chunks)
 
 
@@ -336,6 +347,9 @@ def append_corpus_index(
     if not out.exists():
         raise FileNotFoundError(f"语料库「{name}」还没建过，追加无从谈起：{out}")
 
+    # 归档块（T1 标了 superseded 的那些）也算进 existing_ids，**这是有意的**：
+    # 归档块的 id 正被旧课引用着，让新文档重新占用同一个号，等于把旧课的出处
+    # 悄悄换成另一份内容——比拒绝追加糟得多。
     existing_lines = [ln for ln in out.read_text(encoding="utf-8").splitlines() if ln.strip()]
     existing_ids = set()
     for line in existing_lines:
@@ -363,6 +377,10 @@ def corpus_source_stems(name: str) -> set[str]:
     追加时用来认出「这份文件已经在库里了」。**不依赖任何额外清单**——
     存量六个库都是在追加这条路之前建的，没有 sha256 台账，
     只有索引本身一直都在。
+
+    归档块的 stem 一并算进来：那份文件虽然已经不在活层里（被某次重建移出了语料），
+    它的 id 还挂在旧课的出处上。再投一遍同名文件会撞上归档号，与其在 append 那边
+    报一堆撞号，不如在这里就认出「这份收过」。
     """
     out = KB / "corpora" / name / "knowledge_index.jsonl"
     if not out.exists():
