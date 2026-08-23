@@ -255,6 +255,14 @@ export function blueprintReading(course) {
 
   return {
     scenes: outlines.length,
+    // ⚠️ `tablesFilled` 是**拿落盘大纲重算**「这门课本来能填几张表」，
+    // 与运行时有没有真把 coherenceDirective 拼进提示词**无关**——
+    // 关掉 COURSE_COHERENCE 之后它照样是 2/3（2026-08-23 档 0 实测）。
+    // **所以它区分不了消融的档 2 与档 3，出爬升图不要用它。**
+    // 使用侧的真指标是下面三个：analogyDrift（换了几次喻体）、
+    // distinctAnalogies（一门课用了几个不同类比）、duplicateNumericExamples。
+    // 档 0 实测 analogyMentions=0，而开着一致性的课是 2-6 次——那才是区分度。
+    tablesFilledNote: '潜在值，非运行时使用量；档间不变，不可用于爬升图',
     frameAnalogy: frame.analogy ?? null,
     frameNumericExamples: frame.numericExamples?.length ?? 0,
     frameConceptOrder: frame.conceptOrder?.length ?? 0,
