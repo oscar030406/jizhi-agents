@@ -44,6 +44,13 @@ import {
   presentationTier,
   type LearnerBlueprint,
 } from '@/lib/generation/learner-profile';
+import {
+  coherenceDirective,
+  emptyProgress,
+  extractAnalogy,
+  extractWorkedExample,
+  type CourseFrame,
+} from '@/lib/generation/course-coherence';
 import { sceneConceptsFromChunks } from '@/lib/evidence/scene-concepts';
 import type { CourseGenerationMeta } from '@/lib/server/classroom-storage';
 import { auditSceneContent } from '@/lib/generation/hallucination-audit';
@@ -580,10 +587,17 @@ async function generateClassroomInner(
     promise: Promise<Awaited<ReturnType<typeof auditAndBuildScene>> | undefined>;
     fill: (v: Promise<Awaited<ReturnType<typeof auditAndBuildScene>> | undefined>) => void;
   };
-  /** 这门课已经用过的教具模板 id，逐屏累积（同课形态去重）。 */
+  /**
+   * 课程一致性状态（`lib/generation/course-coherence.ts`）。
+   *
+   * 病是「重」不是「忘」：四段四个类比、同一阈值推演三遍、两个教具都是步进器——
+   * 三件事同一个形状，每屏各自即兴、不知道前面做过什么。所以传结构化清单
+   * （做过什么、别再做），不传滚动摘要。
+   */
+  const frame: CourseFrame = {};
+  const progress = emptyProgress();
+  /** 教具形态去重仍用 Set 收，进提示词时转成清单。 */
   const usedTemplateIds = new Set<string>();
-  /** 这门课贯穿始终的类比，第一屏定下来后传给后面每一屏。 */
-  let courseAnalogy: string | undefined;
 
   const sceneSlots: SceneSlot[] = outlines.map(() => {
     let fill!: SceneSlot['fill'];
@@ -641,23 +655,7 @@ async function generateClassroomInner(
     }
   });
 
-  /**
- * 从要点里认出这一屏用的类比。
- *
- * **不额外调模型**：那是一次多余的往返，而且抽错了比不抽更糟。
- * 生成器写类比时通常会在 keyPoints 里留一句带比喻标记的话，取第一条即可。
- * 认不出来就返回 undefined——不硬造，后面各屏照旧。
- */
-const ANALOGY_MARK = /(就像|好比|相当于|类比成|可以想象成|把它想成)([^。；\n]{2,24})/;
-
-function extractAnalogy(keyPoints?: readonly string[]): string | undefined {
-  for (const point of keyPoints ?? []) {
-    const hit = ANALOGY_MARK.exec(point);
-    if (hit) return `${hit[1]}${hit[2]}`.trim();
-  }
-  return undefined;
-}
-
+  
 async function auditAndBuildScene(p: PreparedScene) {
     const { audit: sceneAudit, content: auditedContent } = await auditSceneContent({
       sceneTitle: p.safeOutline.title,
@@ -872,7 +870,8 @@ async function auditAndBuildScene(p: PreparedScene) {
     if (scenePlan) {
       safeOutline.description =
         (safeOutline.description ?? '') +
-        blueprintDirective(scenePlan, requirements.learnerProfile!, courseAnalogy);
+        blueprintDirective(scenePlan, requirements.learnerProfile!) +
+        coherenceDirective(frame, progress);
       courseBlueprint ??= scenePlan;
     }
 
@@ -913,10 +912,16 @@ async function auditAndBuildScene(p: PreparedScene) {
     // 记下这屏用了哪个模板，下一屏选的时候避开。`config.templateId` 只有
     // 模板池那条路会写；上游自由 HTML 与讲义降级都没有，正好不必去重。
     const usedId = (content as { config?: { templateId?: unknown } } | null)?.config?.templateId;
-    if (typeof usedId === 'string' && usedId) usedTemplateIds.add(usedId);
-    // 第一屏用了什么类比，后面每屏沿用（P1-4：一门课四段四个类比，读者
-    // 每段都要重建映射）。抽不到就不传——**不硬造类比**，要求的是「有就沿用」。
-    courseAnalogy ??= extractAnalogy(safeOutline.keyPoints);
+    if (typeof usedId === 'string' && usedId) {
+      usedTemplateIds.add(usedId);
+      progress.widgets.push(usedId);
+    }
+    // 逐屏记一笔，传给下一屏。记的是**一句话标题不是全文**——
+    // 清单要塞得进提示词，还得留下写作空间。
+    frame.analogy ??= extractAnalogy(safeOutline.keyPoints);
+    progress.concepts.push(safeOutline.title);
+    const worked = extractWorkedExample(safeOutline.title, safeOutline.keyPoints);
+    if (worked) progress.workedExamples.push(worked);
 
     // 摘录占位符 → 教材原文，机械替换（位置模型排、内容机器贴——模型手抄必漂移）。
     // 客户端主链在 scene-content 路由里做这一步；批量路径此前漏了，落盘的课正文里
