@@ -143,7 +143,9 @@ async function main() {
           `${r.incorrectCount} | ${r.supportedRate == null ? '—' : `${(r.supportedRate * 100).toFixed(1)}%`} |`,
       )
       .join('\n') +
-    `\n\n样本量 ${rows.length} 门，每档 1 门——**档间差可能就是生成随机性**，不足以下结论。\n`;
+    `\n\n样本量 ${rows.length} 门，每档 1 门——**档间差可能就是生成随机性**，不足以下结论。\n` +
+    // 成本进报告，不只进控制台：报告是留档的那一份，控制台一关就没了。
+    `\n\n## 成本\n\n${budget.markdown()}\n`;
 
   const out = emit(`offline_audit-${stamp()}${DRY ? '-dryrun' : ''}`, { rows, md });
   console.log(`\n明细 ${out.jsonl}\n报告 ${out.report}`);

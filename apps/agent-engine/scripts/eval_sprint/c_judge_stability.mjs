@@ -16,7 +16,7 @@
  * 参数：--from 课程 json 路径（逗号分隔） / --ids 课号（配 --base-url 从线上取）
  *       --n 抽多少条（默认 24） / --judge 判官模型 / --budget 上限
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   Budget,
@@ -113,7 +113,22 @@ async function rerender(jsonlPath) {
     }
   }
   const picked = [...byIdx.keys()].sort((a, b) => a - b).map((i) => byIdx.get(i));
-  const md = reportMd(picked, rows, new Budget(0, { dry: true }), null, productJudgeSystem());
+  let md = reportMd(picked, rows, new Budget(0, { dry: true }), null, productJudgeSystem());
+  // 成本那一节从原报告原样搬过来。重出是零 API，budget 是空的——
+  // 让它自己生成就会在证据文件里写下一个**假零**，把那次真花的钱抹掉
+  // （实测踩过：c_judge_stability 的 ¥0.0691 被重出版覆盖成 ¥0.0000）。
+  const originalMd = jsonlPath.replace(/\.jsonl$/, '.md');
+  const prev = existsSync(originalMd) ? readFileSync(originalMd, 'utf-8') : '';
+  const cut = (t) => {
+    const i = t.indexOf('## 四、成本');
+    if (i < 0) return null;
+    const j = t.indexOf('\n## ', i + 1);
+    return j < 0 ? t.slice(i) : t.slice(i, j);
+  };
+  const prevCost = cut(prev);
+  const mineCost = cut(md);
+  if (prevCost && mineCost) md = md.replace(mineCost, prevCost);
+  else md += '\n\n> ⚠ 找不到原报告的成本节，本文没有成本数字——**不要把它读成没花钱**。\n';
   const out = emit(`${path.basename(jsonlPath, '.jsonl')}-rerender`, { rows, md });
   console.log(`重出报告（零 API）：${out.report}`);
 }
