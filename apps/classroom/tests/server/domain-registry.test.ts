@@ -152,13 +152,21 @@ describe('课程域归属：单课规则', () => {
       typeof courseDomainOf
     >[0]['scenes'];
 
-  it('路径内课程一律归 ai，压过课程自己记的 corpus（原脚本的硬规则）', () => {
-    const data = {
+  it('路径规则只压前缀投票，压不过课程自己记的 corpus', () => {
+    // 2026-08-23 改口径。原来是「路径内一律归 ai，压过 corpus」——
+    // 那让 c3HH74qwAH（自己记 rag-adv）在域视图里显示成 ai，
+    // 与课程自身的出处记录给出两个答案。路径规则存在的理由只是纠正前缀投票误判。
+    const withCorpus = {
       scenes: scenesCiting('em01s02'),
       generation: { profile: { corpus: 'rag-adv' } },
     } as Parameters<typeof courseDomainOf>[0];
-    expect(courseDomainOf(data, true)).toBe('ai');
-    expect(courseDomainOf(data, false)).toBe('rag-adv');
+    expect(courseDomainOf(withCorpus, true)).toBe('rag-adv');
+    expect(courseDomainOf(withCorpus, false)).toBe('rag-adv');
+
+    // 没有出身记录时，那条纠偏照旧生效
+    const noCorpus = { scenes: scenesCiting('em01s02') } as Parameters<typeof courseDomainOf>[0];
+    expect(courseDomainOf(noCorpus, true)).toBe('ai');
+    expect(courseDomainOf(noCorpus, false)).toBe('embodied');
   });
 
   it('没有 corpus 字段的存量课按 source_id 前缀归位', () => {
@@ -167,8 +175,8 @@ describe('课程域归属：单课规则', () => {
     expect(courseDomainOf({ scenes: scenesCiting('applications-sales') }, false)).toBe('odoo');
   });
 
-  it('零引用的纯 slide 老课兜底成 ai', () => {
-    expect(courseDomainOf({ scenes: [] }, false)).toBe('ai');
+  it('零引用又没有出身记录 → unknown，不冒充主域', () => {
+    expect(courseDomainOf({ scenes: [] }, false)).toBe('unknown');
   });
 });
 
@@ -182,8 +190,10 @@ describe('课程域归属：跑真实课程目录', () => {
     // 不在路径上、无 generation 字段的存量具身课。
     expect(rows['r-kOa4ogHT']?.domain).toBe('embodied');
     expect(rows.zTWuJxehpv?.domain).toBe('embodied');
-    // 选了 rag-adv 生成，但它挂在学习路径上 → 规则 1 压过来，判 ai（与旧产物一致）。
-    expect(rows.c3HH74qwAH?.domain).toBe('ai');
+    // c3HH74qwAH / sVnMPbeeXn 是引用已删库（rag-adv / vecdb）的孤儿课，
+    // 2026-08-23 随垃圾域清理一并删掉——目录里不该再有它们。
+    expect(rows.c3HH74qwAH).toBeUndefined();
+    expect(rows.sVnMPbeeXn).toBeUndefined();
     // 标题取 stage.name，首页课程卡直接用。
     expect(rows['r-kOa4ogHT']?.title).toBe('ROS2 机器人系统入门');
   });

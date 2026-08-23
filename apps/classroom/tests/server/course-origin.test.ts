@@ -39,19 +39,33 @@ describe('课程归属的判据优先级', () => {
     ).toBe('iotdb');
   });
 
-  it('两者都没有时退回 ai——source_id 前缀表只覆盖主域', () => {
-    // 前缀表是手工维护的 AI 域清单，对新库反推不出东西。
-    // 这条兜底是「不知道就当主域」，不是「推导正确」——所以出身字段才是主判据。
-    expect(courseDomainOf(empty as never, false)).toBe('ai');
+  it('两者都没有时判 unknown——不冒充主域', () => {
+    // 原来这条兜底是「不知道就当主域」。2026-08-23 立案：那是静默回退，
+    // 一门来路不明的课会混进主域课程卡。实测盘上 41 门课没有一门走到这条兜底
+    // （30 门在路径上、5 门有出身记录、6 门靠前缀投票），所以改成 unknown
+    // 对现有数据零影响——它拦的是将来那门「什么都没有」的课。
+    expect(courseDomainOf(empty as never, false)).toBe('unknown');
   });
 
-  it('挂在学习路径上的课一律归主域', () => {
+  it('挂在学习路径上，也不许改写课程自己记的库', () => {
+    // 原来是「路径上的课一律归主域」，压过出身记录。那条规则存在的理由只是
+    // 纠正前缀投票误判（AI 课引用 em 块会被投成 embodied），没有理由去改写
+    // 课程自己写下的出身——c3HH74qwAH/sVnMPbeeXn 的口径打架就是这么来的。
     expect(
       courseDomainOf(
         { ...empty, stage: { origin: { corpus: 'smart-manufacturing' } } } as never,
         true,
       ),
-    ).toBe('ai');
+    ).toBe('smart-manufacturing');
+  });
+
+  it('没有出身记录时，路径规则照旧纠正前缀投票', () => {
+    const cited = {
+      ...empty,
+      scenes: [{ audit: { sources: [{ source_id: 'em1#s2' }] } }],
+    };
+    expect(courseDomainOf(cited as never, true)).toBe('ai');
+    expect(courseDomainOf(cited as never, false)).toBe('embodied');
   });
 });
 

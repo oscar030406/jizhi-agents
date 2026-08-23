@@ -7,18 +7,37 @@
  *
  * ## 判定规则（优先级从高到低）
  *
- * 1. **学习路径里的课一律判 `ai`**，覆盖后面所有依据。这条是从原脚本原样搬过来的：
- *    `learning-path.json` 是 AI 领域专属的教研产物，路径上挂的就是 AI 课。具身语料以
- *    `embodied_docs/` 并进了主索引，AI 课引用 `em` 块是正常现象（「大模型上下文与 KV 缓存」
- *    大量引具身文档，但它是路径内的 AI 课），按引用计数会误判成 embodied。
- * 2. **课程自己记的 `generation.profile.corpus`**。生成时选了哪个库就是哪个域，
- *    这是最直接的证据——新库生成的课不用任何前缀规则就能归对位。
- * 3. **引用的 source_id 前缀多数域**。存量课（2026 年上半年那批）没有 `generation` 字段，
- *    只能从引用里反推。前缀表与原脚本一致。
- * 4. 都没有（纯 slide 老课，零引用）→ `ai`。
+ * 1. **课程自己记的出身**（`stage.origin.corpus` / `generation.profile.corpus`）。
+ *    生成时选了哪个库就是哪个域，这是最直接的证据。
+ * 2. **学习路径里的课判 `ai`**——但**只压得过下面那条弱信号，压不过第 1 条**。
+ *    `learning-path.json` 是 AI 领域专属的教研产物；它存在的理由只是纠正前缀投票：
+ *    具身语料并进了主索引，AI 课引用 `em` 块是正常现象（「大模型上下文与 KV 缓存」
+ *    大量引具身文档），按引用计数会误判成 embodied。
+ * 3. **引用的 source_id 前缀多数域**。存量课（2026 上半年那批）没有出身记录，
+ *    只能从引用里反推。前缀表是手工维护的 AI 域清单，对投币新建的库必然反推错。
+ * 4. 都没有 → `unknown`。**不冒充主域。**
  *
- * 实测：43 个课程文件上，本函数的结果与 `build-course-domains.mjs` 的产物逐门一致。
+ * 另有一条与上面正交：出身记的库**已经不在注册清单里**（库被删了）→ `retired`。
+ *
+ * ## 这里改过一次，原因值得留着
+ *
+ * 原来规则 1 是「路径上的课一律判 ai，覆盖后面所有依据」，规则 4 是「都没有 → ai」。
+ * 2026-08-23 垃圾域清理时撞出口径打架：`c3HH74qwAH` 自己记着 `rag-adv`、
+ * `sVnMPbeeXn` 自己记着 `vecdb`，但两门都挂在学习路径上，于是被规则 1 碾成 `ai`——
+ * **课堂侧的域视图与课程自身的出处记录给出两个答案**。
+ *
+ * 根因不是「查不到就回退」，是**弱信号的纠偏规则压过了强信号**。所以规则 1 降到
+ * 第 2 位：它本来就只为纠正前缀投票而存在，没有理由去改写课程自己写下的出身。
+ *
+ * 规则 4 的 `ai` 是另一种形态的同一个病——查不到就冒充主域。实测盘上 41 门课
+ * **没有一门**走到这条兜底（30 门在路径上、5 门有出身记录、6 门靠前缀投票），
+ * 所以改成 `unknown` 对现有数据零影响：它拦的是将来那门「什么都没有」的课。
  */
+
+/** 判不出来。**不冒充主域**——冒充会让一门来路不明的课混进主域课程卡。 */
+export const UNKNOWN_DOMAIN = 'unknown';
+/** 出身记的库已经不在注册清单里（库被删了）。课还在，出处已经没了。 */
+export const RETIRED_DOMAIN = 'retired';
 
 import { promises as fs } from 'node:fs';
 
@@ -37,12 +56,14 @@ export interface CourseDomain {
 }
 
 /** source_id 前缀 → 域。前缀表与 `scripts/build-course-domains.mjs` 同一份。 */
-function domainOfSourceId(sid: string): string {
+function domainOfSourceId(sid: string): string | null {
   if (/^em\d/.test(sid)) return 'embodied';
   if (/^(table|sql|ainode|iotdb|timecho|deployment-and-maintenance|user-manual)/.test(sid))
     return 'iotdb';
   if (/^(content|applications|administration|developer)/.test(sid)) return 'odoo';
-  return 'ai';
+  // 认不出的前缀**不投 ai 一票**。这张表是手工维护的，投币新建的库前缀一律不在表里——
+  // 让它们默认投给主域，等于每建一个新库就往 ai 里掺一批不属于它的课。
+  return null;
 }
 
 /** 路径上挂着的课程 id。路径表读不到就是空集合——那时规则 1 自然不生效。 */
@@ -67,20 +88,29 @@ export function courseDomainOf(
     stage?: { origin?: { corpus?: string; domain?: string } };
   },
   onPath: boolean,
+  /**
+   * 现存的库名集合（注册清单）。传了才判得出 `retired`；不传就跳过这一判，
+   * 不假装库都还在——判不了就别判，这与 `unknown` 是同一条纪律。
+   */
+  liveCorpora?: ReadonlySet<string>,
 ): string {
-  if (onPath) return 'ai';
-  return (
-    // ① 课自己记的出身（`stage.origin`）——生成时写入、随课落盘，最可靠。
-    //    客户端生成的课只有这一条：它不走服务端 `generation` 那份记录。
+  // ① 课自己记的出身。客户端生成的课只有 `stage.origin` 这一条：
+  //    它不走服务端 `generation` 那份记录。
+  const own =
     data.stage?.origin?.corpus?.trim() ||
     data.stage?.origin?.domain?.trim() ||
-    // ② 服务端生成记录里的画像
     data.generation?.profile?.corpus?.trim() ||
-    // ③ 兜底：引用的 source_id 前缀投票。**这张前缀表是手工维护的 AI 域清单**，
-    //    对投币新建的库必然反推错——所以它只是兜底，不是主判据。
-    majorityDomain(collectSourceIds(data.scenes)) ||
-    'ai'
-  );
+    '';
+  if (own) {
+    // 库被删了就如实说「出处没了」，不退回主域冒充。
+    return liveCorpora && !liveCorpora.has(own) ? RETIRED_DOMAIN : own;
+  }
+  // ② 路径上的课判 ai。**只压前缀投票**——它存在的理由就是纠正投票误判，
+  //    没有理由去改写课程自己写下的出身（那条已经在上面返回了）。
+  if (onPath) return 'ai';
+  // ③ 前缀投票。认不出的前缀不投票，全认不出就当没有信号。
+  // ④ 什么都没有 → unknown，不冒充主域。
+  return majorityDomain(collectSourceIds(data.scenes)) ?? UNKNOWN_DOMAIN;
 }
 
 /** 引用的 source_id 里占多数的那个域。零引用返回 null。 */
@@ -88,6 +118,7 @@ function majorityDomain(sourceIds: Set<string>): string | null {
   const counts = new Map<string, number>();
   for (const sid of sourceIds) {
     const d = domainOfSourceId(sid.split('#')[0]);
+    if (!d) continue; // 认不出的前缀弃权，不投给主域
     counts.set(d, (counts.get(d) ?? 0) + 1);
   }
   let best: string | null = null;
@@ -111,6 +142,11 @@ export async function readCourseDomains(): Promise<Record<string, CourseDomain>>
   }
 
   const onPath = await pathCourseIds();
+  // 现存库名。清单读不到就返回空视图——那时 `liveCorpora` 传 undefined，
+  // 跳过 retired 判定，而不是把所有课都判成 retired。
+  const { readDomainRegistry } = await import('@/lib/server/domain-registry');
+  const registry = await readDomainRegistry().catch(() => null);
+  const liveCorpora = registry ? new Set(Object.keys(registry.entries)) : undefined;
   const rows = await Promise.all(
     files.map(async (file) => {
       const id = file.replace(/\.json$/, '');
@@ -118,7 +154,7 @@ export async function readCourseDomains(): Promise<Record<string, CourseDomain>>
       const data = await readClassroom(id).catch(() => null);
       if (!data?.stage || !Array.isArray(data.scenes)) return null;
 
-      const domain = courseDomainOf(data, onPath.has(id));
+      const domain = courseDomainOf(data, onPath.has(id), liveCorpora);
       return [id, { domain, title: data.stage.name ?? id }] as const;
     }),
   );
