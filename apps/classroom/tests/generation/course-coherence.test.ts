@@ -107,6 +107,9 @@ describe('真的接进生成链了', () => {
     expect(src).toContain('coherenceDirective(frame, progress)');
     expect(src).toContain('progress.concepts.push');
     expect(src).toContain('progress.workedExamples.push');
-    expect(src).toContain('frame.analogy ??=');
+    // 类比原来是边生成边捡（`frame.analogy ??=`），现在归课程级框架、
+    // 开跑前从整份大纲一次定死——边捡的东西会随生成顺序漂，而它恰恰要全课一致。
+    expect(src).toContain('courseFrameFromOutlines(outlines)');
+    expect(src).not.toContain('frame.analogy ??=');
   });
 });

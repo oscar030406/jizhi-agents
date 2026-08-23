@@ -57,6 +57,12 @@ export interface CourseProgress {
   widgets: string[];
   /** 上一屏结尾一两句，供下一屏衔接。**只留最后一屏的**，不滚动累积。 */
   lastLines?: string;
+  /**
+   * 这一屏正在讲的概念。既不算「已讲过」（那会让它别再解释一遍，
+   * 而它正是这屏要解释的），也不算「还没讲」（那会让它别当已知用，
+   * 可它就是本屏的主题）——所以单开一格，两张清单都把它排除。
+   */
+  teachingNow?: string;
 }
 
 export function emptyProgress(): CourseProgress {
@@ -117,7 +123,9 @@ export function coherenceDirective(frame: CourseFrame, progress: CourseProgress)
   }
 
   if (frame.conceptOrder?.length && progress.concepts.length) {
-    const notYet = frame.conceptOrder.filter((c) => !progress.concepts.includes(c));
+    const notYet = frame.conceptOrder.filter(
+      (c) => !progress.concepts.includes(c) && c !== progress.teachingNow,
+    );
     if (notYet.length) {
       lines.push(
         `- 【还没讲的概念】不要当成读者已知的东西来用（要用就先解释）：\n` +
@@ -173,6 +181,47 @@ interface OutlineLike {
 }
 
 /**
+ * 整份大纲 → 课程级只读框架。**一次算定，每屏拿到的是同一份。**
+ *
+ * 三张表都在这里定，不逐屏累加：累加的东西会随生成顺序漂，
+ * 而这三样恰恰是「全课必须一致」的东西——漂了就是要治的病本身。
+ *
+ * - 类比：整份大纲里第一个认得出的，全课一个口径。
+ * - 数字例登记：一个概念只配一组数字。**同名概念只登记第一次出现的那组**，
+ *   后面再出现的丢弃——「150ms 推演三遍」就是没有这张表的后果。
+ * - 概念引入顺序：大纲顺序即引入顺序。有它，`coherenceDirective` 才发得出
+ *   「这些还没讲，别当已知用」那一条（此前这个字段一直没人灌，等于没写）。
+ */
+export function courseFrameFromOutlines(allOutlines: readonly OutlineLike[]): CourseFrame {
+  const frame: CourseFrame = {};
+
+  for (const o of allOutlines) {
+    const found = extractAnalogy(o.keyPoints);
+    if (found) {
+      frame.analogy = found;
+      break;
+    }
+  }
+
+  const registry: Array<{ concept: string; example: string }> = [];
+  const claimed = new Set<string>();
+  for (const o of allOutlines) {
+    const worked = extractWorkedExample(o.title, o.keyPoints);
+    // 一个概念只登记一次：第二次出现的同名概念不覆盖，也不追加。
+    if (worked && !claimed.has(o.title)) {
+      claimed.add(o.title);
+      registry.push({ concept: o.title, example: worked.replace(`${o.title}：`, '') });
+    }
+  }
+  if (registry.length) frame.numericExamples = registry;
+
+  const order = allOutlines.map((o) => o.title).filter(Boolean);
+  if (order.length) frame.conceptOrder = order;
+
+  return frame;
+}
+
+/**
  * 从整份大纲算出这一屏该带的一致性状态。
  *
  * 客户端逐屏路（`fetchSceneContent`）是无状态 HTTP，服务端每次只看见一屏——
@@ -189,14 +238,9 @@ export function coherenceFromOutlines(
   allOutlines: readonly OutlineLike[],
   currentId: string,
 ): { frame: CourseFrame; progress: CourseProgress } {
-  const frame: CourseFrame = {};
-  for (const o of allOutlines) {
-    frame.analogy = extractAnalogy(o.keyPoints);
-    if (frame.analogy) break;
-  }
-  if (!frame.analogy) delete frame.analogy;
-
+  const frame = courseFrameFromOutlines(allOutlines);
   const progress = emptyProgress();
+  progress.teachingNow = allOutlines.find((o) => o.id === currentId)?.title;
   for (const o of allOutlines) {
     if (o.id === currentId) break; // 只算前面的屏，当前屏自己不算「已讲过」
     progress.concepts.push(o.title);

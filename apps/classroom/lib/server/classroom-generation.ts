@@ -46,8 +46,8 @@ import {
 } from '@/lib/generation/learner-profile';
 import {
   coherenceDirective,
+  courseFrameFromOutlines,
   emptyProgress,
-  extractAnalogy,
   extractWorkedExample,
   type CourseFrame,
 } from '@/lib/generation/course-coherence';
@@ -594,7 +594,10 @@ async function generateClassroomInner(
    * 三件事同一个形状，每屏各自即兴、不知道前面做过什么。所以传结构化清单
    * （做过什么、别再做），不传滚动摘要。
    */
-  const frame: CourseFrame = {};
+  // 三张课程级表一次算定（类比 / 数字例登记 / 概念引入顺序），逐屏原样下发。
+  // 原来只有类比、还是边生成边捡的——**边捡的东西会随生成顺序漂**，
+  // 而这三样恰恰是「全课必须一致」的东西，漂了就是要治的病本身。
+  const frame: CourseFrame = courseFrameFromOutlines(outlines);
   const progress = emptyProgress();
   /** 教具形态去重仍用 Set 收，进提示词时转成清单。 */
   const usedTemplateIds = new Set<string>();
@@ -868,6 +871,8 @@ async function auditAndBuildScene(p: PreparedScene) {
         (assemblyMode ? excerptDirective(sceneEvidence) : '');
     }
     if (scenePlan) {
+      // 这一屏正在讲什么，两张清单都要把它排除——既不算已讲过，也不算还没讲。
+      progress.teachingNow = safeOutline.title;
       safeOutline.description =
         (safeOutline.description ?? '') +
         blueprintDirective(scenePlan, requirements.learnerProfile!) +
@@ -918,7 +923,7 @@ async function auditAndBuildScene(p: PreparedScene) {
     }
     // 逐屏记一笔，传给下一屏。记的是**一句话标题不是全文**——
     // 清单要塞得进提示词，还得留下写作空间。
-    frame.analogy ??= extractAnalogy(safeOutline.keyPoints);
+    // 类比不在这里捡了：它归课程级框架，开跑前就从整份大纲定死。
     progress.concepts.push(safeOutline.title);
     const worked = extractWorkedExample(safeOutline.title, safeOutline.keyPoints);
     if (worked) progress.workedExamples.push(worked);
