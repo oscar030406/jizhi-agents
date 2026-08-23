@@ -23,7 +23,12 @@ from backend.schemas.resources import WorkflowRun
 from backend.services.daily_plan import build_daily_plan
 from backend.services.learning_mode import all_modes, resolve_learning_mode
 from backend.services.llm_gateway import LLMGateway
-from backend.services.tutor_service import TutorRequest as TutorTurnRequest, lecture_tutor_turn, tutor_turn
+from backend.services.tutor_service import (
+    TutorRequest as TutorTurnRequest,
+    hint_ladder_turn,
+    lecture_tutor_turn,
+    tutor_turn,
+)
 from backend.services.model_routing import route_for
 from backend.services.review_scheduler import ReviewCard, review
 
@@ -188,10 +193,16 @@ def run_compare(request: CompareRequest, trace_id: str) -> dict[str, Any]:
 def run_tutor_turn(request: "TutorTurnRequest", trace_id: str) -> dict[str, Any]:
     """动态追问导学单轮：探测/降维/推进/进阶的可见决策（赛题第五(4)款②）。
 
+    hint_request>0 走三级提示阶梯（hint→scaffold 子题→兜底答案，解锁判据写死在代码里）；
     lecture_text 非空走讲义驱动分支（题从当前讲义节现生成，LLM 不可用如实 unavailable）；
     否则走概念题库分支（确定性，语料覆盖的概念）。两个 HTTP 层都从这里过，分流只做一次。
     """
-    if request.lecture_text.strip():
+    if request.hint_request:
+        # 三级提示阶梯：卡住时按 hint→scaffold→兜底答案逐级放行，解锁判据确定性（不调模型）。
+        # 分流放在最前面——要提示就不该再出新题，出了新题原来那道题的提示状态就断了。
+        payload = hint_ladder_turn(request).model_dump(mode="json")
+        payload["agent"] = "tutor:hint"
+    elif request.lecture_text.strip():
         payload = lecture_tutor_turn(request).model_dump(mode="json")
         payload["agent"] = "tutor:lecture"
     else:

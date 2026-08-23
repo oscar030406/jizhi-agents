@@ -7,6 +7,7 @@ LLM 只做苏格拉底式改写（api 模式，失败回退题库原文，engine
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -48,6 +49,47 @@ def _band_note(corrects: List[bool]) -> tuple[str, float]:
         f"近 {len(window)} 题正确率 {acc:.0%}，{pos}——目标带 70%-85%（Wilson 2019 最优学习正确率）",
         acc,
     )
+
+
+# ------------------------------------------------------------ 三级提示阶梯的代价
+# 提示不是一段话，而是一条有序阶梯：hint 指方向 → scaffold 把题拆成小步 → bottom_out 兜底给答案。
+# 三条硬规矩，全部写死在代码里（「该不该放答案」交给模型判就不可复算、不可审计）：
+#   ① 严格顺序解锁：第 N 级要求第 N-1 级已经用过，不许一上来直接看答案（判据见 _unlock）；
+#   ② 每级明码代价：用到第几级，决定这道题最高能记到哪一档（下表）；
+#   ③ 代价必须落进掌握度：看了答案的题不能和自己做出来的题记成一样，
+#      否则画像把「看了答案」算成「会了」，后面的复习排程会跳过这个本该重练的知识点。
+
+HINT_MAX_LEVEL = 3
+BOTTOM_OUT_LEVEL = 3  # 兜底答案那一级
+
+#: 用到第 N 级提示之后，这道题最高只能记到的判分档。
+#: 1 级不封顶——它只把人指回讲义的某一句，不给内容；对求助本身罚分会让学习者不敢用提示，
+#: 结果是硬猜（乱选一个再看解析），比用提示更糟。
+#: 2 级已经把题拆开并把第一条要点摆了出来，独立完成度打折，最高记 partial。
+#: 3 级是直接看答案，一律记 incorrect——知识追踪里的通行处理：请求答案等同一次错误尝试。
+_HINT_VERDICT_CAP: Dict[int, str] = {0: "correct", 1: "correct", 2: "partial", 3: "incorrect"}
+
+_VERDICT_ORDER = ["incorrect", "partial", "correct"]
+
+
+def hint_verdict_cap(hints_used: int) -> str:
+    """用到第 hints_used 级提示后，本题最高能记到的判分档。越界一律按最严的那一档。"""
+    return _HINT_VERDICT_CAP.get(max(0, min(HINT_MAX_LEVEL, int(hints_used))), "incorrect")
+
+
+def cap_verdict_by_hints(verdict: str, hints_used: int) -> tuple[str, str]:
+    """按提示代价给判分封顶。
+
+    返回 (记入掌握度的判分, 压档说明)；没压档时说明为空串。
+    判分本身（模型对这次回答的评价）不改，改的是**记进画像的那一份**——
+    学习者看到的仍是「你答得对」，画像记的是「这题他是看了答案才对的」。
+    """
+    cap = hint_verdict_cap(hints_used)
+    if verdict not in _VERDICT_ORDER or _VERDICT_ORDER.index(verdict) <= _VERDICT_ORDER.index(cap):
+        return verdict, ""
+    taken = "看了兜底答案" if hints_used >= BOTTOM_OUT_LEVEL else "用了拆步子题"
+    return cap, f"本题用到第 {hints_used} 级提示（{taken}），判分 {verdict} 按提示代价压到 {cap} 记入掌握度"
+
 
 # ---------------------------------------------------------------- 讲义驱动路径
 # 概念题库路径只覆盖策展过语料的概念；任意生成课要靠它：从当前讲义节正文现生成
@@ -120,6 +162,7 @@ LECTURE_GRADE_SYSTEM = (
 class TutorHistoryItem(BaseModel):
     question_id: str
     selected_index: int
+    hints_used: int = 0         # 这题用到第几级提示（0=没要提示）；≥2 的题不计正确
 
 
 class LectureExchange(BaseModel):
@@ -128,6 +171,7 @@ class LectureExchange(BaseModel):
     question: str
     answer: str = ""
     verdict: str = ""           # correct / partial / incorrect
+    hints_used: int = 0         # 这题用到第几级提示；统计掌握度时按 _HINT_VERDICT_CAP 压档
 
 
 class TutorRequest(BaseModel):
@@ -145,6 +189,11 @@ class TutorRequest(BaseModel):
     # 多轮状态与画像：决策（降维/推进/进阶）靠这两项，与课程内容无关
     lecture_history: List[LectureExchange] = Field(default_factory=list)
     prior_mastery: Optional[float] = None  # 画像里本节概念的历史掌握度 0-1，None=没见过
+    # 三级提示阶梯载荷。引擎无状态：hints_used 是「当前这道题此前已用到第几级」，
+    # 由客户端保管并每轮回传——出提示时用它判解锁，判分时用它算代价。
+    hint_request: int = 0        # 本轮要第几级提示；0=不要（正常出题/判分轮）
+    hints_used: int = 0
+    hint_question_id: str = ""   # 题库分支：给哪道题要提示（讲义分支的题目在 question 字段里）
 
 
 class TutorQuestion(BaseModel):
@@ -261,7 +310,14 @@ def tutor_turn(request: TutorRequest) -> TutorTurn:
 
     graded = [(h, by_id[h.question_id]) for h in request.history if h.question_id in by_id]
     asked_ids = {h.question_id for h, _ in graded}
-    corrects = [h.selected_index == item.answer_index for h, item in graded]
+    # 选对了还不够：用到第 2 级以上提示的题一律不计正确（_HINT_VERDICT_CAP）。
+    # 选择题只有对/错两档装不下 partial，压档时取更保守的那一边——
+    # 掌握度宁可低估：高估会让排程跳过本该重练的知识点。
+    # 副作用是有意的：看了答案的题走 simplify 分支，下一轮先降维再探，而不是当他会了往后推。
+    corrects = [h.selected_index == item.answer_index and hint_verdict_cap(h.hints_used) == "correct"
+                for h, item in graded]
+    hinted = [h for h, _ in graded if h.hints_used >= 2]
+    hint_lines = [f"其中 {len(hinted)} 题用到第 2 级以上提示，按提示代价不计正确"] if hinted else []
     asked, correct = len(corrects), sum(corrects)
     mastery = correct / asked if asked else 0.0
     remaining = [p for p in pool if p.question_id not in asked_ids]
@@ -291,7 +347,7 @@ def tutor_turn(request: TutorRequest) -> TutorTurn:
                 f"盲区定位到小节「{last_item.section_heading}」，先降维解释再追问",
                 f"当前掌握度估计 {mastery:.2f}（{correct}/{asked}）",
                 band_line,
-            ]),
+            ] + hint_lines),
             explanation=TutorExplanation(
                 text=last_item.explanation,
                 section_heading=last_item.section_heading,
@@ -319,7 +375,7 @@ def tutor_turn(request: TutorRequest) -> TutorTurn:
                 f"{trigger}，掌握度估计 {mastery:.2f}——继续喂选择题是浪费",
                 band_line,
                 "决策：转入进阶挑战（该课判题练习/实操任务）",
-            ]),
+            ] + hint_lines),
             challenge=f"进入「{last_item.lesson_title}」的判题练习与实操任务（learn 页对应课时）",
             mastery_estimate=mastery, asked=asked, correct=correct)
 
@@ -330,7 +386,7 @@ def tutor_turn(request: TutorRequest) -> TutorTurn:
             f"上一题答对（连对 {streak}），掌握度估计 {mastery:.2f}",
             band_line,
             f"推进到「{nxt.lesson_title}」继续探测",
-        ]),
+        ] + hint_lines),
         question=_to_question(nxt), mastery_estimate=mastery, asked=asked, correct=correct)
 
 
@@ -343,9 +399,11 @@ class ProfileEvidence(BaseModel):
     """
 
     concept: str                # 证据指向的概念（当前讲义节标题）
-    verdict: str                # correct / partial / incorrect
+    verdict: str                # correct / partial / incorrect（已按提示代价压过档）
     confidence: float           # 判分明确度：correct/incorrect 0.8，partial 0.5
-    evidence: str               # 一句话依据（取判分 because 首条）
+    evidence: str               # 一句话依据（取判分 because 首条；被压档时写压档说明）
+    hints_used: int = 0         # 这道题用到第几级提示；≥2 说明答案有一部分是提示喂出来的
+    raw_verdict: str = ""       # 压档前的原始判分；非空即表示这条证据被提示代价压过
 
 
 class LectureTutorTurn(BaseModel):
@@ -428,7 +486,10 @@ def lecture_tutor_turn(request: TutorRequest, gateway=None) -> LectureTutorTurn:
         f"当前小节：{request.scene_title or '（未提供）'}\n"
         f"讲义正文：\n{text}"
     )
-    verdicts = [h.verdict for h in request.lecture_history if h.verdict in LECTURE_VERDICTS]
+    # 历史每一轮都按它自己那道题用到的提示级别压档再统计——客户端存的是学习者看到的判分，
+    # 记进掌握度的是压过档的那一份（同 cap_verdict_by_hints）。
+    verdicts = [cap_verdict_by_hints(h.verdict, h.hints_used)[0]
+                for h in request.lecture_history if h.verdict in LECTURE_VERDICTS]
     corrects = [v == "correct" for v in verdicts]
 
     def _stats(vs: List[str]) -> tuple[float, int, int]:
@@ -443,9 +504,13 @@ def lecture_tutor_turn(request: TutorRequest, gateway=None) -> LectureTutorTurn:
             f"学习者的回答：{request.learner_answer.strip()}"
         )
         parsed = gw.structured_chat(LECTURE_AGENT, LECTURE_GRADE_SYSTEM, user, max_tokens=900, temperature=0.2)
-        verdict = str((parsed or {}).get("verdict", "")).strip().lower()
-        if verdict not in LECTURE_VERDICTS:
+        raw_verdict = str((parsed or {}).get("verdict", "")).strip().lower()
+        if raw_verdict not in LECTURE_VERDICTS:
             return _lecture_unavailable("判分模型未返回合法裁决——不猜测对错，本轮如实中止")
+        # 提示代价在这里落地。压的是**对外那一份 verdict**，不是只压 profile_evidence——
+        # 客户端的证据映射（classroom lib/evidence/from-tutor.ts）读的就是顶层 verdict 与
+        # mastery_estimate；只压内层字段，掌握度照样把「看了答案」记成「会了」。
+        verdict, cap_note = cap_verdict_by_hints(raw_verdict, request.hints_used)
         because = [str(b).strip() for b in (parsed.get("because") or []) if str(b).strip()]
         quote = str(parsed.get("quote") or "").strip()
         if quote and quote not in text:
@@ -454,7 +519,8 @@ def lecture_tutor_turn(request: TutorRequest, gateway=None) -> LectureTutorTurn:
         mastery, asked, correct = _stats(verdicts + [verdict])
         return LectureTutorTurn(
             mode="verdict", verdict=verdict,
-            because=(because or [f"模型裁决为 {verdict}，未给出细则"])
+            because=(because or [f"模型裁决为 {raw_verdict}，未给出细则"])
+            + ([cap_note] if cap_note else [])
             + ([band_line] if band_line else [])
             + [f"下一步：{_ASK_INTENT[decision_type]}"],
             explanation=str(parsed.get("explanation") or "").strip(),
@@ -465,7 +531,9 @@ def lecture_tutor_turn(request: TutorRequest, gateway=None) -> LectureTutorTurn:
                 concept=request.scene_title or request.course_title or "未命名小节",
                 verdict=verdict,
                 confidence=0.5 if verdict == "partial" else 0.8,
-                evidence=(because[0] if because else f"判分 {verdict}"),
+                evidence=(cap_note or (because[0] if because else f"判分 {verdict}")),
+                hints_used=max(0, int(request.hints_used)),
+                raw_verdict=raw_verdict if cap_note else "",
             ))
 
     decision_type, steer, band_line = _lecture_decision(corrects)
@@ -494,3 +562,173 @@ def lecture_tutor_turn(request: TutorRequest, gateway=None) -> LectureTutorTurn:
         because=[f"从当前讲义节「{request.scene_title or request.course_title or '未命名'}」"
                  f"现生成{_ASK_INTENT[decision_type]}：{steer}"]
         + ([band_line] if band_line else []))
+
+
+# ---------------------------------------------------------------- 三级提示阶梯
+# 学习者卡住时，要的不是「再答一遍」，而是一条阶梯：先被指回讲义的某一句（hint），
+# 还不行就把整题拆成小步、只答第一步（scaffold 子题），实在不行才给答案（bottom_out）。
+# 代价表与解锁判据在文件上半部（_HINT_VERDICT_CAP / _unlock），这里只负责组装内容。
+#
+# 内容全部取现成字段（讲义正文、判分要点、题库的选项与解析），**不调模型**：
+# 提示要秒回，而且一道题的三级内容必须每次都一样——同一道题两次提示不一样，
+# 学习者会以为自己看漏了；对我们也没法复算「他到底看到了什么」。
+
+_HINT_KINDS = ("hint", "scaffold", "bottom_out")
+_HINT_TITLES = ("先回到讲义这一句", "拆成小步：只答第一步", "兜底答案")
+_POOL_HINT_TITLES = ("先回到这一节", "拆成小步：先排除一个", "兜底答案")
+
+
+class HintStep(BaseModel):
+    """提示阶梯的一级。未解锁时 content 为空——解锁判定在服务端做，不靠客户端自觉。"""
+
+    level: int                  # 1/2/3
+    kind: str                   # hint=指方向 / scaffold=拆小步子题 / bottom_out=兜底答案
+    title: str
+    content: str = ""
+    unlocked: bool = False
+    reason: str = ""            # 开或不开的依据（与 decision.because 同口径）
+    verdict_cap: str = ""       # 用了这级之后，本题最高只能记到的判分档
+
+
+class HintLadder(BaseModel):
+    """一道题的三级提示阶梯 + 本轮放行结果。
+
+    引擎无状态：`hints_used` 是「这道题累计用到的最高级」，客户端存着、下一轮回传——
+    再要提示时用它判解锁，交答案时用它算代价（cap_verdict_by_hints）。
+    客户端不回传就等于从头再来一遍阶梯，拿不到答案：状态丢了只会更严，不会更松。
+    """
+
+    requested_level: int = 0    # 本轮请求第几级；0=只看阶梯状态，不取新内容
+    granted_level: int = 0      # 本轮实际放行到第几级；0=没放行（跳级或越界）
+    hints_used: int = 0         # 放行后的累计最高级，回传给下一轮
+    steps: List[HintStep] = Field(default_factory=list)
+    because: List[str] = Field(default_factory=list)
+
+
+def _unlock(level: int, hints_used: int) -> tuple[bool, str]:
+    """解锁判据：严格顺序，前一级用过才放行下一级。
+
+    写死在这里而不是问模型：这是「要不要给答案」的闸，必须可复算、可测、可解释。
+    重看已解锁的级别不算跳级（学习者翻回去看第 1 级提示不该被拦）。
+    """
+    if level <= hints_used:
+        return True, f"第 {level} 级此前已解锁，可以重看"
+    if level == hints_used + 1:
+        return True, f"前 {hints_used} 级都用过了，按顺序放行第 {level} 级"
+    return False, f"第 {level} 级未解锁：要先用完第 {hints_used + 1} 级（不许跳级直接看答案）"
+
+
+def _assemble_ladder(requested_level: int, hints_used: int,
+                     contents: List[tuple[str, str]]) -> HintLadder:
+    """三级内容 + 请求级别 → 放行结果。contents 顺序固定 hint / scaffold / bottom_out。"""
+    used = max(0, min(HINT_MAX_LEVEL, int(hints_used or 0)))
+    req = int(requested_level or 0)
+    granted = 0
+    because: List[str] = []
+    if req <= 0:
+        because.append(f"本轮没请求新提示，只回阶梯状态（已用到第 {used} 级）")
+    elif req > HINT_MAX_LEVEL:
+        because.append(f"提示一共 {HINT_MAX_LEVEL} 级，没有第 {req} 级")
+    else:
+        ok, reason = _unlock(req, used)
+        because.append(reason)
+        if ok:
+            granted = req
+    visible = max(used, granted)
+    steps = [
+        HintStep(
+            level=idx + 1,
+            kind=_HINT_KINDS[idx],
+            title=title,
+            # 没解锁的级别连内容都不下发：只把 unlocked=False 交给前端，前端一改就露答案。
+            content=body if idx + 1 <= visible else "",
+            unlocked=idx + 1 <= visible,
+            reason=_unlock(idx + 1, used)[1],
+            verdict_cap=hint_verdict_cap(idx + 1),
+        )
+        for idx, (title, body) in enumerate(contents[:HINT_MAX_LEVEL])
+    ]
+    because.append(f"代价：用到第 {visible} 级，本题最高只能记到 {hint_verdict_cap(visible)}")
+    return HintLadder(requested_level=req, granted_level=granted,
+                      hints_used=visible, steps=steps, because=because)
+
+
+def _anchor_sentence(text: str, target: str) -> str:
+    """讲义正文里与目标串用字重合最多的一句。
+
+    一级提示要「指路」而不是「给答案」，指的又必须是讲义原文（与判分侧 quote 同口径）。
+    用字重合是个粗办法，但它确定性、不用模型、也不会凭空造句——指错了最多是没帮上忙。
+    """
+    stop = set("的了和是在与对不也就都很这那什么呢吗哪如何为何？?。，,、！!；;：: \n")
+    chars = set(target) - stop
+    best, best_score = "", 0
+    for sentence in re.split(r"(?<=[。！？!?])", " ".join(text.split())):
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        score = sum(1 for c in chars if c in sentence)
+        if score > best_score:
+            best, best_score = sentence, score
+    return best
+
+
+def _lecture_ladder_contents(request: TutorRequest) -> List[tuple[str, str]]:
+    """讲义分支的三级内容：讲义原句 → 只答第一条要点 → 全部要点 + 原句。"""
+    points = [p.strip() for p in request.expected_points if p.strip()]
+    n = len(points)
+    section = request.scene_title or request.course_title or "本节"
+    anchor = _anchor_sentence(request.lecture_text, request.question or (points[0] if points else section))
+
+    hint = f"回到讲义这一句：「{anchor}」" if anchor else f"回到「{section}」这一节，把这段再读一遍。"
+    if n:
+        hint += f" 本题要答到 {n} 个要点，先从这里找方向——先别看下一级。"
+
+    if n > 1:
+        scaffold = (f"把整题拆开，先只答第 1 步（共 {n} 步）：{points[0]}"
+                    f"——用你自己的话把这一条讲清楚，剩下 {n - 1} 步先不管。")
+    elif n == 1:
+        scaffold = f"先只答这一条：{points[0]}——用你自己的话讲清楚就行，不用一次答全。"
+    else:
+        scaffold = "先只回答问题里最小的那一部分：说清一个点就行，不用一次答全。"
+
+    listed = "\n".join(f"{i}. {p}" for i, p in enumerate(points, 1))
+    bottom = ("完整答案要点：\n" + listed) if listed else "本题没有给判分要点，只能给讲义原句。"
+    if anchor:
+        bottom += f"\n讲义原句：「{anchor}」"
+    return list(zip(_HINT_TITLES, (hint, scaffold, bottom)))
+
+
+def _pool_ladder_contents(item: _PoolItem) -> List[tuple[str, str]]:
+    """题库分支的三级内容：锚定小节 → 排除一个干扰项的子题 → 正确项 + 解析。"""
+    hint = (f"回到「{item.section_heading}」这一节：{item.section_excerpt[:120]}"
+            if item.section_excerpt else f"这题考的是「{item.lesson_title}」里的内容，回去把那一节再看一遍。")
+
+    wrong = next((i for i in range(len(item.options)) if i != item.answer_index), None)
+    if wrong is None:
+        scaffold = "先用自己的话把题干在问什么复述一遍，再回头看选项。"
+    else:
+        scaffold = (f"先别急着选。做一小步排除：第 {wrong + 1} 项「{item.options[wrong]}」错在哪？"
+                    f"说清它为什么不成立，可选的就只剩 {len(item.options) - 1} 个了。")
+
+    bottom = f"答案是第 {item.answer_index + 1} 项「{item.options[item.answer_index]}」。"
+    if item.explanation:
+        bottom += item.explanation
+    return list(zip(_POOL_HINT_TITLES, (hint, scaffold, bottom)))
+
+
+def hint_ladder_turn(request: TutorRequest) -> HintLadder:
+    """三级提示阶梯单轮。确定性，不调模型。
+
+    分流口径与 run_tutor_turn 一致：lecture_text 非空走讲义分支（题在 question 字段里），
+    否则走题库分支（要 hint_question_id 指明是哪道题）。
+    题库里找不到那道题 → KeyError，HTTP 层照既有约定转 404（区分「引擎挂了」和「没这题」）。
+    """
+    if request.lecture_text.strip():
+        contents = _lecture_ladder_contents(request)
+    else:
+        pool = _load_pool(request.concept)
+        item = next((p for p in pool if p.question_id == request.hint_question_id), None)
+        if item is None:
+            raise KeyError(f"提示阶梯找不到这道题：{request.hint_question_id or '（未给 hint_question_id）'}")
+        contents = _pool_ladder_contents(item)
+    return _assemble_ladder(request.hint_request, request.hints_used, contents)

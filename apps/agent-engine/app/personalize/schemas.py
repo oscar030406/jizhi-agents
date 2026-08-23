@@ -66,6 +66,9 @@ class CompareRequest(BaseModel):
 class TutorHistoryItem(BaseModel):
     question_id: str
     selected_index: int = Field(ge=0, le=7)
+    # 这题用到第几级提示（三级阶梯）。引擎按它给掌握度压档，≥2 的题不计正确——
+    # 白名单外的字段会被静默丢掉，丢了这个就等于「看了答案也算会了」。
+    hints_used: int = Field(default=0, ge=0, le=3)
 
 
 class LectureExchange(BaseModel):
@@ -74,6 +77,7 @@ class LectureExchange(BaseModel):
     question: str = Field(default="", max_length=500)
     answer: str = Field(default="", max_length=2000)
     verdict: str = Field(default="", max_length=16)
+    hints_used: int = Field(default=0, ge=0, le=3)
 
 
 class TutorRequest(BaseModel):
@@ -91,6 +95,10 @@ class TutorRequest(BaseModel):
     expected_points: list[str] = Field(default_factory=list, max_length=8)
     lecture_history: list[LectureExchange] = Field(default_factory=list, max_length=32)
     prior_mastery: float | None = Field(default=None, ge=0.0, le=1.0)
+    # 三级提示阶梯：要第几级 + 这道题此前已用到第几级 + （题库分支）是哪道题。
+    hint_request: int = Field(default=0, ge=0, le=3)
+    hints_used: int = Field(default=0, ge=0, le=3)
+    hint_question_id: str = Field(default="", max_length=128)
 
 
 class PersonalizeFollowupRequest(BaseModel):
