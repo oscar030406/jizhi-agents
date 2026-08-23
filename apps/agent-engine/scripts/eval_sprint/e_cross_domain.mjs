@@ -243,6 +243,50 @@ export function foreignHits(body, ownCorpus, sig) {
   return { rows, distinct: rows.length, total: rows.reduce((s, r) => s + r.n, 0) };
 }
 
+/**
+ * 噪声底线：拿同一把尺子量盘上**已经生成的主域课**。
+ *
+ * 那些课全部由主域库生成，所以里面任何「别域命中」都是噪声或模型自带知识，
+ * 不是跨库污染。**没有这条底线，上面那张表的数字读不出意义**——
+ * 3 次命中是多还是少，只有对着底线才知道。
+ *
+ * 现算而不是写死：写死的数字在换一批课重跑之后就开始说谎。
+ */
+export function noiseFloor(sig, ownCorpus = 'ai', { exclude = [] } = {}) {
+  const totals = [];
+  const termTally = new Map();
+  if (!existsSync(CLASSROOM_DATA)) return null;
+  // 本轮自己生成的课要排除：它们正是被量的对象，混进底线就是拿自己当自己的对照。
+  // 实测：不排除的话第一门刚落盘，底线的分母就从 53 变成 54。
+  const skip = new Set(exclude.filter(Boolean).map((id) => `${id}.json`));
+  for (const f of readdirSync(CLASSROOM_DATA)) {
+    if (!f.endsWith('.json') || skip.has(f)) continue;
+    let c;
+    try {
+      c = JSON.parse(readFileSync(path.join(CLASSROOM_DATA, f), 'utf-8'));
+    } catch {
+      continue;
+    }
+    const body = courseBody(c, { maxChars: 40000 });
+    if (body.length < 800) continue;
+    const h = foreignHits(body, ownCorpus, sig);
+    totals.push(h.total);
+    for (const r of h.rows) termTally.set(r.term, (termTally.get(r.term) ?? 0) + r.n);
+  }
+  if (!totals.length) return null;
+  totals.sort((a, b) => a - b);
+  const q = (p) => totals[Math.min(totals.length - 1, Math.floor(totals.length * p))];
+  return {
+    n: totals.length,
+    zero: totals.filter((x) => x === 0).length,
+    median: q(0.5),
+    p75: q(0.75),
+    p90: q(0.9),
+    max: totals[totals.length - 1],
+    topTerms: [...termTally.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6),
+  };
+}
+
 // ---------------------------------------------------------------- 判官盲猜
 
 function guessSystem(corpora) {
@@ -404,12 +448,12 @@ async function main() {
   // body 不落盘：一门课的全文进 jsonl 会把明细撑到几百 KB，读数用不上它。
   const slim = rows.map(({ body, ...rest }) => rest);
   const name = `e_cross_domain-${stamp()}${DRY ? '-dryrun' : ''}`;
-  const out = emit(name, { rows: slim, md: reportMd(rows, sig, budget, stopped) });
+  const out = emit(name, { rows: slim, md: reportMd(rows, sig, budget, stopped, noiseFloor(sig, 'ai', { exclude: rows.map((r) => r.classroomId) })) });
   console.log(`\n明细 ${out.jsonl}\n报告 ${out.report}`);
   console.log(`\n${budget.markdown()}`);
 }
 
-function reportMd(rows, sig, budget, stopped) {
+function reportMd(rows, sig, budget, stopped, floor) {
   const hit = rows.filter((r) => r.guessed && r.guessed !== '解析失败');
   const right = hit.filter((r) => r.guessed === r.corpus).length;
   return (
@@ -444,12 +488,14 @@ function reportMd(rows, sig, budget, stopped) {
           `${(r.leak?.rows ?? []).slice(0, 10).map((x) => `${x.term}(${x.from}×${x.n})`).join(' ') || '—'} |`,
       )
       .join('\n') +
-    '\n\n### 噪声底线（同一把尺子量盘上 53 门主域课）\n\n' +
-    '这些课全部由主域库生成，**任何别域命中都是噪声或模型自带知识**：\n\n' +
-    '- 零命中 44/53 门（83%）\n' +
-    '- 命中次数：中位 0、75 分位 0、90 分位 3、最高 9\n' +
-    '- 贡献最多的词：precision×14、t08×5、t13×5、关键字×3、语句×2\n\n' +
-    '**上表要对着这条底线读**：0–3 次在噪声里，超过 9 次才值得追。\n\n' +
+    (floor
+      ? `\n\n### 噪声底线（同一把尺子现算盘上 ${floor.n} 门主域课，本轮生成的三门已排除）\n\n` +
+        '这些课全部由主域库生成，**任何别域命中都是噪声或模型自带知识**：\n\n' +
+        `- 零命中 ${floor.zero}/${floor.n} 门（${((floor.zero / floor.n) * 100).toFixed(0)}%）\n` +
+        `- 命中次数：中位 ${floor.median}、75 分位 ${floor.p75}、90 分位 ${floor.p90}、最高 ${floor.max}\n` +
+        `- 贡献最多的词：${floor.topTerms.map(([t, n]) => `${t}×${n}`).join('、') || '（无）'}\n\n` +
+        `**上表要对着这条底线读**：不超过 ${floor.p90} 次在噪声里，超过 ${floor.max} 次才值得追。\n\n`
+      : '\n\n### 噪声底线\n\n盘上没有可用的已生成课程，这一轮没算出底线——**上表的命中数因此没有参照，别单独引用**。\n\n') +
     '### 这条判据证明不了什么\n\n' +
     '**命中别域词 ≠ 跨库检索污染。** 模型自带世界知识，不检索也写得出领域词——' +
     '实测盘上一门主域生成的 ROS2 课就写出了 addtwoints、slam（制造侧特征词），' +
