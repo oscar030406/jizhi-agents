@@ -21,6 +21,8 @@ from pathlib import Path
 ENGINE = Path(__file__).resolve().parents[1]
 if str(ENGINE) not in sys.path:
     sys.path.insert(0, str(ENGINE))
+if str(ENGINE / "scripts") not in sys.path:
+    sys.path.insert(0, str(ENGINE / "scripts"))
 
 from backend.rag.structure_edges import detect_form  # noqa: E402
 
@@ -110,3 +112,43 @@ def test_probe带出形态():
     svc = (ENGINE / "backend" / "services" / "domain_intake.py").read_text(encoding="utf-8")
     assert '"structure_form": structure.get("structure_form")' in svc, "就绪度报告里没写形态"
     assert "文档站形态" in svc, "docsite 没有诚实降级的说明"
+
+
+# ── 章节序信号：只记不判 ──────────────────────────────────
+
+import ingest_domain as g  # noqa: E402
+
+
+def test_概念位置取文件名里的序号():
+    vocab = [
+        {"concept": "向量数据库", "sections": ["chapter1-01-intro.md#1 简介"]},
+        {"concept": "混合检索", "sections": ["chapter3-06-hybrid.md#2 混合"]},
+    ]
+    assert g.concept_positions(vocab) == {"向量数据库": (1, 1), "混合检索": (3, 6)}
+
+
+def test_没有序号的路径退化成兜底位置():
+    """文档站形态的路径没有序号，位置全退化成 (999,)——
+    于是 order_agrees 全落成 tie/None，等于没记。**这正是要的降级行为**。"""
+    vocab = [{"concept": "A", "sections": ["content/administration/hosting.md#1 x"]}]
+    assert g.concept_positions(vocab) == {"A": (999,)}
+
+
+def test_多次出现取首次():
+    vocab = [{"concept": "A", "sections": ["ch5-02.md#1 x", "ch1-03.md#2 y"]}]
+    assert g.concept_positions(vocab)["A"] == (1, 3)
+
+
+def test_章节序是记录不是过滤():
+    """路障：`order_agrees` 只记不判。
+
+    实测过才这么定的：rag-adv 11 条边里 5 条违反章节序，vecdb 5 条里 2 条。
+    **违反的占四五成**——「章节序当默认、LLM 只复核违反的边」这条杠杆
+    在我们的语料上省不下调用，一半的边都要复核。所以先记不判，
+    等人工标注出来再决定。谁把它改成过滤条件，这条会拦住。
+    """
+    src = (ENGINE / "scripts" / "ingest_domain.py").read_text(encoding="utf-8")
+    assert '"order_agrees": _agrees(ps, q)' in src
+    # 不许出现「按 order_agrees 丢边」的形态
+    assert "if _agrees" not in src
+    assert 'order_agrees"] ==' not in src

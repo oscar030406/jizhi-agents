@@ -87,8 +87,43 @@ def concept_evidence(v: dict) -> str:
 KB = ROOT / "data" / "knowledge_base"
 
 
-def build_prereq(gateway, names: list[str], evidence: dict[str, str]) -> tuple[dict, dict]:
-    """复用造图脚本的成对分类器，不复制判据。"""
+#: 概念在书里的位置。`sections` 里的路径带序号（教材形态才有），取里面的数字当排序键。
+_POS_NUM = re.compile(r"(\d+)")
+
+
+def concept_positions(vocab: list[dict]) -> dict[str, tuple]:
+    """每个概念在书里排第几。只对**教材形态**语料有意义（见 `detect_form`）。
+
+    取的是**首次出现**那一篇的序号。已知偏置：概述章会把所有概念都提一遍，
+    于是什么都显得很早。2026-08-23 在 rag-adv / vecdb 上比过首次/中位/末次
+    三种取法，一致率 55%/56%/40% 与 50%/100%/100%——**16 条边选不出口径**，
+    所以这里先用最简单的一种，并把判据一起记进边上让它可评估，不拍板。
+    """
+    pos: dict[str, tuple] = {}
+    for v in vocab:
+        keys = [
+            tuple(int(x) for x in _POS_NUM.findall(s.split("#")[0])) or (999,)
+            for s in (v.get("sections") or [])
+        ]
+        if keys:
+            pos[v["concept"]] = min(keys)
+    return pos
+
+
+def build_prereq(
+    gateway, names: list[str], evidence: dict[str, str], positions: dict[str, tuple] | None = None
+) -> tuple[dict, dict]:
+    """复用造图脚本的成对分类器，不复制判据。
+
+    `positions` 给了就在每条边上记一格 `order_agrees`：这条边的方向跟
+    作者写下的章节顺序合不合。**只记不判**——与 `link_intent` 的 `intents`
+    同一个做法，理由也一样：要不要按它过滤，得等一批人工标注。
+
+    实测先给个底：rag-adv 11 条边里 5 条违反章节序，vecdb 5 条里 2 条违反。
+    **违反的占四五成**，所以「章节序当默认、LLM 只复核违反的边」这条杠杆
+    在我们的语料上省不下多少调用——一半的边都要复核。这个数记在这里，
+    免得下一个人照着文献里的假设直接实现。
+    """
     import itertools
 
     from build_prereq_graph import break_cycles, classify_pair, transitive_reduction
@@ -117,6 +152,21 @@ def build_prereq(gateway, names: list[str], evidence: dict[str, str]) -> tuple[d
             prereqs[b].add(a)
             meta[(a, b)] = (conf, why)
     reduced, trans = transitive_reduction({k: set(v) for k, v in prereqs.items()})
+    pos = positions or {}
+
+    def _agrees(ps: set, q: str) -> str | None:
+        """这条子句的方向跟章节序合不合。位置缺一个就返回 None，不猜。"""
+        if q not in pos:
+            return None
+        marks = {
+            "yes" if pos[p] < pos[q] else "no" if pos[p] > pos[q] else "tie"
+            for p in ps
+            if p in pos
+        }
+        if not marks:
+            return None
+        return "no" if "no" in marks else ("tie" if marks == {"tie"} else "yes")
+
     clauses = {
         q: [
             {
@@ -124,6 +174,8 @@ def build_prereq(gateway, names: list[str], evidence: dict[str, str]) -> tuple[d
                 "confidence": round(min(meta.get((p, q), (0.0, ""))[0] for p in ps), 3),
                 "because": next((meta[(p, q)][1] for p in sorted(ps) if (p, q) in meta and meta[(p, q)][1]), ""),
                 "reviewed": False,
+                # 方向与作者写下的章节顺序合不合。只记不判（同 `intents`）。
+                "order_agrees": _agrees(ps, q),
             }
         ]
         for q, ps in reduced.items()
@@ -620,7 +672,7 @@ def main() -> int:
                       "skipped": "章级结构边可用，跳过节级 O(n²) 成对判定（--no-structure 可强制）"}
         print(f"[前置图·节级] 跳过（省 {len(names) * (len(names) - 1) // 2} 次调用）")
     else:
-        graph, graph_meta = build_prereq(gateway, names, evidence)
+        graph, graph_meta = build_prereq(gateway, names, evidence, concept_positions(vocab))
         print(f"[前置图·节级] {len(graph['clauses'])} 个概念有前置，"
               f"去环 {len(graph_meta['cycles_removed'])}，传递约简 {len(graph_meta['transitive_removed'])}")
 

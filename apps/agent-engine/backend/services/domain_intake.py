@@ -877,7 +877,12 @@ def _extract_concepts(run: IntakeRun) -> tuple[list[dict], dict[str, Any], str]:
     from backend.services.llm_gateway import LLMGateway
 
     _ensure_scripts_path()
-    from ingest_domain import AGENT_CONCEPT, build_prereq, concept_evidence  # type: ignore
+    from ingest_domain import (  # type: ignore
+        AGENT_CONCEPT,
+        build_prereq,
+        concept_evidence,
+        concept_positions,
+    )
 
     gateway = LLMGateway()
     if not gateway.route_for(AGENT_CONCEPT).enabled:
@@ -908,7 +913,9 @@ def _extract_concepts(run: IntakeRun) -> tuple[list[dict], dict[str, Any], str]:
 
     names = [v["concept"] for v in vocab]
     evidence = {v["concept"]: concept_evidence(v) for v in vocab}
-    graph, _meta = build_prereq(gateway, names, evidence)
+    # 位置只对教材形态有意义；文档站形态 concept_positions 会退化成一堆 (999,)，
+    # order_agrees 全落成 tie/None，等于没记——这正是我们要的降级行为。
+    graph, _meta = build_prereq(gateway, names, evidence, concept_positions(vocab))
     _backfill_concept_tags(run, vocab)
     return vocab, graph, f"抽出 {len(merged)} 个概念（EXTRACT/MERGE 提示词复用 backend.rag.concepts）"
 
