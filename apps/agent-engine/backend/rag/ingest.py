@@ -97,6 +97,37 @@ def load_markdown_chunks(doc_dir: Path) -> List[KnowledgeChunk]:
     return chunks
 
 
+def is_active_row(row: Dict[str, Any]) -> bool:
+    """这一行是不是活块。归档块（T1 标了 `superseded`）一律不算。
+
+    **判据只有这一处**。T1 之后索引里同时躺着活块与归档块，任何一个自己
+    `json.loads` 逐行读索引的地方，不过这道闸就会把归档块当素材数进去——
+    那不是少个功能，是**读数在说谎**：`corpus_fitness` 的素材量闸 A
+    因此虚高约一倍，红黄绿灯直接判错。
+    """
+    return not row.get("superseded")
+
+
+def read_index_rows(path: Path, *, include_superseded: bool = False) -> List[Dict[str, Any]]:
+    """离线脚本读索引的**唯一入口**。默认只给活块。
+
+    与 `backend.rag.retriever.load_index` 的分工：那一个建 `KnowledgeChunk` 对象、
+    供检索用；这一个只给原始 dict，供那些只想数一数、抽个字段的离线脚本用。
+    两个口的过滤判据同源（都走 {@link is_active_row}），不许各写一份。
+
+    坏行照 `write_index` 的口径处理：整个抛，不悄悄跳过——跳过的可能正是
+    某门课的出处，而「少了一块」在计数类脚本里看不出来。
+
+    `include_superseded=True` 只给按 id 溯源用（要查一条已经被顶替的旧块）。
+    """
+    rows = [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    return rows if include_superseded else [r for r in rows if is_active_row(r)]
+
+
 def write_index(
     chunks: Iterable[KnowledgeChunk], output_path: Path, *, supersede: bool = True
 ) -> None:

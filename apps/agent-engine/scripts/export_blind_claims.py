@@ -27,13 +27,11 @@ EVIDENCE_CHARS = 1400  # 与判官看到的窗口一致（content_audit_agent.JU
 
 
 def load_chunks() -> dict[str, dict]:
-    chunks = {}
-    with KB_INDEX.open(encoding="utf-8") as fh:
-        for line in fh:
-            if line.strip():
-                c = json.loads(line)
-                chunks[c["source_id"]] = c
-    return chunks
+    # 只取活块。按 source_id 建字典，归档块与活块同号——不过滤的话
+    # 谁后读到谁赢，盲评拿到的可能是一份已经被顶替的旧正文。
+    from backend.rag.ingest import read_index_rows
+
+    return {c["source_id"]: c for c in read_index_rows(KB_INDEX)}
 
 
 def main() -> None:

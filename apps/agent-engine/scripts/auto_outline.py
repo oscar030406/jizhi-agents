@@ -62,12 +62,15 @@ def load_chunks(prefixes: list[str]) -> "OrderedDict[str, dict]":
         m = re.search(r"(\d+)$", sub)
         return (sec, int(m.group(1)) if m else 0)
 
-    rows = []
-    with open(INDEX_PATH, encoding="utf-8") as f:
-        for line in f:
-            d = json.loads(line)
-            if any(d["source_id"].startswith(p) for p in prefixes):
-                rows.append(d)
+    # 只取活块：归档块与活块 source_id 同号，排课时会把同一节源料算两遍，
+    # 直接影响课时的字数判据（LESSON_MIN_CHARS / LESSON_HARD_MAX）。
+    from backend.rag.ingest import read_index_rows
+
+    rows = [
+        d
+        for d in read_index_rows(INDEX_PATH)
+        if any(d["source_id"].startswith(p) for p in prefixes)
+    ]
     if not rows:
         raise SystemExit(f"知识库里没有前缀为 {prefixes} 的块（索引：{INDEX_PATH}）")
     rows.sort(key=lambda d: sort_key(d["source_id"]))

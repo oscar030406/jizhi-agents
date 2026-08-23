@@ -122,10 +122,11 @@ def load_concepts() -> dict[str, dict[str, dict]]:
     """按域收拢词表：{domain: {concept: {"chunks": [...], "titles": [...]}}}"""
     by_domain: dict[str, dict[str, dict]] = {"ai": defaultdict(lambda: {"chunks": [], "titles": []}),
                                              "embodied": defaultdict(lambda: {"chunks": [], "titles": []})}
-    for line in INDEX.read_text(encoding="utf-8").splitlines():
-        if not line:
-            continue
-        row = json.loads(line)
+    # 只取活块：归档块与活块同号，前置图会把同一节的证据数两遍，
+    # 直接抬高「支撑数」这个进图门槛的判据。
+    from backend.rag.ingest import read_index_rows
+
+    for row in read_index_rows(INDEX):
         domain = "embodied" if row["source_id"].startswith(EMBODIED_PREFIX) else "ai"
         topic = row.get("topic")
         if not topic:

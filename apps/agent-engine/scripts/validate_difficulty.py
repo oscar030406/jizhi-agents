@@ -102,7 +102,10 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    rows = [json.loads(line) for line in INDEX.read_text(encoding="utf-8").splitlines() if line]
+    # 只验活块：归档块进来会让同一块被算两次，κ 与收敛效度都算不准。
+    from backend.rag.ingest import read_index_rows
+
+    rows = read_index_rows(INDEX)
     if args.source:
         rows = [r for r in rows if r["source_id"].startswith(args.source)]
     if not rows:

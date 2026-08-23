@@ -204,11 +204,11 @@ def load_requirements() -> dict[str, str]:
 
 
 def load_chunks() -> list[dict]:
+    # 只取活块：标签供给要数「这门课的主概念有多少块」，归档块进来直接翻倍。
+    from backend.rag.ingest import read_index_rows
+
     rows = []
-    for line in INDEX.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        row = json.loads(line)
+    for row in read_index_rows(INDEX):
         tags = row.get("concept_tags")
         if isinstance(tags, str):  # 索引里这个字段有时是 Python 字面量串
             try:

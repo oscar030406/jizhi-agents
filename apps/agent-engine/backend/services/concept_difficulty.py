@@ -37,10 +37,10 @@ def concept_difficulty_map() -> dict[str, int]:
     primary: dict[str, list[int]] = {}
     tagged: dict[str, list[int]] = {}
     if INDEX_PATH.exists():
-        for line in INDEX_PATH.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            chunk = json.loads(line)
+        # 只数活块：归档块进来会让同一个 topic 的难度被旧块摊一遍
+        from backend.rag.ingest import read_index_rows
+
+        for chunk in read_index_rows(INDEX_PATH):
             level = _level_to_int(str(chunk.get("difficulty", "L2")))
             topic = chunk.get("topic")
             if topic:

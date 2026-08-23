@@ -303,13 +303,12 @@ def index_path(name: str) -> Path:
 
 
 def load(path: Path) -> list[dict]:
-    rows = []
-    with path.open(encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                rows.append(json.loads(line))
-    return rows
+    """只给活块。T1 之后索引里躺着归档块，不过滤的话素材量闸 A 会虚高约一倍
+    （odoo 那种重建过的库直接翻倍），红黄绿灯当场判错——这个函数的产物是
+    「够不够铺一门课」的判据，多数一倍等于把不够的库判成够。"""
+    from backend.rag.ingest import read_index_rows
+
+    return read_index_rows(path)
 
 
 def discover() -> dict[str, Path]:

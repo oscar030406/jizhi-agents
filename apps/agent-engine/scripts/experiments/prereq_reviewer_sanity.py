@@ -42,11 +42,12 @@ TITLE_CAP = 12
 
 def topic_titles() -> dict[str, list[str]]:
     """按 topic 收标题——与 build_prereq_graph 的证据形态同源，不另造一份。"""
+    # 只取活块，与 build_prereq_graph 同一口径——尺子自检和被检的那条链
+    # 必须看到同一份素材，否则自检本身就不作数。
+    from backend.rag.ingest import read_index_rows
+
     titles: dict[str, list[str]] = {}
-    for line in INDEX.read_text(encoding="utf-8").splitlines():
-        if not line:
-            continue
-        row = json.loads(line)
+    for row in read_index_rows(INDEX):
         t = row.get("topic")
         if not t:
             continue

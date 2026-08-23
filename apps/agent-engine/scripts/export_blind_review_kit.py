@@ -96,7 +96,10 @@ def build_kit(out_dir: Path, reviewers: int, seed: int) -> dict:
 
     # 人写对照素材：从知识库原文取块
     index_path = ROOT / "data" / "knowledge_base" / "knowledge_index.jsonl"
-    kb = [json.loads(line) for line in index_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    # 只取活块：人写对照素材要的是这个库现在的正文，不是被顶替的那一代。
+    from backend.rag.ingest import read_index_rows
+
+    kb = read_index_rows(index_path)
     kb_by_section: dict[str, list[dict]] = {}
     for c in kb:
         kb_by_section.setdefault(c["source_id"].split("#")[0], []).append(c)

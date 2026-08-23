@@ -99,11 +99,13 @@ def corpus_band(name: str, terms: list[str]) -> dict | None:
     per_section_terms: list[int] = []
     per_para: list[int] = []
     chunks = 0
-    for line in index.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
+    # 只取活块：这里量的是「这个库现在的正文长什么样」，
+    # 归档块是被顶替的上一代，混进来会把段长分布往旧版拉。
+    from backend.rag.ingest import read_index_rows
+
+    for row in read_index_rows(index):
         chunks += 1
-        prose = strip_to_prose(json.loads(line).get("content", ""))
+        prose = strip_to_prose(row.get("content", ""))
         paras = [p for p in prose.split("\n") if len(CJK.findall(p)) >= 10]
         per_para += [len(CJK.findall(p)) for p in paras]
         for i in range(0, len(paras), 6):

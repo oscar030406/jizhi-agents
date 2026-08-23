@@ -1445,16 +1445,14 @@ def _corpus_source_ids(corpus: str) -> set[str]:
     path = checkup_index_path(corpus)
     ids: set[str] = set()
     try:
-        with path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    ids.add(json.loads(line).get("source_id", ""))
-                except json.JSONDecodeError:
-                    continue
-    except OSError:
+        # **归档块也算数**，所以这里显式要全量。这个集合回答的是
+        # 「判官引的这条出处是不是本库的」——旧课引的正是被顶替的那一代块，
+        # 只看活块会把它们判成「不是本库的资料」，接地率凭空掉一截。
+        # 与其他计数类读点方向相反，所以写明 include_superseded=True。
+        from backend.rag.ingest import read_index_rows
+
+        ids = {row.get("source_id", "") for row in read_index_rows(path, include_superseded=True)}
+    except (OSError, json.JSONDecodeError):
         pass
     return ids
 

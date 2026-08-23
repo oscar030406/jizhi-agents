@@ -147,7 +147,10 @@ def main() -> int:
         return 1
     print(f"模型 {route.provider}/{route.model}；提示词指纹 {PROMPT_FINGERPRINT}", flush=True)
 
-    rows = [json.loads(line) for line in INDEX.read_text(encoding="utf-8").splitlines() if line]
+    # 只标活块。给归档块标难度是白花钱——它们永远不会被检索到。
+    from backend.rag.ingest import read_index_rows
+
+    rows = read_index_rows(INDEX)
     if args.limit:
         rows = rows[: args.limit]
     print(f"待标 {len(rows)} 条，批大小 {args.batch_size}，并发 {args.workers}", flush=True)

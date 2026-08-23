@@ -1456,10 +1456,12 @@ def _load_index_chunks() -> dict:
     from backend.schemas.resources import KnowledgeChunk
 
     chunks = {}
-    with open(ROOT / "data" / "knowledge_base" / "knowledge_index.jsonl", encoding="utf-8") as f:
-        for line in f:
-            d = json.loads(line)
-            chunks[d["source_id"]] = KnowledgeChunk(**d)
+    # 只取活块。这里按 source_id 建字典，归档块与活块同号——不过滤的话
+    # 谁后读到谁赢，等于随机拿一份可能已经过期的正文去排课。
+    from backend.rag.ingest import read_index_rows
+
+    for d in read_index_rows(ROOT / "data" / "knowledge_base" / "knowledge_index.jsonl"):
+        chunks[d["source_id"]] = KnowledgeChunk(**d)
     return chunks
 
 

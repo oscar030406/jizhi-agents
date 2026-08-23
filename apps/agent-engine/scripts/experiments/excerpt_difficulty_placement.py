@@ -91,7 +91,10 @@ PROSE_FEATURES = ("term_density", "term_variety", "mean_sentence_len")
 
 def load_corpus(use: tuple[str, ...] | None = None) -> tuple[list[dict], dict[str, float]]:
     """全语料算一次难度分，转成 0–1 分位。分位是语料内相对量。"""
-    rows = [json.loads(line) for line in INDEX.read_text(encoding="utf-8").splitlines() if line]
+    # 只取活块：摘录难度分布要量的是现在检索得到的那些块。
+    from backend.rag.ingest import read_index_rows
+
+    rows = read_index_rows(INDEX)
     feats = [extract_features(r["content"]) for r in rows]
     scores = score(feats, use=use) if use else score(feats)
     ranks = _ranks(scores)

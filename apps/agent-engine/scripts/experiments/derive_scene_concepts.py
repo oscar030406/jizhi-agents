@@ -65,11 +65,12 @@ CLASSROOMS = ROOT.parents[0] / "classroom" / "data" / "classrooms"
 
 def load_chunk_tags() -> dict[str, list[str]]:
     """chunk id → concept_tags。索引里这个字段是 Python 字面量字符串，不是 JSON 数组。"""
+    # 只取活块。按 chunk id 建映射，归档块与活块同号——不过滤的话
+    # 谁后读到谁赢，可能拿到一份过期的 concept_tags。
+    from backend.rag.ingest import read_index_rows
+
     out: dict[str, list[str]] = {}
-    for line in INDEX.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        row = json.loads(line)
+    for row in read_index_rows(INDEX):
         tags = row.get("concept_tags")
         if isinstance(tags, str):
             try:
