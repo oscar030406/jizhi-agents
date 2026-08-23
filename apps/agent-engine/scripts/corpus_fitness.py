@@ -270,16 +270,23 @@ RED_CHUNKS = COURSE_SCENES_MEDIAN * TOP_K   # 60：中位长度的一门课都�
 YELLOW_CHUNKS = COURSE_SCENES_MAX * TOP_K   # 78：铺得满中位那门，铺不满最长那门
 
 
-def verdict(a: dict) -> tuple[str, list[str]]:
-    """红/黄/绿 + 每条理由一句人话。**只报警不拒绝**，返回值不参与任何拦截。"""
+def verdict(a: dict, archived: int = 0) -> tuple[str, list[str]]:
+    """红/黄/绿 + 每条理由一句人话。**只报警不拒绝**，返回值不参与任何拦截。
+
+    `archived` 只进措辞，不进判据：归档块检索不到、铺不了课，
+    拿它凑数正是 T1 之后要防的虚高。但也不能不提——重建过的库文件里
+    躺着两代块，只说「N 个证据块」会让核对的人对不上文件行数、以为报告在瞒数。
+    """
     n = a["chunks"]
+    # 有归档块时把话说完整：这是 T1「旧课出处永不断链」的兑现方式，是特性不是脚注。
+    tail = f"；另有归档块 {archived} 个，只供旧课出处解引用，不参与铺课" if archived else ""
     if n < RED_CHUNKS:
-        return "red", [f"只有 {n} 个证据块，铺不满一门课（一门课中位 {COURSE_SCENES_MEDIAN} 屏、"
-                       f"每屏取 {TOP_K} 块，零复用要 {RED_CHUNKS} 块）"]
+        return "red", [f"活块只有 {n} 个，铺不满一门课（一门课中位 {COURSE_SCENES_MEDIAN} 屏、"
+                       f"每屏取 {TOP_K} 块，零复用要 {RED_CHUNKS} 块）{tail}"]
     if n < YELLOW_CHUNKS:
-        return "yellow", [f"{n} 个证据块，够一门中等长度的课，铺不满最长的那种"
-                          f"（{COURSE_SCENES_MAX} 屏要 {YELLOW_CHUNKS} 块）"]
-    return "green", []
+        return "yellow", [f"活块 {n} 个，够一门中等长度的课，铺不满最长的那种"
+                          f"（{COURSE_SCENES_MAX} 屏要 {YELLOW_CHUNKS} 块）{tail}"]
+    return "green", ([f"活块 {n} 个{tail}"] if archived else [])
 
 
 def notes(a: dict) -> list[str]:
@@ -321,15 +328,37 @@ def discover() -> dict[str, Path]:
     return {k: v for k, v in found.items() if v.is_file()}
 
 
+def archived_count(path: Path) -> int:
+    """这个库有几块归档块（T1 整库重建时留下的上一代）。
+
+    量它不是为了判灯——归档块检索不到，铺不了课，进闸 A 就是虚高。
+    量它是为了**把话说完整**：重建过的库文件里躺着两代块，报告只说
+    「N 个证据块」会让核对的人对不上文件行数，以为报告在瞒数。
+    """
+    from backend.rag.ingest import read_index_rows
+
+    return len(read_index_rows(path, include_superseded=True)) - len(read_index_rows(path))
+
+
 def measure(path: Path) -> dict:
     """量一个库的闸 A 并判灯。零 API，0.6 秒跑完七个库（实测）。"""
     a = gate_a(load(path))
-    light, why = verdict(a)
+    archived = archived_count(path)
+    light, why = verdict(a, archived)
     try:  # 引擎目录外的候选库（--index）留绝对路径
         shown = str(path.relative_to(ROOT)).replace("\\", "/")
     except ValueError:
         shown = str(path)
-    return {"index": shown, "gate_a": a, "light": light, "why": why, "notes": notes(a)}
+    return {
+        "index": shown,
+        "gate_a": a,
+        "light": light,
+        "why": why,
+        "notes": notes(a),
+        # 归档块数单列，不并进 gate_a——闸 A 的分母只能是活块，
+        # 混进来就是这次要治的那个虚高。
+        "archived_chunks": archived,
+    }
 
 
 def refresh(name: str) -> dict | None:
