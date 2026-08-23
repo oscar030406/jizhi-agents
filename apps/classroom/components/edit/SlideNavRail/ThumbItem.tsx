@@ -17,6 +17,8 @@ import type { Scene } from '@/lib/types/stage';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useStageStore } from '@/lib/store/stage';
 import { useI18n } from '@/lib/hooks/use-i18n';
+import { useSceneRuntimeErrors } from '@/lib/store/scene-runtime-errors';
+import { useAgentPromptBus } from '@/components/edit/agent-prompt-bus';
 
 interface ThumbItemProps {
   readonly scene: Scene;
@@ -43,6 +45,25 @@ function ThumbItemComponent({
   const updateScene = useStageStore.use.updateScene();
   const ref = useRef<HTMLLIElement>(null);
   const visible = useNearViewport(ref);
+
+  // 互动教具 iframe 上报的运行时错误（编辑态角标数据源）。仅 interactive
+  // 场景展示角标；学习者端已有白屏横幅，这里只服务教师修复动线。
+  const runtimeErrors = useSceneRuntimeErrors((s) => s.errors[scene.id]);
+  const errorCount = scene.type === 'interactive' ? (runtimeErrors?.length ?? 0) : 0;
+
+  const sendErrorsToAgent = useCallback(() => {
+    const errors = useSceneRuntimeErrors.getState().errors[scene.id];
+    if (!errors || errors.length === 0) return;
+    // 先激活该场景，agent 的「当前页」上下文才对得上；错误文本原样带上，
+    // 附 sceneId 兜底（激活的状态提交是异步的，消息本身要能自洽）。
+    onActivate();
+    useAgentPromptBus
+      .getState()
+      .send(
+        `「${scene.title || '未命名页面'}」这一页的互动教具报了 ${errors.length} 个运行时错误（sceneId=${scene.id}），请帮我修复：\n` +
+          errors.map((e) => `- ${e}`).join('\n'),
+      );
+  }, [scene.id, scene.title, onActivate]);
 
   // Inline title-edit state. `draft` is only used while renaming; when
   // idle we derive the visible title from `scene.title` directly so an
@@ -254,6 +275,23 @@ function ThumbItemComponent({
               visible={visible}
             />
           </div>
+          {/* 运行时错误角标 — 点击把错误文本发进 Edit with AI 面板。 */}
+          {errorCount > 0 && (
+            <button
+              type="button"
+              title="教具报了运行时错误，点击发给 Edit with AI 修复"
+              aria-label="教具报了运行时错误，点击发给 Edit with AI 修复"
+              data-testid="runtime-error-badge"
+              onClick={(e) => {
+                e.stopPropagation();
+                sendErrorsToAgent();
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              className="absolute right-1 top-1 z-10 inline-flex items-center gap-0.5 rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white shadow-sm ring-1 ring-white/60 transition-colors hover:bg-red-600 dark:ring-slate-900/60"
+            >
+              ⚠ {errorCount}
+            </button>
+          )}
         </div>
       </div>
     </Reorder.Item>

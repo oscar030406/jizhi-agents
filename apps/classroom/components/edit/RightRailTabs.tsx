@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   History,
   PanelRightClose,
@@ -17,6 +17,7 @@ import { useI18n } from '@/lib/hooks/use-i18n';
 import { AgentPanel } from '@/components/edit/AgentPanel/AgentPanel';
 import { AgentRosterPanel } from '@/components/edit/AgentsView/AgentRosterPanel';
 import { shouldRenderAgentPanel } from '@/components/edit/agent-panel-visibility';
+import { useAgentPromptBus } from '@/components/edit/agent-prompt-bus';
 
 const MIN_WIDTH = 320;
 const MAX_WIDTH = 640;
@@ -75,6 +76,24 @@ export function RightRailTabs({
     setActiveTab('agents');
   }
   const [collapsed, setCollapsed] = useState(false);
+
+  // 场景侧栏运行时错误角标发来的 pending prompt：展开面板、切到 AI tab，
+  // 再走 runtime.thread.append 触发正常的 onNew 发送流程。订阅回调里消费
+  // （而不是 select + effect body 里 setState），避免级联渲染 lint 报错。
+  useEffect(() => {
+    return useAgentPromptBus.subscribe((s) => {
+      const prompt = s.pending;
+      if (!prompt) return;
+      useAgentPromptBus.getState().clear();
+      setCollapsed(false);
+      if (showAiTab) setActiveTab('ai');
+      try {
+        runtime.thread.append({ role: 'user', content: [{ type: 'text', text: prompt }] });
+      } catch {
+        /* a run may already be in flight; the prompt is dropped rather than queued */
+      }
+    });
+  }, [runtime, showAiTab]);
 
   const railRef = useRef<HTMLElement>(null);
   const [width, setWidth] = useState(DEFAULT_WIDTH);

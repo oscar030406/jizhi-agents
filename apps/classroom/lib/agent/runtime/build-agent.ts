@@ -67,16 +67,36 @@ export function buildAgent(opts: BuildAgentOptions): Agent {
     },
     beforeToolCall: makeAllowlistGate(opts.allowedToolNames ?? V0_ALLOWLIST),
     afterToolCall: async (context, signal) => {
-      const quotaResult = await quotaHook(context);
-      const requestResult = await opts.afterToolCall?.(context, signal);
-      if (!quotaResult && !requestResult) return undefined;
+      // Normalize tool-returned `isError` markers (MCP-style `{ isError: true }`
+      // result objects) into pi's `context.isError`, so quota/request hooks and
+      // the final result all agree the call failed even when the tool "returned"
+      // instead of throwing. Ported from upstream build-agent.ts.
+      const markerIsError =
+        typeof context.result === 'object' &&
+        context.result !== null &&
+        Object.prototype.hasOwnProperty.call(context.result, 'isError') &&
+        (context.result as { isError?: unknown }).isError === true;
+      const baseIsError = context.isError || markerIsError;
+      const normalizedContext = baseIsError ? { ...context, isError: true } : context;
+      const quotaResult = await quotaHook(normalizedContext);
+      const requestResult = await opts.afterToolCall?.(normalizedContext, signal);
+      if (!quotaResult && !requestResult && !baseIsError) return undefined;
       return {
         ...quotaResult,
         ...requestResult,
+        isError: baseIsError || quotaResult?.isError === true || requestResult?.isError === true,
         terminate: quotaResult?.terminate === true || requestResult?.terminate === true,
       };
     },
   });
+  // 上游 build-agent.ts 在此处还有一段 stopReason==='length' 终止屏障
+  // （subscribe turn_end + hasLengthToolCallProvenance → clearAllQueues 并封
+  // steer/followUp）。本 fork 不移植，因为它在这里是双重死代码：
+  // 1) 本地 stream-fn.ts 的 pump 不解析 AI SDK 的 `finish` part，永远不会产出
+  //    stopReason==='length' 的 assistant message（也没有 provenance WeakSet）；
+  // 2) 全仓没有任何 agent.steer()/followUp() 调用者，屏障封的队列始终为空。
+  // 若日后把上游 stream-fn 的 finishReason 处理（length 截断 + 剥除截断的
+  // toolCall）一并移植过来，再把该屏障一起补上。
 }
 
 export function buildSystemPrompt(scene?: { id: string; title: string }): string {

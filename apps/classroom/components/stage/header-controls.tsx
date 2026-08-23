@@ -7,6 +7,7 @@ import {
   ClipboardList,
   Download,
   FileDown,
+  FileText,
   Loader2,
   Monitor,
   Moon,
@@ -21,6 +22,7 @@ import { useStageStore } from '@/lib/store';
 import { useMediaGenerationStore } from '@/lib/store/media-generation';
 import { useExportPPTX } from '@/lib/export/use-export-pptx';
 import { useExportClassroom } from '@/lib/export/use-export-classroom';
+import { useExportScript } from '@/lib/export/use-export-script';
 import { exportPracticeGuide, isProceduralScene } from '@/lib/export/practice-guide';
 import { isVideoExportEnabled } from '@/lib/config/feature-flags';
 import { useVideoRenderStore } from '@/lib/store/video-render';
@@ -82,6 +84,7 @@ export function HeaderControls({
   const mediaTasks = useMediaGenerationStore((s) => s.tasks);
   const { exporting: isExporting, exportPPTX, exportResourcePack } = useExportPPTX();
   const { exporting: isExportingZip, exportClassroomZip } = useExportClassroom();
+  const { exportScriptMd } = useExportScript();
   const videoExportEnabled = isVideoExportEnabled();
   // Video render lives in a global store so its progress ring stays on the
   // export button even after the menu closes / scenes switch mid-render.
@@ -288,6 +291,18 @@ export function HeaderControls({
             >
               <FileDown className="w-4 h-4 text-muted-foreground shrink-0" />
               <span>{t('export.pptx')}</span>
+            </button>
+            {/* 讲稿导出 — 把各页 speech 旁白汇成一份 Markdown。文案中文
+                （export.scriptMd 未进 locale 词表，与页内其他中文注释同一口径）。 */}
+            <button
+              onClick={() => {
+                setExportMenuOpen(false);
+                exportScriptMd();
+              }}
+              className="w-full px-4 py-2.5 text-left text-sm hover:bg-accent transition-colors flex items-center gap-2.5"
+            >
+              <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
+              <span>导出讲稿 (.md)</span>
             </button>
             <button
               onClick={() => {
