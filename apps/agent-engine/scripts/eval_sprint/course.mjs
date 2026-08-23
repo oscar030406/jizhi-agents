@@ -158,10 +158,28 @@ export async function generateCourse({ baseUrl, requirement, profile, budget, ti
   }
 }
 
+/**
+ * 取一门课：先问服务，服务不在就直接读盘。
+ *
+ * 事后汇总（消融 --judge、任何离线读数）读的是**已经落盘的课**，
+ * 却因为要走 HTTP 而必须有一个服务活着——那是没道理的耦合。
+ * 实测撞到过：四档跑完各自的服务都收了，别人又在重建 3210，
+ * 于是汇总一步卡在「课程取不到」，而课就在 data/classrooms/ 躺着。
+ *
+ * 服务优先仍然保留：线上那份可能比盘上新（生成刚结束还没 flush 的情况）。
+ */
 export async function fetchCourse(baseUrl, classroomId) {
-  const body = await getJson(`${baseUrl}/api/classroom?id=${encodeURIComponent(classroomId)}`);
-  if (!body.classroom) throw new Error(`课程 ${classroomId} 取不到`);
-  return body.classroom;
+  let online = null;
+  try {
+    const body = await getJson(`${baseUrl}/api/classroom?id=${encodeURIComponent(classroomId)}`);
+    online = body.classroom ?? null;
+  } catch {
+    online = null;
+  }
+  if (online) return online;
+  const onDisk = path.join(CLASSROOM, 'data/classrooms', `${classroomId}.json`);
+  if (existsSync(onDisk)) return loadCourseFile(onDisk);
+  throw new Error(`课程 ${classroomId} 取不到：${baseUrl} 没响应，盘上也没有 ${onDisk}`);
 }
 
 export function loadCourseFile(file) {
