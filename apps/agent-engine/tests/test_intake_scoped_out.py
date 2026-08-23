@@ -113,11 +113,6 @@ def test_index_only_rebuild_honours_declared_scope(tmp_path, monkeypatch):
     not (IOTDB_READINESS.is_file() and IOTDB_INDEX.is_file()),
     reason="本机没有 iotdb 这个库的产物，跳过实盘对账",
 )
-@pytest.mark.xfail(
-    reason="iotdb 现有索引里 12 个被声明剔除的文件共 132 块全在。"
-    "重投并修好接入链之后，这一条会自己转绿；届时去掉 xfail。",
-    strict=True,
-)
 def test_iotdb_index_has_no_scoped_out_chunks():
     """实盘对账：readiness 声明剔除的文件，索引里应当一块都没有。"""
     readiness = json.loads(IOTDB_READINESS.read_text(encoding="utf-8"))
