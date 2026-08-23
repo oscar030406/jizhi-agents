@@ -459,26 +459,44 @@ def _transcribe_scans(run: IntakeRun, pending: list[tuple[str, str]]) -> dict[st
 
 
 def _install_figures(run: IntakeRun) -> dict[str, Any]:
-    """把转写产出的页图搬进 `corpora/<库>/figures/`。
+    """把插图搬进 `corpora/<库>/figures/`，两个来源都收。
 
-    转写时图落在 `<run>/transcribed/<书名>/figures/`——那是**过程产物**，
-    run 目录随时可以清。课程生成读的是 `corpora/<库>/`，图不搬过去，
-    正文里的 `[图：… → figures/pNNN.png]` 全是死链。
+    来源一：链内转写的产物 `<run>/transcribed/<书名>/figures/`。
+    来源二：**投料自带的** `<run>/docs/**/figures/`——管理者投一份已经转写好的
+    教材包时图在这里（2026-08-23 实测：离线转写的 PLC 书投进去，
+    正文 322 条图引用全是死链，因为这一路当时没人搬）。
 
-    命名带上书名前缀：两本书都有 p0001.png，直接平铺会互相覆盖。
+    run 目录是过程产物、随时可清；课程生成读的是 `corpora/<库>/`。
+    命名带前缀：两本书都有 p0001.png，直接平铺会互相覆盖。
     """
-    src_root = run.dir / "transcribed"
-    if not src_root.exists():
+    # 两个来源：链内转写的产物，以及**投料自带的** `docs/**/figures/`
+    # （管理者投一份已经转写好的教材包时图在那里）。
+    # 少搬任何一路，正文里的 `[图：… → figures/x.png]` 就是死链。
+    pairs: list[tuple[str, Path]] = []
+
+    transcribed = run.dir / "transcribed"
+    if transcribed.exists():
+        for book_dir in sorted(p for p in transcribed.iterdir() if p.is_dir()):
+            pairs.extend(
+                (book_dir.name, png) for png in sorted((book_dir / "figures").glob("*"))
+            )
+
+    for figures_dir in sorted(run.docs_dir.rglob("figures")):
+        if not figures_dir.is_dir():
+            continue
+        # 前缀用它相对 docs/ 的父路径，两本书各有 p0001.png 时不互相覆盖
+        parent = figures_dir.parent.relative_to(run.docs_dir).as_posix().replace("/", "-")
+        pairs.extend((parent or "docs", f) for f in sorted(figures_dir.glob("*")))
+
+    pairs = [(prefix, f) for prefix, f in pairs if f.is_file()]
+    if not pairs:
         return {}
 
     dest = CORPORA_DIR / run.corpus / "figures"
     dest.mkdir(parents=True, exist_ok=True)
-    moved = 0
-    for book_dir in sorted(p for p in src_root.iterdir() if p.is_dir()):
-        for png in sorted((book_dir / "figures").glob("*.png")):
-            shutil.copy2(png, dest / f"{book_dir.name}-{png.name}")
-            moved += 1
-    return {"figures": moved} if moved else {}
+    for prefix, src in pairs:
+        shutil.copy2(src, dest / f"{prefix}-{src.name}")
+    return {"figures": len(pairs)}
 
 
 def _stage_receive(run: IntakeRun) -> dict[str, Any]:
@@ -2192,6 +2210,67 @@ def _refresh_corpus_caches() -> None:
     skill_map_api.cache_clear()
 
 
+#: 一条 run 跑多久还没结束就算「进程中断」。⑥⑦ 两站最慢——实测投币全链
+#: 71.77 秒、带试跑体检的补测 427 秒；877 页转写那种极端情况约 40 分钟。
+#: 取 4 小时：比最慢的真实场景宽一个数量级，又不会让昨天挂掉的 run 挂到明天。
+ORPHAN_RUN_AFTER_SECONDS = 4 * 3600
+
+
+def sweep_orphan_runs(now: float | None = None) -> list[dict[str, Any]]:
+    """把进程中断留下的 running 残 run 判成 failed，并清掉半成品库。
+
+    `_cleanup_partial` 只在 run **硬失败**那条路上跑。进程被杀时（OOM、部署重启、
+    机器饱和）它根本没机会执行——run.json 永远停在 `running`，半成品库留在盘上，
+    可能过了块数闸进学习者的下拉。**残库假装建成**是这条链最难发现的失败形态：
+    管理端看着「正在建」，学习端已经能选到它了。
+
+    引擎启动时调一次。改判写进 run 记录与事件流，不静默处理——
+    管理者要能看出「这条 run 是被判死的，不是自己失败的」。
+    """
+    stamp = now if now is not None else time.time()
+    swept: list[dict[str, Any]] = []
+    if not RUNS_DIR.exists():
+        return swept
+
+    for run_dir in sorted(p for p in RUNS_DIR.iterdir() if p.is_dir()):
+        record_path = run_dir / "run.json"
+        record = _read_json(record_path)
+        if not record or record.get("status") != "running":
+            continue
+        try:
+            age = stamp - record_path.stat().st_mtime
+        except OSError:
+            continue
+        if age < ORPHAN_RUN_AFTER_SECONDS:
+            continue  # 还在跑，别动
+
+        corpus = str(record.get("corpus") or "")
+        removed = [] if record.get("options", {}).get("checkup") else _cleanup_partial(corpus)
+        record["status"] = "failed"
+        record["finished_at"] = now_iso()
+        record["error"] = (
+            f"进程中断：这条 run 停在「进行中」超过 {ORPHAN_RUN_AFTER_SECONDS // 3600} 小时，"
+            "判定为服务重启或被系统杀掉。"
+            + (f"半成品已清理（{'、'.join(removed)}）。" if removed else "没有留下半成品。")
+            + "这个库名现在可以重新投币。"
+        )
+        record.setdefault("events", []).append(
+            {
+                "seq": len(record.get("events") or []) + 1,
+                "at": now_iso(),
+                "stage": "run",
+                "kind": "run_failed",
+                "message": record["error"],
+            }
+        )
+        record_path.write_text(
+            json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        swept.append({"run_id": record.get("run_id"), "corpus": corpus, "removed": removed})
+
+    return swept
+
+
 def _cleanup_partial(corpus: str) -> list[str]:
     """失败就把这次建的库删干净。
 
@@ -2226,8 +2305,16 @@ def _reserve_corpus(corpus: str) -> None:
         raise StageError(f"库名不合法：只允许小写字母数字与 - _，1-32 位（收到「{corpus}」）")
     for path in (CORPORA_DIR / name, KB / f"{name}_intake", GOLD_DIR / name):
         if path.exists():
+            # 只拒不指路的报错会让人卡住（A7）：管理者重投同一批语料是常态——
+            # 上次投失败了、书更新了、想换个档位设置重来。说清三条出路。
             raise StageError(
-                f"「{name}」已存在（{_rel(path)}）——本流水线只建新库，不覆盖既有库"
+                f"「{name}」已经建过了（{_rel(path)}）。这条链只建新库、不覆盖既有库——"
+                "覆盖意味着正在用它的课程和学情记录会对不上原来的出处。\n"
+                "想继续的话有三条路：\n"
+                "  · 换个库名新建（比如加个版本后缀），两份并存、旧课不受影响；\n"
+                "  · 确认旧库不再需要，先在知识库中心删掉它，再用同名投一次；\n"
+                "  · 只是想补几篇文档进已有的库——这条链还不支持增量，"
+                "目前只能整库重建。"
             )
 
 

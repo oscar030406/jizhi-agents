@@ -135,6 +135,7 @@ def test_转写的原图搬进库(tmp_path, monkeypatch):
     class _Run:
         dir = tmp_path / "run"
         corpus = "probe"
+        docs_dir = tmp_path / "run" / "docs"
 
     for book in ("PLC教材", "机器人基础"):
         figs = _Run.dir / "transcribed" / book / "figures"
@@ -159,6 +160,57 @@ def test_没转写过的库不建空figures目录(tmp_path, monkeypatch):
     class _Run:
         dir = tmp_path / "run"
         corpus = "probe"
+        docs_dir = tmp_path / "run" / "docs"
 
     _Run.dir.mkdir(parents=True)
     assert di._install_figures(_Run()) == {}
+
+
+def test_投料自带的figures也搬进库(tmp_path, monkeypatch):
+    """管理者可能直接投一份**已经转写好的**教材包，图在 `docs/**/figures/`。
+
+    2026-08-23 实测：离线转写的 PLC 书投进去，295 块建成、九站全过，
+    但正文里 322 条 `[图：… → figures/pNNN.png]` 全是死链——
+    zip 解压只解 md/txt/rst/pdf 把 png 跳了，`_install_figures` 又只看
+    `transcribed/`。两处都漏，图一张都没进库。
+    """
+    from backend.services import domain_intake as di
+
+    monkeypatch.setattr(di, "CORPORA_DIR", tmp_path / "corpora")
+
+    class _Run:
+        dir = tmp_path / "run"
+        corpus = "probe"
+        docs_dir = tmp_path / "run" / "docs"
+
+    figs = _Run.docs_dir / "PLC教材" / "figures"
+    figs.mkdir(parents=True)
+    for page in range(3):
+        (figs / f"p{page:04d}.png").write_bytes(b"\x89PNG")
+
+    got = di._install_figures(_Run())
+    assert got == {"figures": 3}
+    names = sorted(p.name for p in (tmp_path / "corpora" / "probe" / "figures").glob("*"))
+    assert names == ["PLC教材-p0000.png", "PLC教材-p0001.png", "PLC教材-p0002.png"]
+
+
+def test_两个来源的图都搬且不撞名(tmp_path, monkeypatch):
+    from backend.services import domain_intake as di
+
+    monkeypatch.setattr(di, "CORPORA_DIR", tmp_path / "corpora")
+
+    class _Run:
+        dir = tmp_path / "run"
+        corpus = "probe"
+        docs_dir = tmp_path / "run" / "docs"
+
+    a = _Run.dir / "transcribed" / "链内书" / "figures"
+    a.mkdir(parents=True)
+    (a / "p0000.png").write_bytes(b"\x89PNG")
+    b = _Run.docs_dir / "投料书" / "figures"
+    b.mkdir(parents=True)
+    (b / "p0000.png").write_bytes(b"\x89PNG")
+
+    assert di._install_figures(_Run()) == {"figures": 2}
+    names = sorted(p.name for p in (tmp_path / "corpora" / "probe" / "figures").glob("*"))
+    assert names == ["投料书-p0000.png", "链内书-p0000.png"]

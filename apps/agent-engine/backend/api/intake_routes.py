@@ -104,6 +104,12 @@ async def create_run(
     # 顺手清过期残包。放在这里而不是定时任务：投币是唯一往 _inbox 写东西的动作，
     # 谁弄脏谁顺手擦，不用额外挂一个 cron。
     domain_intake.sweep_inbox()
+    # 顺带清进程中断留下的残 run（A4）。放这里不挂定时任务：投币是唯一会
+    # 产生 run 的动作，谁弄脏谁擦。残 run 的害处是「假装还在建」——
+    # 管理端看着转圈，学习端却可能已经能选到那个半成品库了。
+    # 清理结果写进各自的 run.json 与事件流（管理端看得到），
+    # 这里不另记日志——那会变成第二个真源。
+    domain_intake.sweep_orphan_runs()
     stamp = f"{int(time.time() * 1000):x}"
     try:
         if given[0] == "files":

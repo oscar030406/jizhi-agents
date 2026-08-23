@@ -630,8 +630,13 @@ def test_create_run_from_dir_refuses_existing_corpus(sandbox, tmp_path):
     src = tmp_path / "staged"
     src.mkdir()
     (src / "a.md").write_text(TWO_DOCS["chapter-one.md"], encoding="utf-8")
-    with pytest.raises(domain_intake.StageError, match="已存在"):
+    with pytest.raises(domain_intake.StageError) as e:
         domain_intake.create_run_from_dir(src, corpus="taken")
+    msg = str(e.value)
+    assert "已经建过了" in msg
+    # 只拒不指路会让人卡住（A7）：重投同名是常态——上次失败了、书更新了、
+    # 换档位重来。报错要给出路，不然管理者只能来问我们。
+    assert "换个库名" in msg and "删掉它" in msg, f"报错要给出路：{msg}"
 
 
 def test_不过线的库照样建成但被标试运行(sandbox, trial_stubs, monkeypatch):
@@ -1082,3 +1087,77 @@ def test_inbox不存在时清理不报错(sandbox):
 
     _shutil.rmtree(domain_intake.RUNS_DIR / "_inbox", ignore_errors=True)
     assert domain_intake.sweep_inbox() == []
+
+
+# ── 进程中断留下的残 run（A4）────────────────────────────────
+
+def test_中断的run被判失败且清掉半成品(sandbox):
+    """`_cleanup_partial` 只在 run **硬失败**那条路上跑。进程被杀时
+    （OOM、部署重启、机器饱和——2026-08-22 一天撞过三种）它根本没机会执行：
+    run.json 永远停在 running，半成品库留在盘上。
+
+    **残库假装建成**是这条链最难发现的失败形态：管理端看着「正在建」，
+    学习端却可能已经能在下拉里选到那个半成品了。
+    """
+    import os
+
+    run_dir = domain_intake.RUNS_DIR / "20260101T000000-orphan"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "run_id": "20260101T000000-orphan",
+                "corpus": "orphaned",
+                "status": "running",
+                "options": {},
+                "stages": {},
+                "events": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (domain_intake.CORPORA_DIR / "orphaned").mkdir(parents=True)
+
+    long_ago = time.time() - domain_intake.ORPHAN_RUN_AFTER_SECONDS - 60
+    os.utime(run_dir / "run.json", (long_ago, long_ago))
+
+    swept = domain_intake.sweep_orphan_runs()
+    assert [s["run_id"] for s in swept] == ["20260101T000000-orphan"]
+
+    record = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    assert record["status"] == "failed"
+    assert "进程中断" in record["error"]
+    # 报错要说清「这个库名现在可以重投」——否则管理者被 _reserve_corpus 挡着，
+    # 以为库建成了其实没有
+    assert "重新投币" in record["error"]
+    # 改判要留痕，不静默
+    assert record["events"] and record["events"][-1]["kind"] == "run_failed"
+    # 半成品清掉
+    assert not (domain_intake.CORPORA_DIR / "orphaned").exists()
+
+
+def test_还在跑的run不许被误清(sandbox):
+    """刚发起的 run 正在跑——误清等于把人家正在建的库删了。"""
+    run_dir = domain_intake.RUNS_DIR / "20260101T000000-live"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(
+        json.dumps({"run_id": "live", "corpus": "building", "status": "running", "options": {}}),
+        encoding="utf-8",
+    )
+    assert domain_intake.sweep_orphan_runs() == []
+    assert json.loads((run_dir / "run.json").read_text(encoding="utf-8"))["status"] == "running"
+
+
+def test_已完成的run不动(sandbox):
+    run_dir = domain_intake.RUNS_DIR / "20260101T000000-done"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(
+        json.dumps({"run_id": "done", "corpus": "built", "status": "done", "options": {}}),
+        encoding="utf-8",
+    )
+    import os
+
+    long_ago = time.time() - domain_intake.ORPHAN_RUN_AFTER_SECONDS - 60
+    os.utime(run_dir / "run.json", (long_ago, long_ago))
+    assert domain_intake.sweep_orphan_runs() == []

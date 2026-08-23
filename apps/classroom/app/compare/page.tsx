@@ -441,7 +441,18 @@ export default function ComparePage() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const files = ['/compare-showcase.json', '/compare-showcase-tools.json'];
+      // 组清单由生成器维护（`scripts/generate-compare-showcase.mjs` 写完自己登记）。
+      // 原先这里硬编码两个文件名——新域跑了对照也进不了这个数组，
+      // 「新域建成后同题异人立即可用」（D30）就永远差最后一步。
+      // 清单不在（老部署）就退回那两个固定文件，不让整块空掉。
+      const files = await fetch('/compare-showcase.index.json')
+        .then((r) => (r.ok ? (r.json() as Promise<{ files?: string[] }>) : null))
+        .then((idx) =>
+          Array.isArray(idx?.files) && idx.files.length > 0
+            ? idx.files
+            : ['/compare-showcase.json', '/compare-showcase-tools.json'],
+        )
+        .catch(() => ['/compare-showcase.json', '/compare-showcase-tools.json']);
       const loaded: CompareReport[] = [];
       for (const f of files) {
         try {

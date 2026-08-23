@@ -49,8 +49,21 @@ FALLBACK_TO_ZIP = "请在本地 `git clone --depth 1` 之后把目录打成 zip�
 _CHUNK = 64 * 1024
 
 
+#: 插图资产的约定目录。**只放行这个目录下的图**，不全盘收图片——
+#: 语料仓库里到处是 README 配图、徽章、界面截图，全收是几百 MB 垃圾。
+#: `figures/` 是转写产出的目录，进去的每张图都有正文里的 `[图：… → figures/x.png]`
+#: 引用着它；不放行就是引用进了库、图没进，全是死链。
+FIGURE_DIR = "figures"
+FIGURE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
+
+
+def _is_figure(name: str) -> bool:
+    p = PurePosixPath(name)
+    return FIGURE_DIR in p.parts[:-1] and p.suffix.lower() in FIGURE_SUFFIXES
+
+
 def _readable(name: str) -> bool:
-    return PurePosixPath(name).suffix.lower() in READABLE_SUFFIXES
+    return PurePosixPath(name).suffix.lower() in READABLE_SUFFIXES or _is_figure(name)
 
 
 # 「原体大、正文小」的格式：原文件字节数与最终可切块正文相差两个数量级
@@ -187,10 +200,11 @@ def collect_readable(src: Path, dest: Path, max_bytes: int) -> list[tuple[str, i
             continue
         if any(part in SKIP_DIRS for part in rel.parts[:-1]):
             continue
-        if not _readable(path.name):
+        # 传相对路径不是文件名——figures/ 的判据要看目录，只给文件名它看不见。
+        if not _readable(rel.as_posix()):
             continue
         # 与 extract_zip 同一套两桶预算：PDF 类按磁盘保护线，文本按正文预算
-        if _is_extracted_format(path.name):
+        if _is_extracted_format(path.name) or _is_figure(rel.as_posix()):
             extracted_bytes += path.stat().st_size
             if extracted_bytes > EXTRACTED_TOTAL_CAP:
                 raise SourceError(

@@ -13,7 +13,7 @@
  * 半截结果好（组件对 entries<2 的文件同样按空态处理，双保险）。
  */
 
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agent } from 'undici';
@@ -43,6 +43,28 @@ const OUT_PATH = path.join(
   process.env.COMPARE_OUT ?? 'compare-showcase.json',
 );
 
+/** 组清单：`/compare` 读它决定渲染哪几组。**谁产出谁登记**——
+ *  原先页面硬编码文件名，新跑一组对照没人会记得去改前端（D30）。 */
+const INDEX_PATH = path.join(path.dirname(OUT_PATH), 'compare-showcase.index.json');
+
+async function registerInIndex(fileName) {
+  const entry = `/${fileName}`;
+  let files = [];
+  try {
+    const raw = JSON.parse(await readFile(INDEX_PATH, 'utf-8'));
+    if (Array.isArray(raw?.files)) files = raw.files.filter((f) => typeof f === 'string');
+  } catch {
+    /* 清单还不存在：这就是第一条 */
+  }
+  if (!files.includes(entry)) files.push(entry);
+  await writeFile(
+    INDEX_PATH,
+    `${JSON.stringify({ updated_at: new Date().toISOString(), files }, null, 2)}\n`,
+    'utf-8',
+  );
+  console.log(`已登记进 ${INDEX_PATH}（共 ${files.length} 组）`);
+}
+
 async function main() {
   console.log(`调 ${ENGINE_URL}/internal/v1/personalize/compare（${PROFILES.length} 画像各跑完整闭环，需要几分钟）…`);
   const res = await fetch(`${ENGINE_URL.replace(/\/$/, '')}/internal/v1/personalize/compare`, {
@@ -66,6 +88,7 @@ async function main() {
 
   const payload = { generated_at: new Date().toISOString(), ...report };
   await writeFile(OUT_PATH, `${JSON.stringify(payload, null, 2)}\n`, 'utf-8');
+  await registerInIndex(path.basename(OUT_PATH));
   console.log(
     `已写入 ${OUT_PATH}\n  学习目标：${payload.learning_goal ?? LEARNING_GOAL}\n  画像：${report.entries
       .map((e) => e?.profile?.name ?? '?')

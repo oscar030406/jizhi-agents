@@ -54,6 +54,8 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -120,6 +122,40 @@ class TranscribeReport:
         return "；".join(parts) + "。"
 
 
+#: 一页里同一个短串重复多少次算退化。**按实测分布定，不是拍的**：
+#: 廖常初书 259 页里有 `[?]` 的 26 页，个数分布是
+#: 1×5页 / 2×9页 / 3×2页 / 4×1页 / 5×1页 // 7,8,11,11,11,11,13,1807 各一页——
+#: 正常页落在 1–5，退化页从 7 起跳，中间有干净空档。取 6 卡在空档里。
+MAX_REPEATED_TOKEN = 6
+
+#: 退化检测看的短串。都是模型卡住时最容易刷的东西。
+_DEGENERATE_TOKENS = ("[?]", "[图：", "...", "。。。")
+
+
+def looks_degenerate(text: str) -> str | None:
+    """这页是不是模型卡住刷出来的。是就返回原因，不是返回 None。
+
+    模型会在某些页把同一个 token 刷到 max_tokens。实测全本 259 页里 8 页退化，
+    最坏一页刷了 1807 个 `[?]`——那页是软件安装截图，开头转得好好的
+    （「欢迎使用 STEP 7 Professional」），转到密集小字的许可协议时开始重复。
+
+    **这种输出看起来是正常转写**：有正文、有结构、字数还很多（7913 字）。
+    不检测就直接进库，检索命中的是一串 `[?] [?] [?]`。
+
+    与 PaddleOCR 那次「退化成 1. 2. 3. … 161. 数字循环」同一个失败模式——
+    自回归生成的通病，不绑某个模型，所以检测放在通用层。
+    """
+    for token in _DEGENERATE_TOKENS:
+        n = text.count(token)
+        if n > MAX_REPEATED_TOKEN:
+            return f"疑似退化：「{token}」重复 {n} 次（上限 {MAX_REPEATED_TOKEN}）"
+    # 另一种形态：整页几乎只有一种字符
+    stripped = "".join(text.split())
+    if len(stripped) > 200 and len(set(stripped)) < 12:
+        return f"疑似退化：整页只有 {len(set(stripped))} 种字符"
+    return None
+
+
 def page_path(out_dir: Path, page: int) -> Path:
     return out_dir / "pages" / f"p{page:04d}.md"
 
@@ -158,44 +194,65 @@ def transcribe_pdf(
     total = doc.page_count if max_pages is None else min(doc.page_count, max_pages)
     report = TranscribeReport(pages_total=total)
 
+    # 渲染在主线程做（PyMuPDF 的 Document 不是线程安全的），调模型才并发。
+    # 每页各写各的文件，所以顺序天然无关；只有计数与报告要上锁。
+    tally = Lock()
+
+    def note_done(text: str, skipped: bool = False) -> None:
+        with tally:
+            if skipped:
+                report.pages_skipped += 1
+            report.pages_done += 1
+            report.chars += len(text)
+            report.figure_lines += count_figure_lines(text)
+            done = report.pages_done
+        if on_progress:
+            on_progress(done, total)
+
+    def note_failed(page: int, why: str) -> None:
+        with tally:
+            report.pages_failed += 1
+            report.failures.append({"page": page, "error": why})
+            done = report.pages_done
+        if on_progress:
+            on_progress(done, total)
+
+    def transcribe_one(page: int, image: Path) -> None:
+        target = page_path(out_dir, page)
+        try:
+            text = call_model(image).strip()
+        except Exception as exc:  # 单页失败不该毁掉整本
+            note_failed(page, f"{type(exc).__name__}: {exc}")
+            return
+        if not text:
+            # 空结果不落盘：落了下次续跑会当成「已转写」，那一页就永远缺了。
+            note_failed(page, "模型返回空")
+            return
+        degenerate = looks_degenerate(text)
+        if degenerate:
+            # 退化的输出**不落盘**，理由同上：落了就再也不会重转。
+            # 报到 failures 里，管理者能看见这一页没转成。
+            note_failed(page, degenerate)
+            return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+        note_done(text)
+
     try:
+        pending: list[tuple[int, Path]] = []
         for page in range(total):
             target = page_path(out_dir, page)
             if target.exists() and target.stat().st_size > 0:
                 # 断点续跑：这一页上次已经转完了。图也应该在，缺了就补渲。
-                text = target.read_text(encoding="utf-8")
-                report.pages_skipped += 1
-                report.pages_done += 1
-                report.chars += len(text)
-                report.figure_lines += count_figure_lines(text)
                 if not figure_path(out_dir, page).exists():
                     render_page(doc, page, figure_path(out_dir, page))
-                if on_progress:
-                    on_progress(report.pages_done, total)
+                note_done(target.read_text(encoding="utf-8"), skipped=True)
                 continue
+            pending.append((page, render_page(doc, page, figure_path(out_dir, page))))
 
-            image = render_page(doc, page, figure_path(out_dir, page))
-            try:
-                text = call_model(image).strip()
-            except Exception as exc:  # 单页失败不该毁掉整本
-                report.pages_failed += 1
-                report.failures.append({"page": page, "error": f"{type(exc).__name__}: {exc}"})
-                if on_progress:
-                    on_progress(report.pages_done, total)
-                continue
-
-            if not text:
-                report.pages_failed += 1
-                report.failures.append({"page": page, "error": "模型返回空"})
-                continue
-
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(text, encoding="utf-8")
-            report.pages_done += 1
-            report.chars += len(text)
-            report.figure_lines += count_figure_lines(text)
-            if on_progress:
-                on_progress(report.pages_done, total)
+        if pending:
+            with ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
+                list(pool.map(lambda args: transcribe_one(*args), pending))
     finally:
         doc.close()
 
