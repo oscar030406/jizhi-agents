@@ -150,16 +150,27 @@ async function main() {
         continue;
       }
       let judged = [];
+      // 判官没给出可解析的回复，与「判官看了但没检出」是两回事。
+      // 混在一起算，工具的毛病会被算成产品的漏检——检出率被压低而没人看得出来。
+      // 所以单记一格，报告里分开统计、也从检出率的分母里剔除。
+      let parseFailed = false;
       try {
         const o = parseJsonObject(res.text);
         judged = (o.claims || [])
           .filter((c) => c && typeof c.claim === 'string' && VERDICTS.includes(c.verdict))
           .map((c) => ({ claim: c.claim, verdict: c.verdict, reason: String(c.reason || '') }));
       } catch (e) {
-        console.log(`  ${packed[i].sid} 解析失败，记 miss：${e.message}`);
+        parseFailed = true;
+        console.log(`  ${packed[i].sid} 判官回复解析不了（不计入检出率分母）：${e.message}`);
       }
       const scored = scoreArms(jobs[i].text, judged);
-      rows.push({ script: 'd_numeric_perturbation', ...jobs[i], judgedClaims: judged.length, ...scored });
+      rows.push({
+        script: 'd_numeric_perturbation',
+        ...jobs[i],
+        judgedClaims: judged.length,
+        parseFailed,
+        ...scored,
+      });
       if ((i + 1) % 10 === 0) console.log(`  已跑 ${i + 1}/${jobs.length}，累计 ¥${budget.spent.toFixed(4)}`);
     }
   } catch (err) {
@@ -177,8 +188,11 @@ async function main() {
 
 function reportMd(byType, rows, budget, stopped) {
   const types = Object.keys(byType);
-  const pert = rows.filter((r) => r.role === 'perturbed');
-  const orig = rows.filter((r) => r.role === 'original');
+  // 解析失败的样本一律剔出率的计算：它们是工具没拿到答案，不是产品没检出。
+  const usable = rows.filter((r) => !r.parseFailed);
+  const failed = rows.length - usable.length;
+  const pert = usable.filter((r) => r.role === 'perturbed');
+  const orig = usable.filter((r) => r.role === 'original');
 
   const line = (label, rs) => {
     const off = rate(rs, (r) => r.off);
@@ -197,6 +211,10 @@ function reportMd(byType, rows, budget, stopped) {
 ${DRY ? '> **DRY-RUN 产物：一次请求都没发。** 率表全空，只证明流程、盲评自检、两档后处理跑得通。\n' : ''}${stopped ? `> 成本闸中途触发：${stopped}\n` : ''}
 数据集 \`data/eval/numeric_perturbation_set.jsonl\`，类型分布 ${types.map((t) => `${t}=${byType[t]}`).join('、')}。
 **类型极不均衡**（value_x2 占绝大多数，unit_swap 与 consequence_flip 各不到十条），小格子的点估计不能单独看。
+
+判官回复解析失败 **${failed}/${rows.length}** 条，已从下面所有率的分母里剔除。
+这些是判官没吐出可解析的 JSON（实测有一次它反过来说「你没给我正文」），
+属于工具没拿到答案，**不是产品没检出**——混进分母会把工具的毛病算成漏检。
 
 ## 一、扰动句：三类 × 旁路开/关
 
