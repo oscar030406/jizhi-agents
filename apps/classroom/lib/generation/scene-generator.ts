@@ -747,11 +747,17 @@ async function generateSlideBySlots(
  *
  * 兜底一条：这一屏的 text 元素**不能被删光**。真删光了说明判错，
  * 宁可留一屏元话语让人看见，也不能交一屏空白。
+ *
+ * **导出给流式成稿路复用**。第三代对照课实测：第 1 屏 6 处「导读：」上屏，
+ * 第 2/4/6 屏全干净——因为首屏走的是 SSE 流式那条路
+ * （`app/api/generate/scene-content/route.ts` 里 `lectureContentFromMd` 直接成稿），
+ * 它既不经过这里也不经过 `runAdaptationLintLoop`。同一份判据不许写第三遍：
+ * 写第三遍就是下一次「改了一处、另一处照旧」。
  */
-async function generateSlideContent(
-  ...args: Parameters<typeof generateSlideContentRaw>
-): Promise<GeneratedSlideContent | null> {
-  const content = await generateSlideContentRaw(...args);
+export function scrubScaffoldElements<T extends { elements: PPTElement[] }>(
+  content: T | null,
+  title: string,
+): T | null {
   if (!content?.elements?.length) return content;
 
   const dropped: string[] = [];
@@ -771,7 +777,7 @@ async function generateSlideContent(
   const wipeAll = emptied.size >= textCount;
   const kept = wipeAll ? elements : elements.filter((el) => !emptied.has(el));
   log.warn(
-    `[脚手架清除] ${args[0].title} 删掉 ${dropped.length} 段元话语` +
+    `[脚手架清除] ${title} 删掉 ${dropped.length} 段元话语` +
       (wipeAll
         ? `；${emptied.size} 条整条是脚手架但那是全部文字元素，保留不删（判错的可能更大）`
         : emptied.size
@@ -780,6 +786,12 @@ async function generateSlideContent(
       `：${dropped.join(' | ')}`,
   );
   return { ...content, elements: kept as PPTElement[] };
+}
+
+async function generateSlideContent(
+  ...args: Parameters<typeof generateSlideContentRaw>
+): Promise<GeneratedSlideContent | null> {
+  return scrubScaffoldElements(await generateSlideContentRaw(...args), args[0].title);
 }
 
 async function generateSlideContentRaw(

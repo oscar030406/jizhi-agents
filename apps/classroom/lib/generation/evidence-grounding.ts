@@ -235,7 +235,12 @@ export function excerptDirective(bundle: EvidenceBundle): string {
     `- **术语和概念的第一次交代由你自己写**（按本页读者的档位要求来），不要留给摘录代劳：` +
     `摘录会因为前文已引用、超出档位、不自包含等原因被机械丢弃，押在摘录里的定义会跟着一起消失；\n` +
     `- 每页最多 1-2 个摘录占位符，选**承载推导和因果**的那几段，不要全部塞进去；\n` +
-    `- 不要改写、续写或概括摘录内容——那是替换器的事，你写的衔接文字不得替摘录复述其中的数据、公式与结论。`
+    `- 不要改写、续写或概括摘录内容——那是替换器的事，你写的衔接文字不得替摘录复述其中的数据、公式与结论；
+` +
+    `- **不要用「摘录中提到的」「如摘录所示」「上述摘录」这类指代摘录的措辞**。` +
+    `摘录会被机械丢弃（前文已引用、超出档位、与上文不咬合都会丢），丢了之后这些话就指向一段` +
+    `页面上根本不存在的引文，读者看到的是自相矛盾：说好没贴出来，又让人去看没贴出来的东西。` +
+    `要提那个事实就直接陈述（「教材规定超两倍切 STOP」），不要绕道指向引文。`
   );
 }
 
@@ -376,6 +381,8 @@ export interface ExcerptStats {
   swapped: number;
   /** 逐条落位记录 = 依据子盒。计数说明「贴了几条」，这个说明「贴的是哪几条」。 */
   placements: ExcerptPlacement[];
+  /** 掉了摘录之后，正文里被改写掉的悬空指代数（见 `DANGLING_EXCERPT_REF`）。 */
+  danglingRefsFixed: number;
 }
 
 /**
@@ -470,7 +477,7 @@ function injectOnce(
   );
   const stats: ExcerptStats = {
     injected: 0, unknown: 0, deduped: 0, capped: 0,
-    rejected: 0, noLead: 0, irrelevant: 0, swapped: 0, placements: [],
+    rejected: 0, noLead: 0, irrelevant: 0, swapped: 0, placements: [], danglingRefsFixed: 0,
   };
   let firstDeduped: string | null = null;
   // 掉了几条摘录（unknown/capped/rejected/noLead/irrelevant 五条丢弃路径）。用于回收导语，
@@ -668,7 +675,64 @@ function injectOnce(
     }
   };
   walk(content);
+  // 摘录掉了，正文里指向它的话就悬空了——`dropLeadIn` 撤的是**前面**那句导语，
+  // 后面正文里的指代它管不到。第三代对照课屏 1 的原形：摘录被 rejected、
+  // 诚实说明也留了，紧接着正文写「注意摘录中提到的关键数字：超两倍切 STOP」，
+  // 读者视角自相矛盾——说好没贴出来，又让人去看没贴出来的东西。
+  if (drops > 0) stats.danglingRefsFixed = fixDanglingExcerptRefs(content);
   return { stats, firstDeduped };
+}
+
+/**
+ * 指向摘录的措辞 → 直接陈述。确定性替换，不调模型。
+ *
+ * 改写后的说法仍然是真的：内容本来就出自教材，只是不再让读者去找一段没贴出的引文。
+ * 顺序有讲究——长串在前，否则「摘录中提到的」会先被「摘录中」那条吃掉半截。
+ */
+const DANGLING_EXCERPT_REF: ReadonlyArray<readonly [RegExp, string]> = [
+  [/如上述摘录所示|如摘录所示|正如摘录中所说/g, '按教材的说法'],
+  [/摘录中提到的|摘录里提到的|摘录中给出的|摘录里给出的/g, '教材规定的'],
+  [/摘录中提到|摘录里提到|摘录中说明|摘录中指出/g, '教材规定'],
+  [/上述摘录|上面的摘录|前述摘录|前面的摘录|这段摘录|该摘录/g, '教材'],
+  [/摘录中的|摘录里的/g, '教材里的'],
+  [/参见上面的摘录|详见摘录/g, '详见该出处'],
+];
+
+/**
+ * 把正文里指向摘录的措辞改写掉，返回改了几处。
+ *
+ * **只在这一屏真的掉过摘录时调用**。摘录贴出来了的时候「摘录中提到的」指得实、
+ * 不该动——那时候改写只是把一个有效指针换成泛指，白白丢信息。
+ */
+function fixDanglingExcerptRefs(content: unknown): number {
+  let fixed = 0;
+  const rewrite = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      node.forEach(rewrite);
+      return;
+    }
+    if (!node || typeof node !== 'object') return;
+    const obj = node as Record<string, unknown>;
+    for (const key of Object.keys(obj)) {
+      const value = obj[key];
+      if (typeof value !== 'string') {
+        rewrite(value);
+        continue;
+      }
+      // 只改正文字段：`sourceId`、`title` 这些不是给人读的句子。
+      if (key !== 'content' && key !== 'text') continue;
+      let next = value;
+      for (const [re, to] of DANGLING_EXCERPT_REF) {
+        next = next.replace(re, () => {
+          fixed += 1;
+          return to;
+        });
+      }
+      if (next !== value) obj[key] = next;
+    }
+  };
+  rewrite(content);
+  return fixed;
 }
 
 /**

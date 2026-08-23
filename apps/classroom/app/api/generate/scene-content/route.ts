@@ -16,6 +16,7 @@ import {
 import {
   buildLecturePrompts,
   lectureContentFromMd,
+  scrubScaffoldElements,
 } from '@/lib/generation/scene-generator';
 import { cleanLectureMarkdown } from '@/lib/generation/md-to-elements';
 import type { AgentInfo } from '@/lib/generation/generation-pipeline';
@@ -424,7 +425,13 @@ export async function POST(req: NextRequest) {
                 send({ type: 'delta', text: delta });
               }
               const md = cleanLectureMarkdown(full, effectiveOutline.title);
-              const content = md ? lectureContentFromMd(md, effectiveOutline) : null;
+              // 流式成稿是第三条出口——它既不经过 `generateSlideContent`（那条挂着
+              // 脚手架清除）也不经过 `runAdaptationLintLoop`。第三代对照课实测：
+              // 首屏 6 处「导读：」上屏，第 2/4/6 屏全干净，差别就在这一行。
+              const content = scrubScaffoldElements(
+                md ? lectureContentFromMd(md, effectiveOutline) : null,
+                effectiveOutline.title,
+              );
               if (!content) {
                 log.warn(
                   `Streamed lecture markdown unusable for "${effectiveOutline.title}", client will fall back`,
