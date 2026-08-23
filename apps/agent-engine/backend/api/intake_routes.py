@@ -68,6 +68,14 @@ async def create_run(
         False,
         description="⑥⑦ 试跑课程与指标复测——调生成与审核接口，按 token 计费，默认关",
     ),
+    append: bool = Form(
+        False,
+        description=(
+            "追加到已有库（E31 T0）。库必须已经存在，既有块原样保留、旧课出处不断链；"
+            "只跑 ①②③，词表金标注册清单沿用既有的。**改过或要删的文档不走这条**——"
+            "那仍需整库重建。"
+        ),
+    ),
 ) -> dict[str, Any]:
     given = [
         name
@@ -89,6 +97,7 @@ async def create_run(
         "hands_on_safety": hands_on_safety,
         "extract_concepts": extract_concepts,
         "trial_run": trial_run,
+        "append": append,
     }
     # **请求路径只落盘，不解压、不遍历。**
     #

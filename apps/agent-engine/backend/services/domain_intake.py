@@ -533,6 +533,32 @@ def _stage_receive(run: IntakeRun) -> dict[str, Any]:
         kept.append(f)
     manifest.accepted = kept
 
+    # 追加模式再过一道：库里已经有的文件直接退回，不重复入库。
+    # 判据用既有索引里的 source_id stem——存量六个库都建在追加这条路之前，
+    # 没有 sha256 台账可查，而索引本身一直都在。
+    if run.record["options"].get("append"):
+        _ensure_scripts_path()
+        from ingest_domain import corpus_source_stems  # type: ignore[import-not-found]
+
+        have = corpus_source_stems(run.corpus)
+        fresh = []
+        for f in manifest.accepted:
+            stem = re.sub(r"[^0-9A-Za-z]+", "-", f.relative.rsplit(".", 1)[0]).strip("-").lower()
+            if stem in have:
+                rejected.append({"file": f.relative, "reason": "库里已经有这份文档了，跳过"})
+                continue
+            fresh.append(f)
+        skipped = len(manifest.accepted) - len(fresh)
+        manifest.accepted = fresh
+        kept = fresh
+        if skipped:
+            run.emit(
+                "receive",
+                "stage_progress",
+                f"{skipped} 份文档库里已经有了，这次跳过（追加只收新文档）",
+                already_present=skipped,
+            )
+
     lic = detect_license(run.docs_dir)
     run.emit(
         "receive",
@@ -582,6 +608,23 @@ def _stage_receive(run: IntakeRun) -> dict[str, Any]:
     }
 
 
+def _existing_vocab(corpus: str) -> list[dict]:
+    """既有库的概念词表（④ 落在 readiness.json 里的那份）。
+
+    追加时沿用，不重算。读不到就返回空表——新块的 concept_tags 会是空的，
+    检索照样能用（TF-IDF 吃 title/topic/content，tag 只是排序加成）。
+    """
+    path = KB / f"{corpus}_intake" / "readiness.json"
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    vocab = data.get("vocabulary") or data.get("concepts") or []
+    return [v for v in vocab if isinstance(v, dict) and v.get("concept")]
+
+
 def _stage_chunk(run: IntakeRun) -> dict[str, Any]:
     """② 按标题路径切块并落成可检索的 jsonl。
 
@@ -592,7 +635,7 @@ def _stage_chunk(run: IntakeRun) -> dict[str, Any]:
     from backend.rag.intake import outline_sections, read_body
 
     _ensure_scripts_path()
-    from ingest_domain import write_corpus_index  # type: ignore[import-not-found]
+    from ingest_domain import append_corpus_index, write_corpus_index  # type: ignore[import-not-found]
 
     manifest = run.ctx["manifest"]
     sections: list[tuple[str, str, list[str]]] = []
@@ -604,7 +647,31 @@ def _stage_chunk(run: IntakeRun) -> dict[str, Any]:
     run.ctx["sections"] = sections
 
     tier_range = run.record["options"].get("tier_range", "L1-L3")
-    index_path, count = write_corpus_index(run.corpus, sections, [], tier_range)
+    if run.record["options"].get("append"):
+        # 追加：既有行原样保留，只把新文件的块接在后面。
+        # 词表取既有库的——不重算（重算是 ④ 的活，追加不跑 ④），
+        # 但也不能不给：不给的话新块的 concept_tags 全空，同一个库里
+        # 老块有标签新块没有，检索排序上新文档天然吃亏。
+        vocab = _existing_vocab(run.corpus)
+        index_path, count, collided = append_corpus_index(run.corpus, sections, vocab, tier_range)
+        if collided:
+            run.emit(
+                "chunk",
+                "stage_warning",
+                f"{len(collided)} 个块的出处编号已经在库里了，这次没有写入"
+                f"（首条 {collided[0]}）。同名文件的新版本属于「改」不属于「补」，"
+                "要让它生效得整库重建。",
+                collided=collided[:50],
+            )
+        run.record["products"]["corpus_index"] = _rel(index_path)
+        run.emit(
+            "chunk",
+            "stage_progress",
+            f"追加 {count} 块（词表沿用既有 {len(vocab)} 个概念，既有块一个字节没动）",
+            appended=count,
+        )
+    else:
+        index_path, count = write_corpus_index(run.corpus, sections, [], tier_range)
     rel = _rel(index_path)
     run.record["products"]["corpus_index"] = rel
     # 转写产出的原图跟着搬进库——课程生成引用的是这里，不是 run 目录。
@@ -2083,8 +2150,17 @@ def _ensure_scripts_path() -> None:
 # ── DAG 调度 ───────────────────────────────────────────────────────────────
 
 
+APPEND_SKIP_REASON = (
+    "追加模式只走 ①②③（收文件、切块、刷索引）。"
+    "④⑤⑦⑧ 描述的是整个库——词表、金标、注册清单都是全库口径，"
+    "追加几篇文档不该把它们重算一遍（重算就等于整库重建，那是另一条路）"
+)
+
+
 def _skip_reason(run: IntakeRun, sid: str) -> str:
     """开关关掉的站。返回空串 = 该跑。"""
+    if run.record["options"].get("append") and sid not in ("receive", "chunk", "index"):
+        return APPEND_SKIP_REASON
     if run.record["options"].get("checkup") and sid not in ("trial", "metrics"):
         return CHECKUP_SKIP_REASON
     if sid == "vector" and not run.record["options"].get("build_vector"):
@@ -2178,7 +2254,11 @@ def execute(run: IntakeRun) -> None:
         # 体检 run 一个字节都没往库里写，清理无从谈起——真要走到这里就是删既有库。
         # （当下走不到：体检时 ①-⑤ 全 skipped、⑥⑦ 是 optional，hard_failed 恒假。
         # 留这道闸是因为下一个人给某站去掉 optional 时不会想起这里。）
-        removed = [] if run.record["options"].get("checkup") else _cleanup_partial(run.corpus)
+        # 追加模式一个字节都不许删：库是既有的，正被线上课程引用着。
+        # 与体检 run 同理——`_cleanup_partial` 的前提是「这个库是本次 run 建的」，
+        # 追加模式下这个前提不成立。
+        skip_cleanup = run.record["options"].get("checkup") or run.record["options"].get("append")
+        removed = [] if skip_cleanup else _cleanup_partial(run.corpus)
         # C25：失败之后管理者最需要知道的是「现在能不能重来」。
         # 半成品三处（corpora / <库>_intake / 金标）已经清干净，同名可以直接重投——
         # 不说清楚的话人会被 `_reserve_corpus` 的「已经建过了」挡住，
@@ -2303,6 +2383,26 @@ def safe_filename(name: str) -> str:
     return (base or "file")[:80]
 
 
+def _require_corpus(corpus: str) -> str:
+    """追加模式的库名闸：与 `_reserve_corpus` 相反，库**必须已经存在**。
+
+    只认索引文件在不在。三个目录里 `corpora/<name>/knowledge_index.jsonl`
+    才是追加真正要动的那个，另外两个（就绪度、金标）追加不碰。
+    """
+    from backend.rag.retriever import CORPUS_NAME_RE
+
+    name = corpus.strip().lower()
+    if not CORPUS_NAME_RE.fullmatch(name):
+        raise StageError(f"库名不合法：只允许小写字母数字与 - _，1-32 位（收到「{corpus}」）")
+    index = CORPORA_DIR / name / "knowledge_index.jsonl"
+    if not index.exists():
+        raise StageError(
+            f"「{name}」还没有这个库，没法往里追加（找不到 {_rel(index)}）。"
+            "新建库请走建库那条路，不要勾追加。"
+        )
+    return name
+
+
 def _reserve_corpus(corpus: str) -> None:
     from backend.rag.retriever import CORPUS_NAME_RE
 
@@ -2321,8 +2421,8 @@ def _reserve_corpus(corpus: str) -> None:
                 "想继续的话有三条路：\n"
                 "  · 换个库名新建（比如加个版本后缀），两份并存、旧课不受影响；\n"
                 "  · 确认旧库不再需要，先在知识库中心删掉它，再用同名投一次；\n"
-                "  · 只是想补几篇文档进已有的库——这条链还不支持增量，"
-                "目前只能整库重建。"
+                "  · 只是想补几篇文档进已有的库——勾上「追加到已有库」直接投，"
+                "既有块原样保留、旧课出处不断链；改过或要删的文档不在此列，那仍需整库重建。"
             )
 
 
@@ -2334,10 +2434,20 @@ def _new_run(
     extract_concepts: bool,
     trial_run: bool,
     hands_on_safety: bool = False,
+    append: bool = False,
 ) -> IntakeRun:
-    """建库那条路的共同开头：库名过闸 + 空 run 对象。投料形态在这之后各走各的。"""
+    """建库那条路的共同开头：库名过闸 + 空 run 对象。投料形态在这之后各走各的。
+
+    追加模式走的是相反的闸：库**必须已经存在**（`_require_corpus`），
+    而建库模式要求它**不存在**（`_reserve_corpus`）。两条闸都不许省——
+    追加进一个不存在的库会建出一个只有 ①②③ 产物的半截库，
+    没有词表没有金标，学习端认不出来。
+    """
     name = corpus.strip().lower()
-    _reserve_corpus(name)
+    if append:
+        _require_corpus(name)
+    else:
+        _reserve_corpus(name)
     run = IntakeRun(
         f"{time.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}",
         name,
@@ -2348,6 +2458,7 @@ def _new_run(
             "extract_concepts": bool(extract_concepts),
             "trial_run": bool(trial_run),
             "hands_on_safety": bool(hands_on_safety),
+            "append": bool(append),
         },
     )
     run.docs_dir.mkdir(parents=True, exist_ok=True)
@@ -2435,6 +2546,8 @@ def create_run(
     trial_run: bool = False,
     # C21：这个域教不教动手操作。由投料方在接入表单声明，不从语料里猜。
     hands_on_safety: bool = False,
+    # E31 T0：往已有库追加文档。走反向库名闸，且只跑 ①②③。
+    append: bool = False,
 ) -> IntakeRun:
     """校验上传、落盘、建 run 记录。**不发车**——发车走 `start_run`。"""
     if not files:
@@ -2447,7 +2560,7 @@ def create_run(
             )
     check_budget([(safe_filename(n), len(b)) for n, b in files])
     run = _new_run(
-        corpus, scope, tier_range, build_vector, extract_concepts, trial_run, hands_on_safety
+        corpus, scope, tier_range, build_vector, extract_concepts, trial_run, hands_on_safety, append
     )
     used: set[str] = set()
     for raw_name, blob in files:
@@ -2474,6 +2587,8 @@ def create_run_from_dir(
     trial_run: bool = False,
     # C21：这个域教不教动手操作。由投料方在接入表单声明，不从语料里猜。
     hands_on_safety: bool = False,
+    # E31 T0：往已有库追加文档。走反向库名闸，且只跑 ①②③。
+    append: bool = False,
 ) -> IntakeRun:
     """zip 与 git 两条路的落地口：把一棵已经解好的目录树收进 run。
 
@@ -2484,7 +2599,7 @@ def create_run_from_dir(
     from backend.services.intake_sources import collect_readable
 
     run = _new_run(
-        corpus, scope, tier_range, build_vector, extract_concepts, trial_run, hands_on_safety
+        corpus, scope, tier_range, build_vector, extract_concepts, trial_run, hands_on_safety, append
     )
     # 解压/落盘的字节上界：防 zip bomb 用，不是产品限额。按防崩底线的块数折算
     # （每块正文约 1.4KB），比任何真实语料都宽，只拦「解开来是几百 G」那种。
@@ -2539,6 +2654,8 @@ def create_run_deferred(
     extract_concepts: bool = False,
     trial_run: bool = False,
     hands_on_safety: bool = False,
+    # E31 T0：往已有库追加文档。走反向库名闸，且只跑 ①②③。
+    append: bool = False,
 ) -> IntakeRun:
     """**只建 run，不碰投料内容。** 解压与收集留给接收站①在后台做。
 
@@ -2554,7 +2671,7 @@ def create_run_deferred(
     目录路径或仓库地址。接收站①按它决定怎么把投料变成 `<run>/docs/`。
     """
     run = _new_run(
-        corpus, scope, tier_range, build_vector, extract_concepts, trial_run, hands_on_safety
+        corpus, scope, tier_range, build_vector, extract_concepts, trial_run, hands_on_safety, append
     )
     run.record["inbox"] = {"kind": inbox_kind, "ref": inbox_ref}
     # 文件清单这时还不知道——接收站①收完才填。留空数组而不是不写这个键，

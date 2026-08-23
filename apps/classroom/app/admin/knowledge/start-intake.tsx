@@ -421,6 +421,23 @@ export function StartIntake() {
               ：给新库建嵌入索引，按 token 计费；不开则用 TF-IDF 检索。
             </span>
           </label>
+          {/* E31 T0：追加。此前「补几篇文档进已有的库」的唯一出路是整库重建，
+              而重建会让 source_id 重新编号——旧课正文里的出处集体指向别的段落，
+              课看着没变，引文全错位。追加只接在后面，既有块一个字节不动。
+              「改过或要删的」不在此列，那仍需重建，这句不能含糊。 */}
+          <label className="flex items-start gap-2 text-[11px] leading-relaxed">
+            <input type="checkbox" name="append" value="true" className="mt-0.5" />
+            <span>
+              <span className="font-medium text-foreground">追加到已有库</span>
+              ：把这批文档补进上面填的那个<strong className="font-medium">已经存在</strong>的库。既有内容原样保留，
+              已经出的课引用的出处不会断。只跑收料、切块、刷索引三站——
+              概念词表、金标、注册清单沿用既有的。
+              <span className="text-muted-foreground">
+                {' '}
+                改过的文档、要删的文档不走这条：那得整库重建。
+              </span>
+            </span>
+          </label>
         </div>
 
         {error && (

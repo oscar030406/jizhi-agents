@@ -197,7 +197,16 @@ def write_corpus_index(name: str, sections: list, vocab: list[dict], tier_range:
       没过验收（重测 κ=0.292、收敛效度 0.282），这一格保留人工输入是实测结论。
     - `concept_tags` 用词表做机械子串匹配，不调模型。
     """
+    out, chunks = _build_chunks(name, sections, vocab, tier_range)
     from backend.rag.ingest import write_index
+
+    write_index(chunks, out)
+    return out, len(chunks)
+
+
+def _build_chunks(name: str, sections: list, vocab: list[dict], tier_range: str):
+    """切块的唯一口径。整库重建与追加共用——两份实现迟早会在 source_id 上分叉，
+    而 source_id 分叉就是旧课引文错位。"""
     from backend.schemas.resources import KnowledgeChunk
 
     concepts = [v["concept"] for v in vocab]
@@ -248,8 +257,74 @@ def write_corpus_index(name: str, sections: list, vocab: list[dict], tier_range:
             )
         )
     out = KB / "corpora" / name / "knowledge_index.jsonl"
-    write_index(chunks, out)
-    return out, len(chunks)
+    return out, chunks
+
+
+def append_corpus_index(
+    name: str, sections: list, vocab: list[dict], tier_range: str
+) -> tuple[Path, int, list[str]]:
+    """往**已经建好的**语料库后面追加块，既有的行一个字节都不动。
+
+    ## 为什么必须是「不动既有行」
+
+    已经出过的课在正文里挂着 `[docs-plc#s31]` 这样的出处。整库重建会让
+    source_id 重新编号，旧课的出处就指向别的段落——课看起来没变，
+    引文全错位。所以追加这条路的第一条铁律是既有行原样保留。
+
+    source_id 是 `{文件名派生的 stem}#s{节序}`：追加**新文件**天然不会撞号。
+    真撞上了说明投的是同名文件（改过的版本），那不是追加是修改——
+    整库重建那条路负责，这里只把撞号的挑出来退回。
+
+    返回 `(索引路径, 新增块数, 撞号的 source_id)`。
+    """
+    from backend.rag.ingest import write_index
+    from backend.schemas.resources import KnowledgeChunk
+
+    out = KB / "corpora" / name / "knowledge_index.jsonl"
+    if not out.exists():
+        raise FileNotFoundError(f"语料库「{name}」还没建过，追加无从谈起：{out}")
+
+    existing_lines = [ln for ln in out.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    existing_ids = set()
+    for line in existing_lines:
+        try:
+            existing_ids.add(json.loads(line)["source_id"])
+        except (json.JSONDecodeError, KeyError):
+            continue
+
+    _, fresh = _build_chunks(name, sections, vocab, tier_range)
+    collided = [c.source_id for c in fresh if c.source_id in existing_ids]
+    keep = [c for c in fresh if c.source_id not in existing_ids]
+
+    # 先写临时文件再原子替换：追加到一半断电会把既有库截断，
+    # 而既有库正被线上课程引用着。
+    tmp = out.with_suffix(".jsonl.appending")
+    body = existing_lines + [c.model_dump_json(ensure_ascii=False) for c in keep]
+    tmp.write_text("\n".join(body) + "\n", encoding="utf-8")
+    tmp.replace(out)
+    return out, len(keep), collided
+
+
+def corpus_source_stems(name: str) -> set[str]:
+    """既有库里已经收过哪些文件（按 source_id 的 stem 部分）。
+
+    追加时用来认出「这份文件已经在库里了」。**不依赖任何额外清单**——
+    存量六个库都是在追加这条路之前建的，没有 sha256 台账，
+    只有索引本身一直都在。
+    """
+    out = KB / "corpora" / name / "knowledge_index.jsonl"
+    if not out.exists():
+        return set()
+    stems: set[str] = set()
+    for line in out.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            sid = json.loads(line)["source_id"]
+        except (json.JSONDecodeError, KeyError):
+            continue
+        stems.add(sid.split("#", 1)[0])
+    return stems
 
 
 def report_fitness(name: str) -> None:
