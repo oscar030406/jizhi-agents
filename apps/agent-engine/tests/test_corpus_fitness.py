@@ -77,5 +77,17 @@ def test_run_does_not_touch_the_corpus_files(tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert (index.stat().st_size, index.stat().st_mtime_ns) == before
     report = json.loads(out.read_text(encoding="utf-8"))
-    assert set(report["corpora"]) >= {"ai", "iotdb", "odoo"}
+    # 不写死库名。原来钉的是 {ai, iotdb, odoo}，2026-08-23 泛化域收敛到
+    # 智能制造 + iotdb、odoo 删掉之后这条直接红——**测试挂在会被删的库上，
+    # 测的就不再是判据本身**（同一天在 knowledge-fitness 上已经栽过一次）。
+    # 这里要证的是「盘上有几个库就量几个」，不是「某某库必须在」。
+    on_disk = {
+        p.name
+        for p in (ROOT / "data" / "knowledge_base" / "corpora").iterdir()
+        if p.is_dir() and (p / "knowledge_index.jsonl").is_file()
+    } if (ROOT / "data" / "knowledge_base" / "corpora").is_dir() else set()
+    assert "ai" in report["corpora"], "主语料任何时候都该在"
+    assert on_disk <= set(report["corpora"]), (
+        f"盘上有这些库却没量到：{on_disk - set(report['corpora'])}"
+    )
     assert all(c["light"] in {"red", "yellow", "green"} for c in report["corpora"].values())
