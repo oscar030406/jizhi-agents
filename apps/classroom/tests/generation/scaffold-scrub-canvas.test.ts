@@ -30,12 +30,54 @@ describe('canvas 元素脚手架清除', () => {
     expect(scrubScaffoldHtml(html).html).not.toContain('导读');
   });
 
-  it('安全阀：删完不足一半就整个放弃', () => {
-    // 整屏几乎全是元话语——删了就剩一句，宁可留着让人看见问题
+  it('安全阀只管「别把屏删空」，不管「删掉过半」', () => {
+    // 第三轮对照课的原形：五段、每段开头一行标签，删掉的字符过半。
+    // 按比例卡就会整个放弃，五个「本段目标：」原样留在屏上——安全阀护错了对象。
+    const html = Array.from(
+      { length: 5 },
+      (_, i) =>
+        `<p><strong>本段目标：讲第 ${i + 1} 件事。</strong></p>` +
+        `<p>定时器第 ${i + 1} 段正文，讲的是延时控制怎么配。</p>`,
+    ).join('');
+    const out = scrubScaffoldHtml(html);
+    expect(out.dropped).toHaveLength(5);
+    expect(out.html).not.toContain('本段目标');
+    expect(out.html).toContain('延时控制怎么配');
+  });
+
+  it('安全阀：删完什么都不剩才放弃', () => {
     const html = '<p><strong>本段目标：讲清楚定时器。</strong></p><p>好。</p>';
     const out = scrubScaffoldHtml(html);
     expect(out.dropped).toHaveLength(0);
     expect(out.html).toBe(html);
+  });
+
+  it('教具的 <script> 里匹配上了也不动——删 JS 是把教具删坏', () => {
+    const html = [
+      '<p>本段目标：讲清楚定时器。</p>',
+      '<p>定时器把输出推迟一段时间，这段时间叫预设值，单位毫秒。</p>',
+      '<p>常见预设值是 150ms，可以在参数页里改成别的数。</p>',
+      '<script>',
+      "const HINTS = ['本段目标：先量电压', '导读：再看电流'];",
+      'function render() { return HINTS.join(); }',
+      '</script>',
+    ].join('\n');
+    const out = scrubScaffoldHtml(html);
+    expect(out.html).toContain("const HINTS = ['本段目标：先量电压'");
+    expect(out.html).toContain('function render()');
+    // 屏上给人读的那一行仍然要删
+    expect(out.dropped).toHaveLength(1);
+    expect(out.html).not.toContain('<p>本段目标');
+  });
+
+  it('教具路真的接上了——路障', () => {
+    // 教具走 iframe HTML，跟幻灯片两条路一个字节都不共用；
+    // 清除挂在 generateSlideContent 上天然盖不到它（第三轮实测漏的就是这条）。
+    const src = require('node:fs').readFileSync(
+      require('node:path').join(process.cwd(), 'lib/generation/interactive-post-processor.ts'),
+      'utf-8',
+    );
+    expect(src).toContain('scrubScaffoldHtml');
   });
 
   it('干净正文原样返回（同一个字符串引用）', () => {

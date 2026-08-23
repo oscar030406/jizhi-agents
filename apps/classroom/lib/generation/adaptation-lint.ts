@@ -1307,9 +1307,19 @@ export function formatViolations(list: Violation[]): string {
  *
  * 这里不发模型调用：泄漏段整段都是元话语，删掉即可，改写没有信息可留。
  *
- * **安全阀**：删完不足原文一半、或删空了，就整个放弃并原样返回。
- * 宁可留一句「本段目标」，也不能把一屏内容删没。
+ * **安全阀是「别把屏删空」，不是「别删太多」。** 第一版按比例卡（删剩不足
+ * 一半就放弃），第三轮对照课上拦错了对象：屏 2 五段、每段开头一行元话语标签，
+ * 删掉的字符恰好过半，于是五个「本段目标：」原样留在屏上——安全阀护住了
+ * 本该删的东西。改成卡绝对下限：删完还剩得下 {@link MIN_KEPT_CHARS} 个字就照删。
+ * 一屏八成是元话语时，那两成才是真正要教的。下限定得低是有意的：
+ * 它防的是「误判把整屏删空」，不是「删得多」——一屏本来就短、删完只剩
+ * 两句正文，那两句就是这一屏的全部内容，照留。
+ *
+ * **`<script>` / `<style>` 里的行一律不动**：教具是整页 HTML，脚本里硬编码的
+ * 文案匹配上了也不能删——删一行 JS 是把教具删坏，不是把话删干净。
  */
+const MIN_KEPT_CHARS = 20;
+
 export function scrubScaffoldHtml(html: string): { html: string; dropped: string[] } {
   if (!html.includes('本') && !/[Pp屏页]\s*\d+\s*[:：]/.test(html) && !html.includes('导读')) {
     return { html, dropped: [] }; // 快路径：绝大多数元素连候选词都没有
@@ -1318,7 +1328,17 @@ export function scrubScaffoldHtml(html: string): { html: string; dropped: string
   const parts = html.split(/(<\/p>|<br\s*\/?>|\n)/i);
   const dropped: string[] = [];
   const kept: string[] = [];
+  let openCodeTags = 0;
   for (const part of parts) {
+    const lower = part.toLowerCase();
+    const opens = (lower.match(/<(?:script|style)\b/g) ?? []).length;
+    const closes = (lower.match(/<\/(?:script|style)>/g) ?? []).length;
+    const wasInCode = openCodeTags > 0;
+    openCodeTags = Math.max(0, openCodeTags + opens - closes);
+    if (wasInCode || opens) {
+      kept.push(part); // 脚本/样式区原样保留
+      continue;
+    }
     const plain = part
       .replace(/<[^>]*>/g, '')
       .replace(/&nbsp;/g, ' ')
@@ -1333,8 +1353,8 @@ export function scrubScaffoldHtml(html: string): { html: string; dropped: string
 
   const next = kept.join('');
   const plainLen = (s: string) => s.replace(/<[^>]*>/g, '').trim().length;
-  if (plainLen(next) < plainLen(html) / 2) {
-    // 删得太多，多半是判错了或整屏都是元话语——放弃，别把屏删空
+  if (plainLen(next) < MIN_KEPT_CHARS) {
+    // 删完什么都不剩了——那多半是判错，宁可留着让人看见问题
     return { html, dropped: [] };
   }
   return { html: next, dropped };

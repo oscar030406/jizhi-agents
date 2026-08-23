@@ -1,3 +1,8 @@
+import { createLogger } from '@/lib/logger';
+import { scrubScaffoldHtml } from './adaptation-lint';
+
+const log = createLogger('InteractiveHtml');
+
 /**
  * Interactive HTML Post-Processor
  *
@@ -12,6 +17,12 @@
 /**
  * Main entry point: post-process generated interactive HTML
  * Converts LaTeX delimiters and injects KaTeX rendering resources.
+ *
+ * 顺带清脚手架泄漏。第三轮同题对照课实测：讲义流与 canvas 槽位路都干净了，
+ * 唯独教具那一屏五个原词「本段目标：」——**教具走的是 iframe HTML，
+ * 跟幻灯片那两条路一个字节都不共用**，清除挂在 `generateSlideContent` 上
+ * 天然盖不到它。挂在这里是因为教具 HTML 的出口只有这一个函数，
+ * 挂各自的产生点会漏（今天已经因为这个漏过一次）。
  */
 export function postProcessInteractiveHtml(html: string): string {
   // Convert LaTeX delimiters while protecting script tags
@@ -22,7 +33,13 @@ export function postProcessInteractiveHtml(html: string): string {
     processed = injectKatex(processed);
   }
 
-  return processed;
+  // 元话语清除。scrubScaffoldHtml 自己护着 <script>/<style>，
+  // 不会去动教具的逻辑，只动屏上给人读的那几行。
+  const scrubbed = scrubScaffoldHtml(processed);
+  if (scrubbed.dropped.length) {
+    log.warn(`[脚手架清除·教具] 删掉 ${scrubbed.dropped.length} 段：${scrubbed.dropped.join(' | ')}`);
+  }
+  return scrubbed.html;
 }
 
 /**
@@ -66,12 +83,14 @@ function convertLatexDelimiters(html: string): string {
 /**
  * Inject KaTeX CSS, JS, auto-render, and MutationObserver before </head>.
  * Falls back to appending at end if </head> is not found.
+ * 资产走本站 /vendor/katex/（大陆访问 jsdelivr 不稳）；srcDoc iframe 继承父文档
+ * base URL，绝对路径解析到本站。
  */
 function injectKatex(html: string): string {
   const katexInjection = `
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
-<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<link rel="stylesheet" href="/vendor/katex/katex.min.css">
+<script src="/vendor/katex/katex.min.js"></script>
+<script src="/vendor/katex/contrib/auto-render.min.js"></script>
 <script>
 document.addEventListener("DOMContentLoaded", function() {
     const katexOptions = {
