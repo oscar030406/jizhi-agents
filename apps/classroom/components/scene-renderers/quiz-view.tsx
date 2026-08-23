@@ -256,6 +256,7 @@ function SingleChoiceQuestion({
   disabled?: boolean;
   result?: QuestionResult;
 }) {
+  const { t } = useI18n();
   const isReview = !!result;
 
   return (
@@ -314,6 +315,15 @@ function SingleChoiceQuestion({
                 )}
               >
                 <QuizMathText text={opt.label} />
+                {/* 选错时说出这个选项对应的是哪种想错法。出题时每个干扰项都要写
+                    对应误解（`QuizOption.misconception`），这里是它唯一的去处——
+                    不接这一步，那个字段就只是落盘的死数据。存量课没有，容缺。 */}
+                {isWrong && !isCorrectOpt && opt.misconception && (
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    {t('quiz.misconceptionPrefix')}
+                    {opt.misconception}
+                  </span>
+                )}
               </span>
               {isReview && isCorrectOpt && (
                 <CheckCircle2 className="w-5 h-5 text-green-solid shrink-0 animate-[check-pop_250ms_var(--ease-out-quad)]" />
@@ -1492,7 +1502,7 @@ export function QuizView({
               {/* 决策桥失联时如实告知，不再静默无横幅（四桥显式告警之一） */}
               {decisionFailed && !adaptiveDecision && (
                 <p className="text-xs text-muted-foreground border border-dashed border-border rounded-lg px-3 py-2">
-                  ⚠️ 反馈决策引擎未响应——本次交卷不做路线调整，成绩已正常记录。
+                  ⚠️ 学情分析暂时没跟上——本次交卷成绩已正常记录，后续内容按原计划继续。
                 </p>
               )}
 

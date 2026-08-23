@@ -557,7 +557,8 @@
       "keyPhrase": "回看讲解",
       "suffix": "，圈出每道错题的关键词，再试一次。",
       "note": "答错也在往前走：分段进度照样推进，不倒扣。"
-    }
+    },
+    "misconceptionPrefix": "你选的这项对应的想法是："
   },
   "roundtable": {
     "teacher": "教师",

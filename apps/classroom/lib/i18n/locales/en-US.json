@@ -557,7 +557,8 @@
       "keyPhrase": "revisit the lecture",
       "suffix": " first, circle the keywords in each missed question, then try again.",
       "note": "Wrong answers still move you forward: section progress advances, no points deducted."
-    }
+    },
+    "misconceptionPrefix": "This choice comes from: "
   },
   "roundtable": {
     "teacher": "TEACHER",

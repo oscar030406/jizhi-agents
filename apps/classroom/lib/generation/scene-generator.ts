@@ -66,6 +66,7 @@ import type {
   AICallFn,
 } from './pipeline-types';
 import type { ThinkingConfig } from '@/lib/types/provider';
+import { gateQuiz } from '@/lib/quiz/item-gate';
 import { createLogger } from '@/lib/logger';
 const log = createLogger('Generation');
 
@@ -1093,7 +1094,17 @@ async function generateQuizContent(
     log.warn(`Dropped ${droppedNoAnswer} quiz question(s) with missing/invalid answer key for: ${outline.title}`);
   }
 
-  return { questions };
+  // 机械门禁：位置扎堆确定性修好，其余违规记日志。
+  // **不丢题**——一道有瑕疵的题比空一屏强，死题上游已经丢过了。
+  const gated = gateQuiz(questions);
+  if (gated.violations.length) {
+    log.warn(
+      `[题目门禁] ${outline.title} ${gated.violations.length} 条：` +
+        gated.violations.map((v) => `${v.ruleId} ${v.message}`).join(' | '),
+    );
+  }
+
+  return { questions: gated.questions };
 }
 
 /**

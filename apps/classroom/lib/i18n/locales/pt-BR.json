@@ -557,7 +557,8 @@
       "keyPhrase": "revise a aula",
       "suffix": ", circule as palavras-chave de cada questão errada e tente de novo.",
       "note": "Errar também é avançar: o progresso da seção continua, sem perder pontos."
-    }
+    },
+    "misconceptionPrefix": "Esta opção parte de: "
   },
   "roundtable": {
     "teacher": "PROFESSOR",

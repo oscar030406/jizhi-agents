@@ -542,7 +542,8 @@
       "keyPhrase": "回看講解",
       "suffix": "，圈出每道錯題的關鍵詞，再試一次。",
       "note": "答錯也在往前走：分段進度照樣推進，不倒扣。"
-    }
+    },
+    "misconceptionPrefix": "你選的這項對應的想法是："
   },
   "roundtable": {
     "teacher": "教師",

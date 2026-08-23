@@ -27,9 +27,9 @@ Only one correct answer among the options.
   "question": "Question text",
   "options": [
     { "label": "Option A content", "value": "A" },
-    { "label": "Option B content", "value": "B" },
-    { "label": "Option C content", "value": "C" },
-    { "label": "Option D content", "value": "D" }
+    { "label": "Option B content", "value": "B", "misconception": "the specific wrong belief that makes B look right" },
+    { "label": "Option C content", "value": "C", "misconception": "another distinct wrong belief" },
+    { "label": "Option D content", "value": "D", "misconception": "a third distinct wrong belief" }
   ],
   "answer": ["A"],
   "analysis": "Explanation of why A is correct and why other options are wrong",
@@ -81,12 +81,36 @@ Open-ended question requiring a written response. No options or predefined answe
 - Focus on key knowledge points
 - Appropriate difficulty based on specified level
 
+### Solve Before You Distract
+
+**Write the correct answer and its reasoning first, then build distractors
+around it.** Producing options and answer key in one pass is where wrong keys
+come from: the model settles on option text before it has actually worked the
+problem, then labels whichever option looks best.
+
+For each question, in this order:
+
+1. Work the question out. State the correct answer and the one-line reasoning
+   that gets there — this becomes `analysis`.
+2. Only then write the wrong options, each one built from a specific way a
+   learner gets this wrong.
+
 ### Option Design
 
-- Options should be similar in length
-- Distractors should be plausible but clearly incorrect
-- Avoid "all of the above" or "none of the above" options
-- Randomize correct answer position
+- Options similar in length. The correct option must not be the longest or the
+  most qualified — length and hedging are the two cues that let a learner pass
+  without knowing anything.
+- **Every distractor names the misunderstanding it is built from**, in the
+  option's `misconception` field: one clause, e.g. `"把扫描周期当成监视时间"`.
+  A distractor you cannot attach a real misunderstanding to is a distractor
+  nobody would pick — it measures nothing. Drop it.
+- **Three good options beat four with a filler.** If you cannot build a third
+  distractor from a real misunderstanding, ship the question with 3 options
+  (or 2). Option count does not carry the difficulty; the distractors do.
+- No "all of the above" / "none of the above".
+- Avoid absolutes (总是 / 永远 / 绝不 / 一定) in distractors — learners are
+  trained to eliminate them regardless of content.
+- Vary which position holds the correct answer across the question set.
 
 ### Difficulty Guidelines
 

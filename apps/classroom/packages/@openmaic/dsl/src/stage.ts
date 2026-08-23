@@ -139,6 +139,17 @@ export interface SlideContent {
 export interface QuizOption {
   label: string; // Display text
   value: string; // Selection key: "A", "B", "C", "D"
+  /**
+   * What misunderstanding this distractor is built from — one clause, e.g.
+   * "把扫描周期当成监视时间". Present on wrong options only.
+   *
+   * A distractor nobody would pick measures nothing. Naming the misconception
+   * forces each wrong option to correspond to a real way of being wrong, and
+   * lets grading say what the pick reveals instead of just "wrong".
+   *
+   * Optional: pre-existing courses have none, and readers must tolerate that.
+   */
+  misconception?: string;
 }
 
 export interface QuizQuestion {
