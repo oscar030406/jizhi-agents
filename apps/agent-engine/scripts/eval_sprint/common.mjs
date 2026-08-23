@@ -8,7 +8,7 @@
  *   cd "D:/UserData/Desktop/挑战杯/apps/classroom"
  *   node --import tsx "../agent-engine/scripts/eval_sprint/common.mjs" --selftest
  */
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -431,13 +431,18 @@ export function stamp() {
 }
 
 /** jsonl 明细 + markdown 报告，都落 docs/05-evidence/eval_sprint/（docs 不入库）。 */
-export function emit(name, { rows = [], md = '' }) {
+export function emit(name, { rows = [], md = '', append = false }) {
   mkdirSync(EVIDENCE, { recursive: true });
   const base = path.join(EVIDENCE, name);
   const jsonl = `${base}.jsonl`;
   const report = `${base}.md`;
-  writeFileSync(jsonl, rows.map((r) => JSON.stringify(r)).join('\n') + (rows.length ? '\n' : ''), 'utf8');
-  writeFileSync(report, md, 'utf8');
+  const body = rows.map((r) => JSON.stringify(r)).join('\n') + (rows.length ? '\n' : '');
+  // append：同一个名字要攒多次结果时用（例：消融一档跑三门，每门一次调用）。
+  // 默认覆盖——那是「这一次跑的全部结果」的语义。用错方向的后果不对称：
+  // 该追加却覆盖会**静默丢数据**，反过来只是文件里多几行。
+  if (append) appendFileSync(jsonl, body, 'utf8');
+  else writeFileSync(jsonl, body, 'utf8');
+  if (md || !append) writeFileSync(report, md, 'utf8');
   return { jsonl, report };
 }
 

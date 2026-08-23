@@ -214,7 +214,9 @@ async function main() {
           readings,
         };
         rows.push(row);
-        if (!DRY) emit(`b_ablation-rung${r.id}`, { rows: [row], md: '' });
+        // 追加不覆盖：一档要跑几门（n>1 才谈得上档内方差），
+        // 覆盖会让 --judge 只看得见最后一门，而且不报错。
+        if (!DRY) emit(`b_ablation-rung${r.id}`, { rows: [row], md: '', append: true });
         if (readings) {
           console.log(
             `  读数：蓝图三表 ${readings.blueprint.tablesFilled}/3，类比漂移 ${readings.blueprint.analogyDrift}，` +
@@ -241,8 +243,13 @@ async function main() {
               : d.classroomId?.endsWith('.json')
                 ? loadCourseFile(d.classroomId)
                 : await fetchCourse(BASE, d.classroomId);
-          items.push({ key: `rung${d.rung}`, body: courseBody(course, { maxChars: MAX_BODY }) });
-          if (!rows.find((r) => r.rung === d.rung)) rows.push({ ...d, script: 'b_ablation', dry: DRY });
+          // 键带课号：一档跑几门时 `rung${d.rung}` 会撞，撞了 blindPack 只留一门、
+          // 分数也只回填得到第一门——表面上四档齐全，实际每档只算了一门。
+          const key = `rung${d.rung}::${d.classroomId ?? items.length}`;
+          items.push({ key, body: courseBody(course, { maxChars: MAX_BODY }) });
+          if (!rows.find((r) => r.classroomId === d.classroomId && r.rung === d.rung)) {
+            rows.push({ ...d, script: 'b_ablation', dry: DRY });
+          }
         }
         const { entries } = blindPack(items, SEED);
         const system = rubricSystem();
@@ -263,7 +270,11 @@ async function main() {
               continue;
             }
             const score = parseRubric(res.text);
-            const row = rows.find((r) => `rung${r.rung}` === e.key);
+            const row = rows.find((r) => `rung${r.rung}::${r.classroomId}` === e.key);
+            if (!row) {
+              console.log(`  ⚠ ${e.sid} 的分数找不到对应的课（key=${e.key}），这一份丢了`);
+              continue;
+            }
             row.scores = { ...(row.scores || {}), [model]: score };
             console.log(`  ${e.sid} → ${model}：${RUBRIC_DIMS.map(([k]) => `${k}=${score[k]}`).join(' ')}`);
           }
@@ -289,17 +300,33 @@ async function main() {
 
 function reportMd(plan, rows, budget, stopped) {
   const dims = RUBRIC_DIMS;
+  // 一档可能跑了几门（n>1 才谈得上档内方差），这里**按档聚合全部门数**。
+  // 老写法是 `rows.find(x => x.rung === r.id)`——只取第一门、其余静默不计，
+  // 补样跑完了表面上还是 n=1 的样子，而且看不出来。
+  const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
   const ladder = plan.map((r) => {
-    const row = rows.find((x) => x.rung === r.id);
+    const mine = rows.filter((x) => x.rung === r.id);
     const cells = dims.map(([k]) => {
-      const xs = Object.values(row?.scores || {}).map((s) => s[k]).filter(Number.isFinite);
-      return xs.length ? (xs.reduce((a, b) => a + b, 0) / xs.length).toFixed(2) : '—';
+      // 先在每门内对判官取平均，再跨门取平均——不然判官多的那门权重更大。
+      const per = mine
+        .map((row) => mean(Object.values(row.scores || {}).map((sc) => sc[k]).filter(Number.isFinite)))
+        .filter((v) => v != null);
+      const m = mean(per);
+      return m == null ? '—' : m.toFixed(2);
     });
-    const b = row?.readings?.blueprint;
-    const a = row?.readings?.audit;
-    return `| ${r.id} | ${r.name} | ${r.ready ? '现成开关够' : '缺开关'} | ${cells.join(' | ')} | ${
-      b ? `${b.tablesFilled}/3` : '—'
-    } | ${a?.totalClaims ?? '—'} |`;
+    const audits = mine.map((x) => x.readings?.audit).filter((a) => a && a.totalClaims);
+    const claims = audits.reduce((n, a) => n + a.totalClaims, 0);
+    const wrong = audits.reduce((n, a) => n + a.incorrectCount, 0);
+    const vague = audits.reduce((n, a) => n + a.uncertainCount, 0);
+    // 事实性按断言加权合并，不是各门取平均——门与门的断言数差好几倍。
+    const fact = claims ? `${(((claims - wrong - vague) / claims) * 100).toFixed(1)}%` : '—';
+    const leaks = mine.reduce((n, x) => n + (x.readings?.scaffold?.residualLeaks ?? 0), 0);
+    const blocks = mine.reduce((n, x) => n + (x.readings?.scaffold?.textBlocks ?? 0), 0);
+    return `| ${r.id} | ${r.name} | ${mine.length} | ${cells.join(' | ')} | ${
+      claims || '—'
+    } | ${audits.length ? wrong : '—'} | ${audits.length ? vague : '—'} | ${fact} | ${
+      blocks ? `${leaks}/${blocks}` : '—'
+    } |`;
   });
 
   const missing = plan
@@ -313,9 +340,14 @@ ${DRY ? '> **DRY-RUN 产物：一次请求都没发。** 分值列全是空的�
 
 ## 一、爬升表
 
-| 档 | 加了什么 | 开关 | ${dims.map(([, l]) => l).join(' | ')} | 蓝图三表 | 断言数 |
-|---:|---|---|${dims.map(() => '---:').join('|')}|---:|---:|
+| 档 | 加了什么 | 门数 | ${dims.map(([, l]) => l).join(' | ')} | 断言 | 判错 | 存疑 | 事实性 | 脚手架残留 |
+|---:|---|---:|${dims.map(() => '---:').join('|')}|---:|---:|---:|---:|---:|
 ${ladder.join('\n')}
+
+「门数」是这一档实际跑了几门。**门数为 1 的档不构成爬升证据**——四档屏数本身就不定，
+n=1 时生成随机性压过档间差。事实性按断言加权合并，不是各门取平均。
+\`tablesFilled\` 与 \`analogyDrift\` 刻意不进这张表：前者是读数脚本拿大纲重算的潜在值、
+四档恒定；后者内容依赖，实测出现过「连贯开的那档反而没抠出类比」。
 
 ## 二、每档靠什么开关
 

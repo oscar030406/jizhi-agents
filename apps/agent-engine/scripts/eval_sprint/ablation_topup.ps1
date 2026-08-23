@@ -97,6 +97,15 @@ foreach ($rung in $Rungs) {
     # 与 3210 上别人在用的那个互不干扰（next.config.ts 读 NEXT_DIST_DIR）。
     $env:NEXT_DIST_DIR = ".next-ablation-$($rung.N)"
 
+    # 每档从干净的构建目录起。上一次跑到一半被打断会留下半成品 distDir，
+    # 再起服务时 `/` 一路 500——实测档 1 就是这么卡住的（探针跑过 -PerRung 0，
+    # 起了一下就杀，留下半个 .next-ablation-1）。多花一分钟编译，换掉一整类怪问题。
+    $dist = Join-Path (Get-Location) ".next-ablation-$($rung.N)"
+    if (Test-Path $dist) {
+        Write-Host "  清掉上次的构建目录 $dist"
+        Remove-Item $dist -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
     $log = Join-Path $LogDir "dev-rung$($rung.N).log"
     Remove-Item $log, "$log.err" -ErrorAction SilentlyContinue
     # 必须点名 pnpm.cmd：PATH 上排在前面的 pnpm.ps1 不是 Win32 可执行文件，
