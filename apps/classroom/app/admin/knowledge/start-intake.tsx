@@ -141,6 +141,10 @@ export function StartIntake() {
     zip instanceof File ? `压缩包 ${zip.name}` : gitUrl ? `仓库 ${gitUrl}` : `${files.length} 个文件`;
   const trial = pending?.get('trial_run') === 'true';
   const vector = pending?.get('build_vector') === 'true';
+  /** 追加模式。**必须在弹层里回显**：新建与追加的行为差别极大（跑几站、
+   *  会不会碰既有库），只在表单勾一下、确认时只字不提，与当年「涉及实操
+   *  不回显」同一族问题。 */
+  const append = pending?.get('append') === 'true';
 
   function edit(i: number, patch: Partial<{ label: string; audience: string }>) {
     setTiers((prev) => prev.map((t, j) => (j === i ? { ...t, ...patch } : t)));
@@ -458,7 +462,9 @@ export function StartIntake() {
       <Dialog open={pending !== null} onOpenChange={(open) => !open && setPending(null)}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle className="text-base">确认发起接入</DialogTitle>
+            <DialogTitle className="text-base">
+              {append ? '确认追加到已有库' : '确认发起接入'}
+            </DialogTitle>
             <DialogDescription className="text-xs">
               语料库 <code className="font-mono">{String(pending?.get('corpus') ?? '')}</code>，
               {sourceSummary}，学习者分 {tiers.length} 档。发起后引擎按依赖图跑站，
@@ -467,6 +473,18 @@ export function StartIntake() {
           </DialogHeader>
 
           <ul className="space-y-2 text-[11px] leading-relaxed">
+            {append && (
+              <li className="rounded-lg border border-sky-300/70 bg-sky-50 px-3 py-2 text-sky-900 dark:border-sky-700/60 dark:bg-sky-950/40 dark:text-sky-200">
+                <span className="font-medium">追加到已有库</span>
+                ：这次不建新库，而是把文档补进{' '}
+                <code className="font-mono">{String(pending?.get('corpus') ?? '')}</code>{' '}
+                。既有内容原样保留，已经出的课引用的出处不会断；只跑收料、切块、
+                刷索引三站，概念词表、金标、注册清单沿用既有的。
+                <span className="mt-1 block">
+                  库里已经有的文档会被跳过；改过的文档、要删的文档不走这条——那得整库重建。
+                </span>
+              </li>
+            )}
             <li className="text-muted-foreground">
               档位定义会原样存进这次的接入记录：
               {tiers.map((t, i) => (
