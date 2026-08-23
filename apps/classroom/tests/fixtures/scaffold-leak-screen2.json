@@ -1,0 +1,56 @@
+{
+  "note": "第三轮同题对照课 HWnrgjqRg9 屏 2 的真产物（只留 id/type/content）。10 个元素里 5 个 text 元素的全部内容就是一行「本段目标：……」。",
+  "title": "监视时间怎么设置？一步一步看",
+  "elements": [
+    {
+      "id": "text_Fc7jLQ3P",
+      "type": "text",
+      "content": "<p style=\"font-size: 16px;\"><strong>本段目标：理解监视时间的含义，看完能说出它像什么。</strong></p>"
+    },
+    {
+      "id": "text_nM9J7l9c",
+      "type": "text",
+      "content": "<p style=\"font-size: 16px;\">想象你在餐厅吃饭，<strong>循环周期监视时间</strong>（系统允许程序跑完一圈的最大时限）就像服务员等你点菜的耐心极限。如果超过这个时间还没好，系统就会报错，相当于服务员还没等你点完菜就催你结账。这个设置的核心目的，是为了防止程序卡死，确保生产安全。</p>"
+    },
+    {
+      "id": "text_UdHsGP8Y",
+      "type": "text",
+      "content": "<p style=\"font-size: 16px;\"><strong>本段目标：找到软件入口，看完知道去哪里打开项目。</strong></p>"
+    },
+    {
+      "id": "text_xMF6WdbP",
+      "type": "text",
+      "content": "<p style=\"font-size: 16px;\">设置的第一步，是打开 STEP 7 Professional 软件（专用的编程工具），找到你的 S7-1200 项目（具体的控制任务文件）。这好比走进餐厅，先找到预定的桌号。只有进了正确的项目，才能修改对应的参数，不会改错设备。操作时鼠标双击项目名称，即可进入主界面。</p>"
+    },
+    {
+      "id": "text_ZFVZnEQZ",
+      "type": "text",
+      "content": "<p style=\"font-size: 16px;\"><strong>本段目标：定位设置位置，看完知道菜单在哪里。</strong></p>"
+    },
+    {
+      "id": "text_558xkwik",
+      "type": "text",
+      "content": "<p style=\"font-size: 16px;\">接着在项目树选中'PLC'（负责控制的硬件大脑），然后进入‘属性’面板（硬件的详细说明书）。这里藏着所有关键开关。你需要在这里找到‘循环周期监视时间’设置项，一般默认为 500 毫秒（半秒钟）。这一步就像翻看菜单背后的注意事项，找到关于时间的限制条款。</p>"
+    },
+    {
+      "id": "text_u-2xdXSG",
+      "type": "text",
+      "content": "<p style=\"font-size: 16px;\"><strong>本段目标：明白数值影响，看完知道设错会怎样。</strong></p>"
+    },
+    {
+      "id": "text_nsWzqJwz",
+      "type": "text",
+      "content": "<p style=\"font-size: 16px;\">为什么要调整这个值？假设你设得太短，比如 100 毫秒，但程序实际需要 200 毫秒才能跑完，系统就会误以为卡死了，强行停机。这就好比只给服务员 1 分钟耐心，但你点菜需要 2 分钟，必然引发冲突。反之，如果设成 10 秒，哪怕程序真卡住，系统也要等很久才发现，容易出安全事故。所以要根据程序复杂程度调整，比如先按 500 毫秒开始试。</p>"
+    },
+    {
+      "id": "text_WnAhKmsq",
+      "type": "text",
+      "content": "<p style=\"font-size: 16px;\"><strong>本段目标：完成保存测试，看完知道最后一步做什么。</strong></p>"
+    },
+    {
+      "id": "text_R8zWHZOp",
+      "type": "text",
+      "content": "<p style=\"font-size: 16px;\">最后一步，保存设置，并下载到 PLC 中测试。这就像跟服务员确认好耐心时间，然后开始正式点菜。确保整个过程顺畅不报错，生产才能稳定运行。下载前点击保存图标，确认无误后点击下载按钮即可。</p>"
+    }
+  ]
+}

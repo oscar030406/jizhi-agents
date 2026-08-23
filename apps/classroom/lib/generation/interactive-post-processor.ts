@@ -36,9 +36,14 @@ export function postProcessInteractiveHtml(html: string): string {
   // 元话语清除。scrubScaffoldHtml 自己护着 <script>/<style>，
   // 不会去动教具的逻辑，只动屏上给人读的那几行。
   const scrubbed = scrubScaffoldHtml(processed);
-  if (scrubbed.dropped.length) {
-    log.warn(`[脚手架清除·教具] 删掉 ${scrubbed.dropped.length} 段：${scrubbed.dropped.join(' | ')}`);
+  if (!scrubbed.dropped.length) return processed;
+  if (scrubbed.empty) {
+    // 整页删完一个字不剩——教具页至少有脚本和按钮文字，走到这里必然是判错。
+    // 幻灯片那边可以整条元素丢弃（还有兄弟元素兜着），这里没得丢，原样退回。
+    log.warn(`[脚手架清除·教具] 删完整页无内容，判错的可能更大，原样保留`);
+    return processed;
   }
+  log.warn(`[脚手架清除·教具] 删掉 ${scrubbed.dropped.length} 段：${scrubbed.dropped.join(' | ')}`);
   return scrubbed.html;
 }
 

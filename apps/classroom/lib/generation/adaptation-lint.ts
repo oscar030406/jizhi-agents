@@ -1307,22 +1307,34 @@ export function formatViolations(list: Violation[]): string {
  *
  * 这里不发模型调用：泄漏段整段都是元话语，删掉即可，改写没有信息可留。
  *
- * **安全阀是「别把屏删空」，不是「别删太多」。** 第一版按比例卡（删剩不足
- * 一半就放弃），第三轮对照课上拦错了对象：屏 2 五段、每段开头一行元话语标签，
- * 删掉的字符恰好过半，于是五个「本段目标：」原样留在屏上——安全阀护住了
- * 本该删的东西。改成卡绝对下限：删完还剩得下 {@link MIN_KEPT_CHARS} 个字就照删。
- * 一屏八成是元话语时，那两成才是真正要教的。下限定得低是有意的：
- * 它防的是「误判把整屏删空」，不是「删得多」——一屏本来就短、删完只剩
- * 两句正文，那两句就是这一屏的全部内容，照留。
+ * ## 真凶是元素粒度，不是阈值
+ *
+ * 第三轮对照课屏 2 的真产物（`course-HWnrgjqRg9-dump.json`）复现出来是这样：
+ * 10 个元素里 5 个 text 元素，**每个的全部内容就是一行「本段目标：……」**，
+ * 25 字、22 字、24 字……删掉之后剩 0 字。所以任何「删剩太少就放弃」的阈值
+ * 都只能放弃——按比例放弃、按绝对字数也放弃，五个标签照样上屏。
+ *
+ * 该做的不是调阈值，是**把整条元素从这一屏拿掉**。所以这里多返一个
+ * `empty`：内容整条都是脚手架，我删不了「一部分」，由调用方决定整条丢弃。
+ * 判断「丢了会不会把屏清空」需要看兄弟元素，那是调用方才有的视野。
+ *
+ * 剩下的情形（删完还有正文）一律照删，不设下限——三组模式在 1704 块主语料上
+ * 量过 0 误报，为一个想象中的误判留阈值，只会重演屏 2 那次「护错了对象」。
  *
  * **`<script>` / `<style>` 里的行一律不动**：教具是整页 HTML，脚本里硬编码的
  * 文案匹配上了也不能删——删一行 JS 是把教具删坏，不是把话删干净。
  */
-const MIN_KEPT_CHARS = 20;
 
-export function scrubScaffoldHtml(html: string): { html: string; dropped: string[] } {
+export interface ScaffoldScrub {
+  html: string;
+  dropped: string[];
+  /** 内容整条都是脚手架，删完一个字不剩。调用方决定整条元素丢不丢。 */
+  empty: boolean;
+}
+
+export function scrubScaffoldHtml(html: string): ScaffoldScrub {
   if (!html.includes('本') && !/[Pp屏页]\s*\d+\s*[:：]/.test(html) && !html.includes('导读')) {
-    return { html, dropped: [] }; // 快路径：绝大多数元素连候选词都没有
+    return { html, dropped: [], empty: false }; // 快路径：绝大多数元素连候选词都没有
   }
   // 按块边界切：`</p>`、`<br>`、换行。保留分隔符，拼回去形状不变。
   const parts = html.split(/(<\/p>|<br\s*\/?>|\n)/i);
@@ -1349,13 +1361,11 @@ export function scrubScaffoldHtml(html: string): { html: string; dropped: string
     }
     kept.push(part);
   }
-  if (!dropped.length) return { html, dropped: [] };
+  if (!dropped.length) return { html, dropped: [], empty: false };
 
   const next = kept.join('');
-  const plainLen = (s: string) => s.replace(/<[^>]*>/g, '').trim().length;
-  if (plainLen(next) < MIN_KEPT_CHARS) {
-    // 删完什么都不剩了——那多半是判错，宁可留着让人看见问题
-    return { html, dropped: [] };
-  }
-  return { html: next, dropped };
+  const plainLen = next.replace(/<[^>]*>/g, '').trim().length;
+  // 删完一个字不剩：这一条从头到尾就是脚手架。不在这里做决定——
+  // 「丢了会不会把屏清空」要看兄弟元素，那是调用方的视野。
+  return { html: next, dropped, empty: plainLen === 0 };
 }

@@ -739,24 +739,47 @@ async function generateSlideBySlots(
  * 讲义路有 `runAdaptationLintLoop`，槽位路和自由版面路此前一条机械检查都没有——
  * 线上那一屏四个「本段目标：」正是从槽位路出去的。挂在这里而不是各路各挂一次：
  * 三条路的出口都在这儿，漏一条就等于没挂（**这个坑今天已经踩了三次**）。
+ *
+ * **整条元素都是脚手架时，删元素而不是删字。** 第三轮对照课屏 2 的真产物：
+ * 10 个元素里 5 个 text 元素的全部内容就是一行「本段目标：……」，25 字、22 字、
+ * 24 字。删完剩 0 字，于是清除函数只能放弃，五个标签照样上屏——
+ * 这不是阈值调低就能治的，粒度错了。
+ *
+ * 兜底一条：这一屏的 text 元素**不能被删光**。真删光了说明判错，
+ * 宁可留一屏元话语让人看见，也不能交一屏空白。
  */
 async function generateSlideContent(
   ...args: Parameters<typeof generateSlideContentRaw>
 ): Promise<GeneratedSlideContent | null> {
   const content = await generateSlideContentRaw(...args);
   if (!content?.elements?.length) return content;
+
   const dropped: string[] = [];
+  const emptied = new Set<PPTElement>();
   const elements = content.elements.map((el) => {
     if (el.type !== 'text' || typeof (el as { content?: unknown }).content !== 'string') return el;
     const scrubbed = scrubScaffoldHtml((el as unknown as { content: string }).content);
     if (!scrubbed.dropped.length) return el;
     dropped.push(...scrubbed.dropped);
-    return { ...el, content: scrubbed.html };
+    const next = { ...el, content: scrubbed.html } as PPTElement;
+    if (scrubbed.empty) emptied.add(next);
+    return next;
   });
-  if (dropped.length) {
-    log.warn(`[脚手架清除] ${args[0].title} 删掉 ${dropped.length} 段元话语：${dropped.join(' | ')}`);
-  }
-  return { ...content, elements: elements as PPTElement[] };
+  if (!dropped.length) return content;
+
+  const textCount = elements.filter((el) => el.type === 'text').length;
+  const wipeAll = emptied.size >= textCount;
+  const kept = wipeAll ? elements : elements.filter((el) => !emptied.has(el));
+  log.warn(
+    `[脚手架清除] ${args[0].title} 删掉 ${dropped.length} 段元话语` +
+      (wipeAll
+        ? `；${emptied.size} 条整条是脚手架但那是全部文字元素，保留不删（判错的可能更大）`
+        : emptied.size
+          ? `，其中 ${emptied.size} 条整条丢弃`
+          : '') +
+      `：${dropped.join(' | ')}`,
+  );
+  return { ...content, elements: kept as PPTElement[] };
 }
 
 async function generateSlideContentRaw(

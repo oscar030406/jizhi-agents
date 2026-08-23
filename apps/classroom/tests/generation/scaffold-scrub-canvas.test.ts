@@ -30,9 +30,7 @@ describe('canvas 元素脚手架清除', () => {
     expect(scrubScaffoldHtml(html).html).not.toContain('导读');
   });
 
-  it('安全阀只管「别把屏删空」，不管「删掉过半」', () => {
-    // 第三轮对照课的原形：五段、每段开头一行标签，删掉的字符过半。
-    // 按比例卡就会整个放弃，五个「本段目标：」原样留在屏上——安全阀护错了对象。
+  it('删掉过半也照删——阈值护错过一次对象，不留了', () => {
     const html = Array.from(
       { length: 5 },
       (_, i) =>
@@ -41,15 +39,25 @@ describe('canvas 元素脚手架清除', () => {
     ).join('');
     const out = scrubScaffoldHtml(html);
     expect(out.dropped).toHaveLength(5);
+    expect(out.empty).toBe(false);
     expect(out.html).not.toContain('本段目标');
     expect(out.html).toContain('延时控制怎么配');
   });
 
-  it('安全阀：删完什么都不剩才放弃', () => {
-    const html = '<p><strong>本段目标：讲清楚定时器。</strong></p><p>好。</p>';
-    const out = scrubScaffoldHtml(html);
-    expect(out.dropped).toHaveLength(0);
-    expect(out.html).toBe(html);
+  it('整条都是脚手架时报 empty，不自己决定丢不丢', () => {
+    // 屏 2 真产物的形状：一个元素的全部内容就是一行标签。
+    // 「丢了会不会把屏清空」要看兄弟元素，那是调用方的视野，这里只如实报。
+    const out = scrubScaffoldHtml('<p><strong>本段目标：讲清楚定时器。</strong></p>');
+    expect(out.empty).toBe(true);
+    expect(out.dropped).toHaveLength(1);
+  });
+
+  it('还剩正文就不叫 empty', () => {
+    const out = scrubScaffoldHtml(
+      '<p><strong>本段目标：讲清楚定时器。</strong></p><p>定时器把输出推迟一段时间。</p>',
+    );
+    expect(out.empty).toBe(false);
+    expect(out.html).toContain('推迟一段时间');
   });
 
   it('教具的 <script> 里匹配上了也不动——删 JS 是把教具删坏', () => {
