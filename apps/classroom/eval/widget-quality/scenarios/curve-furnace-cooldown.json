@@ -1,0 +1,30 @@
+{
+  "id": "curve-furnace-cooldown",
+  "name": "断电后炉温怎么掉",
+  "templateId": "parameter_curve",
+  "domain": "智能制造",
+  "intent": "拖散热系数看冷却曲线变陡变缓，拖切点读出某一分钟的瞬时降温速率。学生要能说出两件事：冷却是指数衰减不是直线，越接近室温掉得越慢。",
+  "expectRedLines": [],
+  "widgetConfig": {
+    "type": "template",
+    "templateId": "parameter_curve",
+    "name": "电阻加热炉自然冷却",
+    "guide": "先把散热系数拖到 -0.8 看曲线砸下来，再把切点拖到第 15 分钟读斜率。",
+    "params": {
+      "curve": "exponential",
+      "coefficients": { "a": 80, "b": -0.3, "c": 20 },
+      "sliders": [
+        { "key": "b", "label": "散热系数 k", "min": -0.8, "max": -0.05, "step": 0.05 }
+      ],
+      "xAxis": { "label": "断电后时间 / 分钟", "min": 0, "max": 20 },
+      "yAxis": { "label": "炉膛温度 / ℃" },
+      "showTangent": true,
+      "observations": [
+        "把散热系数拖到 -0.8，前两分钟就掉了一半温度——保温层失效就是这个样子。",
+        "拖到 -0.05，二十分钟还没降到 60 ℃，说明保温做得住。",
+        "把切点拖到第 15 分钟，斜率的绝对值明显小于第 1 分钟：温差越小散得越慢。",
+        "曲线怎么拖都压不到 20 ℃ 以下——那是室温，不是零点。"
+      ]
+    }
+  }
+}

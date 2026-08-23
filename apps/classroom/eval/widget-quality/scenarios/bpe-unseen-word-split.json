@@ -1,0 +1,30 @@
+{
+  "id": "bpe-unseen-word-split",
+  "name": "没见过的词怎么拆",
+  "templateId": "bpe_merge_stepper",
+  "domain": "大模型原理",
+  "intent": "一步步合并到最后，学生要能看出 restart 被拆成 re + start 两块——模型没在词表里见过这个词，照样能靠常见前缀和词根表示它。",
+  "expectRedLines": [],
+  "widgetConfig": {
+    "type": "template",
+    "templateId": "bpe_merge_stepper",
+    "name": "BPE 把 restart 拆成什么",
+    "guide": "一路点「合并一次」，看最后剩下的两块分别是什么。",
+    "params": {
+      "steps": [
+        ["r", "e", "s", "t", "a", "r", "t"],
+        ["re", "s", "t", "a", "r", "t"],
+        ["re", "st", "a", "r", "t"],
+        ["re", "st", "art"],
+        ["re", "start"]
+      ],
+      "captions": [
+        "初始：语料里没有 restart 这个词，先全部拆成单字符",
+        "(r,e) 在语料里出现最频繁，先合并成 re——常见前缀自己浮现出来",
+        "(s,t) 次之，合并成 st",
+        "(a,r,t) 接着并成 art，此时是 re + st + art",
+        "(st,art) 再并一次，得到 re + start：没见过的词被表示成两块见过的东西"
+      ]
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "id": "bad-b2-dead-slider",
+  "name": "拖不动任何东西的滑块",
+  "templateId": "parameter_curve",
+  "domain": "红线样例",
+  "intent": "（红线样例，不是可交付形态）滑块绑在系数 c 上，而对数族的公式 y = a·ln(x) + b 里根本没有 c，拖到头曲线纹丝不动。",
+  "note": "validateTemplateParams 只查 c 落没落在滑块量程里，不查 c 在这个曲线族里到底参不参与运算——这条空档只能在评测侧补。截图上「有一个滑块」看起来完全正常，VLM 单帧判不出来。",
+  "expectRedLines": ["B2"],
+  "widgetConfig": {
+    "type": "template",
+    "templateId": "parameter_curve",
+    "name": "对数增长曲线",
+    "guide": "拖动滑块观察曲线变化。",
+    "params": {
+      "curve": "logarithmic",
+      "coefficients": { "a": 2, "b": 1, "c": 5 },
+      "sliders": [{ "key": "c", "label": "增长系数 c", "min": 0, "max": 10, "step": 0.5 }],
+      "xAxis": { "label": "训练样本量（万条）", "min": 0.5, "max": 20 },
+      "yAxis": { "label": "准确率增益" },
+      "observations": [
+        "拖大系数，看曲线怎么变化。",
+        "样本量越大，增益增长越慢。"
+      ]
+    }
+  }
+}

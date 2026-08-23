@@ -1,0 +1,34 @@
+{
+  "id": "bad-b1-stepper-echo",
+  "name": "复读三步的流程步进器",
+  "templateId": "process_stepper",
+  "domain": "红线样例",
+  "intent": "（红线样例，不是可交付形态）三步内容逐字相同，学生按「下一步」画面只有步号在跳。",
+  "note": "模型凑够 3 步过 zod 下限的典型形态：schema 全绿，教学上是一个单键死局。B1 必须机械命中，不能等 VLM 看图。",
+  "expectRedLines": ["B1"],
+  "widgetConfig": {
+    "type": "template",
+    "templateId": "process_stepper",
+    "name": "深度学习训练流程",
+    "guide": "点下一步继续。",
+    "params": {
+      "steps": [
+        {
+          "title": "训练",
+          "detail": "通过训练数据对模型进行训练，不断优化参数，使模型效果达到最优。",
+          "carries": "训练好的模型"
+        },
+        {
+          "title": "训练",
+          "detail": "通过训练数据对模型进行训练，不断优化参数，使模型效果达到最优。",
+          "carries": "训练好的模型"
+        },
+        {
+          "title": "训练",
+          "detail": "通过训练数据对模型进行训练，不断优化参数，使模型效果达到最优。",
+          "carries": "训练好的模型"
+        }
+      ]
+    }
+  }
+}

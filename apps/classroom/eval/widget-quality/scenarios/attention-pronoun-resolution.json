@@ -1,0 +1,26 @@
+{
+  "id": "attention-pronoun-resolution",
+  "name": "代词「它」指向谁",
+  "templateId": "attention_playground",
+  "domain": "大模型原理",
+  "intent": "点开代词「它」这个 query，学生要能看出注意力权重压倒性地落在「杯子」上，从而理解 self-attention 是怎么把代词和先行词接上的；再把温度拖小，这个尖峰会更突出。",
+  "expectRedLines": [],
+  "widgetConfig": {
+    "type": "template",
+    "templateId": "attention_playground",
+    "name": "代词消解里的注意力",
+    "guide": "先点「它」看权重落在哪，再把温度拖到 0.3，看尖峰怎么变陡。",
+    "params": {
+      "tokens": ["我", "拿起", "杯子", "喝", "了", "它"],
+      "scores": [
+        [2.0, 1.0, 0.3, 0.6, 0.1, 0.2],
+        [1.2, 2.0, 1.6, 0.4, 0.5, 0.3],
+        [0.4, 1.5, 2.0, 1.1, 0.2, 1.0],
+        [0.8, 0.5, 1.4, 2.0, 0.7, 0.9],
+        [0.2, 0.4, 0.3, 1.0, 2.0, 0.6],
+        [0.5, 0.6, 2.6, 1.2, 0.3, 1.0]
+      ],
+      "focusDefault": 5
+    }
+  }
+}

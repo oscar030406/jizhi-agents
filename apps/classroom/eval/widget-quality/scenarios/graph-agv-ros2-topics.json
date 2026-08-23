@@ -1,0 +1,59 @@
+{
+  "id": "graph-agv-ros2-topics",
+  "name": "AGV 上谁给谁发消息",
+  "templateId": "layered_graph",
+  "domain": "智能制造",
+  "intent": "点定位节点，学生要看出它同时被激光雷达和轮式里程计喂数据（多对一），再看那条从路径规划回到定位的虚线是重定位请求（回边）——这就是一条链画不出来的东西。",
+  "expectRedLines": [],
+  "widgetConfig": {
+    "type": "template",
+    "templateId": "layered_graph",
+    "name": "AGV 的 ROS2 话题拓扑",
+    "guide": "点「定位」看谁在喂它，再点「路径规划」看那条虚线通向哪。",
+    "params": {
+      "layers": [
+        {
+          "title": "感知",
+          "nodes": [
+            { "id": "lidar", "label": "激光雷达", "note": "以 10 Hz 发布 /scan，是定位和避障共用的输入。" },
+            { "id": "odom", "label": "轮式里程计", "note": "发布 /odom，短时精度高但会累积打滑误差。" }
+          ]
+        },
+        {
+          "title": "定位建图",
+          "nodes": [
+            {
+              "id": "amcl",
+              "label": "定位",
+              "note": "融合 /scan 与 /odom 输出 /amcl_pose，里程计的累积误差在这里被激光观测拉回来。"
+            }
+          ]
+        },
+        {
+          "title": "决策",
+          "nodes": [
+            {
+              "id": "planner",
+              "label": "路径规划",
+              "note": "拿位姿和地图算出 /cmd_vel；位姿置信度过低时反过来请求定位重新初始化。"
+            },
+            { "id": "avoid", "label": "局部避障", "note": "直接吃 /scan 做急停和绕障，不等全局规划。" }
+          ]
+        },
+        {
+          "title": "执行",
+          "nodes": [{ "id": "motor", "label": "驱动器", "note": "订阅 /cmd_vel，把速度指令变成左右轮转速。" }]
+        }
+      ],
+      "edges": [
+        { "from": "lidar", "to": "amcl", "label": "/scan" },
+        { "from": "odom", "to": "amcl", "label": "/odom" },
+        { "from": "lidar", "to": "avoid", "label": "/scan" },
+        { "from": "amcl", "to": "planner", "label": "位姿" },
+        { "from": "planner", "to": "motor", "label": "速度" },
+        { "from": "avoid", "to": "motor", "label": "急停" },
+        { "from": "planner", "to": "amcl", "label": "重定位" }
+      ]
+    }
+  }
+}

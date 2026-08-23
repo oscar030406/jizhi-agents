@@ -1,0 +1,24 @@
+{
+  "id": "temperature-classical-poem",
+  "name": "温度决定它敢不敢乱写",
+  "templateId": "temperature_sampler",
+  "domain": "大模型原理",
+  "intent": "把温度拖到 0.2 反复采样，学生要看到几乎每次都抽到「霜」；拖到 1.8 再采几次，别的字开始冒出来。结论是温度不改变谁最像，只改变分布有多尖。",
+  "expectRedLines": [],
+  "widgetConfig": {
+    "type": "template",
+    "templateId": "temperature_sampler",
+    "name": "下一个字会是什么",
+    "guide": "先在 τ=0.2 下连点五次采样，再拖到 1.8 连点五次，对比两串记录。",
+    "params": {
+      "context": "床前明月光，疑是地上",
+      "candidates": [
+        { "token": "霜", "logit": 3.6 },
+        { "token": "雪", "logit": 1.4 },
+        { "token": "水", "logit": 0.9 },
+        { "token": "尘", "logit": 0.1 },
+        { "token": "糖", "logit": -1.8 }
+      ]
+    }
+  }
+}

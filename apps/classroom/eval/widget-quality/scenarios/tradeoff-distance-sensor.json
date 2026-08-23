@@ -1,0 +1,43 @@
+{
+  "id": "tradeoff-distance-sensor",
+  "name": "产线测距传感器选哪个",
+  "templateId": "tradeoff_matrix",
+  "domain": "智能制造",
+  "intent": "关掉「抗油污」这一维，排名会翻——学生要看出没有绝对最优的传感器，只有对当前工况的最优；而工况就是他勾的那几个维度。",
+  "expectRedLines": [],
+  "widgetConfig": {
+    "type": "template",
+    "templateId": "tradeoff_matrix",
+    "name": "三种测距方案对比",
+    "guide": "先只勾「测距精度」，再只勾「抗油污」，看第一名换没换。",
+    "params": {
+      "dimensions": ["测距精度", "抗油污", "单价可控"],
+      "options": [
+        {
+          "name": "激光位移传感器",
+          "cells": [
+            { "text": "±0.01 mm", "rating": 5 },
+            { "text": "镜头怕油雾", "rating": 2 },
+            { "text": "单只上千元", "rating": 2 }
+          ]
+        },
+        {
+          "name": "超声波传感器",
+          "cells": [
+            { "text": "±2 mm", "rating": 2 },
+            { "text": "油污不影响", "rating": 5 },
+            { "text": "两百元级", "rating": 4 }
+          ]
+        },
+        {
+          "name": "电感接近开关",
+          "cells": [
+            { "text": "只判有无", "rating": 1 },
+            { "text": "全封闭抗污", "rating": 5 },
+            { "text": "几十元一只", "rating": 5 }
+          ]
+        }
+      ]
+    }
+  }
+}

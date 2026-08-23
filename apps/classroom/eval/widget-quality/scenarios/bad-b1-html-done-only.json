@@ -1,0 +1,10 @@
+{
+  "id": "bad-b1-html-done-only",
+  "name": "只有一个完成按钮的自由 HTML 教具",
+  "widgetType": "simulation",
+  "domain": "红线样例",
+  "intent": "（红线样例，不是可交付形态）标题写着「仿真」，正文是三段说明文字，学生唯一能点的是底部的「完成」按钮——这是教具三层轮第二层最典型的死状。",
+  "note": "第二层走的是自包含 HTML，参数校验管不到它，只能扫源码里的可交互元素。这条红线是本评测线的立项理由：点 Done 是唯一交互。",
+  "expectRedLines": ["B1"],
+  "html": "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>PID 调节仿真</title><style>body{font-family:system-ui;padding:24px;line-height:1.7}h1{font-size:20px}.done{margin-top:20px;padding:8px 18px;border-radius:6px;border:1px solid #2563eb;background:#eff6ff;color:#2563eb}</style></head><body><h1>PID 调节仿真</h1><p>比例环节 P 决定响应的快慢，增大比例系数可以让系统更快地趋近设定值，但过大会引起超调甚至振荡。</p><p>积分环节 I 用来消除稳态误差，它会把历史偏差累积起来持续施加控制量，代价是响应变慢、超调变大。</p><p>微分环节 D 对偏差的变化率作出反应，起到提前制动的作用，可以抑制超调，但对测量噪声敏感。</p><p>三个环节配合使用，就构成了工业上最常见的 PID 控制器。</p><button class=\"done\" onclick=\"window.parent.postMessage('done','*')\">我已学完</button></body></html>"
+}

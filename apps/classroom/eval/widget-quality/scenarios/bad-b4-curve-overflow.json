@@ -1,0 +1,23 @@
+{
+  "id": "bad-b4-curve-overflow",
+  "name": "一条都画不出来的曲线",
+  "templateId": "parameter_curve",
+  "domain": "红线样例",
+  "intent": "（红线样例，不是可交付形态）指数系数给到 100，整段 x 区间上的函数值全在 1e43 量级以上，组件的溢出保护会把所有采样点丢光，画面里只剩一副空坐标轴。",
+  "note": "组件自己有溢出保护（丢弃非有限与超过 1e15 的点），保护住的是「不崩」，不是「有内容」。默认态空屏是本仓最早实证的教具病灶之一，必须一票否决。",
+  "expectRedLines": ["B4"],
+  "widgetConfig": {
+    "type": "template",
+    "templateId": "parameter_curve",
+    "name": "算力投入与能力增长",
+    "guide": "拖动指数看增长有多快。",
+    "params": {
+      "curve": "exponential",
+      "coefficients": { "a": 1, "b": 100, "c": 0 },
+      "sliders": [{ "key": "b", "label": "增长指数", "min": 1, "max": 100, "step": 1 }],
+      "xAxis": { "label": "算力（相对值）", "min": 1, "max": 10 },
+      "yAxis": { "label": "模型能力" },
+      "observations": ["指数越大增长越快。", "这就是所谓的涌现。"]
+    }
+  }
+}

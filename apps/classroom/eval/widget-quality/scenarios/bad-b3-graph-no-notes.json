@@ -1,0 +1,33 @@
+{
+  "id": "bad-b3-graph-no-notes",
+  "name": "点了不出内容的拓扑图",
+  "templateId": "layered_graph",
+  "domain": "红线样例",
+  "intent": "（红线样例，不是可交付形态）拓扑结构本身没问题（有分叉有汇聚），但没有一个节点带 note，点下去只有高亮，没有任何一句话出现。",
+  "note": "note 在 schema 里是 optional，模型省掉它照样过校验。这个模板的主交互就是「点节点看它跟谁说话、它是干什么的」，详情位全空等于交互空转。",
+  "expectRedLines": ["B3"],
+  "widgetConfig": {
+    "type": "template",
+    "templateId": "layered_graph",
+    "name": "微服务调用关系",
+    "params": {
+      "layers": [
+        { "title": "接入", "nodes": [{ "id": "gw", "label": "网关" }] },
+        {
+          "title": "业务",
+          "nodes": [
+            { "id": "order", "label": "订单服务" },
+            { "id": "user", "label": "用户服务" }
+          ]
+        },
+        { "title": "存储", "nodes": [{ "id": "db", "label": "数据库" }] }
+      ],
+      "edges": [
+        { "from": "gw", "to": "order" },
+        { "from": "gw", "to": "user" },
+        { "from": "order", "to": "db" },
+        { "from": "user", "to": "db" }
+      ]
+    }
+  }
+}

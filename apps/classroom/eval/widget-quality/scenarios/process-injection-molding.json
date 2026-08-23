@@ -1,0 +1,42 @@
+{
+  "id": "process-injection-molding",
+  "name": "注塑一模走完五步",
+  "templateId": "process_stepper",
+  "domain": "智能制造",
+  "intent": "一步步走完，学生要能说出注塑成型的五步顺序，以及每一步交给下一步的是什么状态的料——尤其是保压和冷却不是一回事。",
+  "expectRedLines": [],
+  "widgetConfig": {
+    "type": "template",
+    "templateId": "process_stepper",
+    "name": "注塑成型周期",
+    "guide": "走到第 3 步停一下，看它交给冷却的是什么。",
+    "params": {
+      "steps": [
+        {
+          "title": "合模",
+          "detail": "动模向定模合拢并施加锁模力，锁模力不够，注射时熔体会把模具顶开产生飞边。",
+          "carries": "闭合并锁紧的型腔"
+        },
+        {
+          "title": "注射",
+          "detail": "螺杆前推，把熔融塑料以高压高速射进型腔，这一步决定填不填得满。",
+          "carries": "约九成充满的型腔"
+        },
+        {
+          "title": "保压",
+          "detail": "继续用较低压力补料，抵消塑料冷却收缩，缺了这一步制品表面会凹陷。",
+          "carries": "补料到位、尺寸稳定的制品"
+        },
+        {
+          "title": "冷却",
+          "detail": "模温水路带走热量，制品固化到能顶出而不变形，这一段通常占整个周期一半以上时间。",
+          "carries": "已固化的制品"
+        },
+        {
+          "title": "开模顶出",
+          "detail": "动模退开，顶针把制品顶离型腔，随后进入下一模的合模。"
+        }
+      ]
+    }
+  }
+}
