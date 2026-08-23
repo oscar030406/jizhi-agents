@@ -1,4 +1,4 @@
-# eval_sprint —— 四个评测脚本
+# eval_sprint —— 五个评测脚本
 
 这里放的是四个一次性评测实验的跑数脚本。产物落 `docs/05-evidence/eval_sprint/`（docs 不入库），
 每个脚本一份 `.jsonl` 明细 + 一份 `.md` 报告。
@@ -46,6 +46,7 @@ node --import tsx ../agent-engine/scripts/eval_sprint/d_numeric_perturbation.mjs
 | `b_ablation.mjs` | 四档消融爬升表 | ¥3 | `--rung N --judge --domain --requirement` |
 | `c_judge_stability.mjs` | 判官对同一条断言的自稳性（选项置换三轮） | ¥1 | `--from --ids --n --judge` |
 | `d_numeric_perturbation.mjs` | 判官能不能分辨「同一屏改了一个数」与原屏（配对判据） | ¥1 | `--n --judge --courses --set --max-tokens` |
+| `e_cross_domain.mjs` | 同一条中性需求丢给三个库，出来的课是不是真换了领域 | ¥2 | `--corpora --requirement --terms-only --scan-existing` |
 
 公用参数：`--dry-run` `--budget <元>` `--base-url <url>` `--seed <n>`。
 
@@ -111,6 +112,12 @@ node --import tsx ../agent-engine/scripts/eval_sprint/d_numeric_perturbation.mjs
   明细 jsonl 里留回复开头 200 字。第一版是靠人工抽样才发现它在说「您没有提供教学正文」的，
   那种发现不该靠运气。
 
+## 消融那两个开关已经补齐了
+
+下面这一节写于开关还缺的时候。**`AUDIT_GATE` 与 `COURSE_COHERENCE` 现已加在
+`lib/config/feature-flags.ts`**，四档全部可跑，实测 `scenesAudited` 四档 0/0/5/5
+与 env 一一对应。留着这一节是因为「怎么判断一个开关在不在」的做法仍然有用。
+
 ## 现成开关与还缺的开关
 
 `b_ablation.mjs --dry-run` 会现查盘（在产品代码里搜 `process.env.<NAME>`）并打印结论。截至写这份 README：
@@ -148,6 +155,19 @@ env 是服务端进程的，脚本改不了 —— B 的跑法因此是「服务
 - 整课生成的花费靠 `/api/usage` 的前后快照差算真实值；快照取不到才退回估算并在产物里标 `estimated`。
 - dry-run 里的 token 是按字符数粗估的，只用来看量级。
 
+## 一条硬纪律：实验课不许落学习者账号
+
+评测脚本一律**引擎直发**（`POST /api/generate-classroom`，只带 `content-type` 与
+`x-user-locale`，**不带任何认证**），不走登录态、不挂学习者账号。
+
+理由不是怕污染数据库，是**怕污染证据**：学情报告、掌握度、FSRS 排期都是从
+学习者账号的作答记录算出来的。实验课要是挂在某个账号下，那份学情报告里就混着
+「机器为了跑实验生成的课」——拿它去证明「学习效果」，等于自证。
+
+顺带一条：跑实验用**本地实例**（`--base-url http://localhost:<port>`），别打线上。
+线上那台同时在被别人走读、被真实用户用；实验课挤进去既抢资源，也让线上的
+课程列表多出一堆不该有的东西。要对线上语料做实验，把语料同步到本地再跑。
+
 ## 产物与口径纪律
 
 - 落 `docs/05-evidence/eval_sprint/<脚本>-<时间戳>.{jsonl,md}`，dry-run 的文件名带 `-dryrun`。
@@ -157,11 +177,16 @@ env 是服务端进程的，脚本改不了 —— B 的跑法因此是「服务
 
 ## 已知的坑
 
-- 制造侧两个库（`smart-manufacturing`、`plc-s71200`）在服务器上，本地盘上没有。
-  跑它们要 `--base-url` 指到线上，本地只能跑主域。
+- ~~制造侧两个库在服务器上，本地盘上没有。~~ **2026-08-24 起三个库都在本地**：
+  `ai`（1704 块）、`smart-manufacturing`（1703）、`iotdb`（2716）。
+  `plc-s71200` 已并进 `smart-manufacturing`，旧库删除。本地能跑全部三个域。
 - 落盘课程不带大纲的 `keyPoints`，蓝图读数用每屏正文的前若干句近似，识别率偏低——
   这是近似口径的账，不是产品的账，报告里已标注。
-- B 每档只跑一门课，判官分是单点，看不出生成随机性。要下结论至少每档三门取均值。
+- ~~B 每档只跑一门课。~~ **2026-08-23 已补到每档 3–4 门**（`ablation_topup.ps1`）。
+  补完的结论是**四档没有分出差异**：判官盲评四维没有一维单调上升，
+  档 2→3 事实性 88.7% vs 88.8%，判错 5→0 的 Fisher 双侧 p=0.0622 不显著。
+  补样过程本身查出三处静默丢数据（emit 覆盖、盲评键撞档、汇总只取第一门），
+  都修了——**「一档多门」这件事光加样本不够，汇总链得先能装得下**。
 - 扰动集是程序化造的，`value_x2` 里可能混着「翻倍后仍然正确」的句子，会被算成漏检。
 - 冻结集 `numeric_perturbation_set.jsonl` 大半不是教学正文（见上面 D 那一节）。
   它没被重建——D 的脚本不改 `build_numeric_perturbation_set.py`。要重建的话，
