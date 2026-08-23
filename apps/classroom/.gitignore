@@ -78,6 +78,7 @@ next-env.d.ts
 eval/whiteboard-layout/results/
 eval/outline-language/results/
 eval/orchestration/results/
+eval/widget-quality/results/
 eval/orchestration/results-answering/
 eval/orchestration/results-answer-content/
 
