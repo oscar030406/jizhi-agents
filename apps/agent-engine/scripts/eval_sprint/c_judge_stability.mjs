@@ -16,6 +16,7 @@
  * 参数：--from 课程 json 路径（逗号分隔） / --ids 课号（配 --base-url 从线上取）
  *       --n 抽多少条（默认 24） / --judge 判官模型 / --budget 上限
  */
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   Budget,
@@ -91,7 +92,35 @@ function collectClaims(courses) {
   return out;
 }
 
+/**
+ * 拿已经落盘的明细重出报告，零 API。
+ *
+ * 评测脚本的通病：读数口径写错了（这次是把「判齐」标成「分歧形态」），
+ * 改一行就得把 72 次判定重花一遍钱。判定结果早就在 jsonl 里，报告只是它的一个视图。
+ */
+async function rerender(jsonlPath) {
+  const rows = readFileSync(jsonlPath, 'utf-8')
+    .split('\n')
+    .filter(Boolean)
+    .map((l) => JSON.parse(l))
+    .filter((r) => r.script === 'c_judge_stability');
+  if (!rows.length) throw new Error(`${jsonlPath} 里没有 c_judge_stability 的行`);
+  // picked 从明细里还原：同一 idx 的三轮共用一条断言。
+  const byIdx = new Map();
+  for (const r of rows) {
+    if (!byIdx.has(r.idx)) {
+      byIdx.set(r.idx, { claim: r.claim, source: r.source, productVerdict: r.productVerdict });
+    }
+  }
+  const picked = [...byIdx.keys()].sort((a, b) => a - b).map((i) => byIdx.get(i));
+  const md = reportMd(picked, rows, new Budget(0, { dry: true }), null, productJudgeSystem());
+  const out = emit(`${path.basename(jsonlPath, '.jsonl')}-rerender`, { rows, md });
+  console.log(`重出报告（零 API）：${out.report}`);
+}
+
 async function main() {
+  const RERENDER = arg('rerender', '');
+  if (RERENDER) return rerender(RERENDER);
   const killed = stripProxyEnv();
   const budget = new Budget(BUDGET, { dry: DRY });
   const apiKey = DRY ? null : loadApiKey();
@@ -123,6 +152,8 @@ async function main() {
 
   const rows = [];
   let stopped = null;
+  // 关 body 扫描的前提：三轮喂的断言正文必须逐字相同。当场验，别靠「代码看上去是同一个数组」。
+  let firstBodies = null;
   try {
     for (const order of ORDERS) {
       const system = systemFor(order, spec);
@@ -132,11 +163,18 @@ async function main() {
         body: c.claim,
         message: `断言编号：S${String(i + 1).padStart(3, '0')}\n断言：${c.claim}\n\n请判定这一条。`,
       }));
-      const check = assertBlind(packed, BANNED);
+      const bodies = JSON.stringify(packed.map((x) => x.body));
+      if (firstBodies == null) firstBodies = bodies;
+      else if (bodies !== firstBodies) {
+        throw new Error('盲评自检失败：各轮断言正文不一致，不能关 body 扫描');
+      }
+      // 只扫骨架：三轮正文逐字相同（上面刚验过），正文里出现什么词都不携带轮次信息。
+      // 扫正文只会撞上领域技术词造假失败——实测 PLC 断言里的「轮转」撞上轮次名「轮转」。
+      const check = assertBlind(packed, BANNED, { scanBody: false });
       console.log(
         `\n--- ${order.name}（选项顺序 ${order.perm.map((i) => spec.opts[i].verdict).join(' → ')}）---`,
       );
-      console.log(`  盲评自检通过：${check.n} 条输入除断言正文外完全同形；轮次名不进输入。`);
+      console.log(`  盲评自检通过：${check.n} 条输入除断言正文外完全同形（骨架 ${check.skeletonChars} 字符）；轮次名不进骨架。`);
 
       for (let i = 0; i < packed.length; i++) {
         const res = await callModel(
@@ -147,8 +185,21 @@ async function main() {
           if (i === 0) console.log(`  [dry] 每条约 ${res.estIn} prompt token，本轮 ${packed.length} 条`);
           continue;
         }
-        const v = String(parseJsonObject(res.text).verdict || '').trim();
-        if (!VERDICTS.includes(v)) throw new Error(`判官回了个不认识的档：${v}`);
+        // 判官偶尔吐坏 JSON，或回一个不在三档里的词。**记下来继续跑，不让一条噎死整轮 72 次判定**。
+        // 这里刻意不重试：本试验量的就是「同一个判官回话稳不稳」，
+        // 重试到能解析为止会把不稳定这件事抹掉。不可解析条数进报告，不静默丢。
+        let v = null;
+        let bad = null;
+        try {
+          v = String(parseJsonObject(res.text).verdict || '').trim();
+          if (!VERDICTS.includes(v)) {
+            bad = `不认识的档「${v}」`;
+            v = null;
+          }
+        } catch (e) {
+          bad = String(e?.message ?? e).slice(0, 120);
+        }
+        if (bad) console.log(`  ⚠ ${order.id}#${i} 判定作废：${bad}`);
         rows.push({
           script: 'c_judge_stability',
           order: order.id,
@@ -157,6 +208,7 @@ async function main() {
           claim: picked[i].claim,
           productVerdict: picked[i].productVerdict,
           verdict: v,
+          unparsed: bad ?? undefined,
         });
       }
     }
@@ -177,13 +229,19 @@ async function main() {
 function reportMd(picked, rows, budget, stopped, spec) {
   const perItem = picked.map((_, i) => ORDERS.map((o) => rows.find((r) => r.order === o.id && r.idx === i)?.verdict));
   const complete = perItem.filter((v) => v.every(Boolean));
+  const badCount = rows.filter((r) => r.unparsed).length;
   const allSame = complete.filter((v) => new Set(v).size === 1).length;
   const kappa = complete.length ? fleissKappa(complete) : NaN;
 
+  // 判齐的按档分布、分歧的按形态分布——分开数。
+  // 之前两者混在一张「分歧形态」清单里，`supported：8` 这种其实是判齐的条数，标签在说谎。
+  const agreed = new Map();
   const flip = new Map();
   for (const v of complete) {
-    const k = [...new Set(v)].sort().join('/');
-    flip.set(k, (flip.get(k) || 0) + 1);
+    const set = [...new Set(v)].sort();
+    const bucket = set.length === 1 ? agreed : flip;
+    const k = set.join('/');
+    bucket.set(k, (bucket.get(k) || 0) + 1);
   }
 
   return `# C 判官新域校准（${stamp()}）
@@ -200,8 +258,16 @@ ${DRY ? '> **DRY-RUN 产物：一次请求都没发。** 一致性数字全是�
 | 三轮判齐的条数 | ${complete.length ? `${allSame}/${complete.length}（${((allSame / complete.length) * 100).toFixed(1)}%）` : '—'} |
 | Fleiss κ（三轮当三个评分者） | ${Number.isFinite(kappa) ? kappa.toFixed(3) : '—'} |
 | 有分歧的条数 | ${complete.length ? complete.length - allSame : '—'} |
+| 判定作废（判官吐坏 JSON / 不认识的档） | ${badCount}/${picked.length * ORDERS.length} |
 
-分歧形态：
+作废的那几条整条从一致性统计里退出（三轮缺一轮就不算「齐」），不当成任何一档。
+作废率本身是判官可用性的读数，不是可以省略的杂讯。
+
+三轮判齐的那些，落在哪一档：
+
+${agreed.size ? [...agreed.entries()].map(([k, n]) => `- ${k}：${n} 条`).join('\n') : '—'}
+
+有分歧的，分歧在哪两档之间：
 
 ${flip.size ? [...flip.entries()].map(([k, n]) => `- ${k}：${n} 条`).join('\n') : '—'}
 

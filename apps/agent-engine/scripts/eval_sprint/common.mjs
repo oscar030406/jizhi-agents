@@ -364,8 +364,9 @@ export function blindPack(items, seed) {
  * 做法是把每条 user 文本里的正文和编号抠掉，剩下的骨架必须逐字相同——
  * 有任何一组多带了一句「这是制造域的」，骨架就会多出一种，当场抛。
  * 另外扫一遍标识词：库名、档位名、stageId 这类只要出现在判官输入里就算漏。
+ * 正文各组相同的试验传 scanBody:false，只扫骨架——见下方注释。
  */
-export function assertBlind(entries, banned = []) {
+export function assertBlind(entries, banned = [], { scanBody = true } = {}) {
   const skeletons = new Map();
   for (const e of entries) {
     if (!/^S\d{3}$/.test(e.sid)) throw new Error(`盲评自检失败：编号带信息「${e.sid}」`);
@@ -373,9 +374,14 @@ export function assertBlind(entries, banned = []) {
     const skel = e.message.split(e.body).join('«正文»').split(e.sid).join('«编号»');
     if (!skeletons.has(skel)) skeletons.set(skel, []);
     skeletons.get(skel).push(e.sid);
+    // scanBody=false：只扫骨架，不扫正文。用在「各组正文逐字相同」的试验上
+    // （如判官选项置换：三轮喂的是同一批断言）——正文相同就不可能携带组别信息，
+    // 而正文里的技术词会撞上封锁词造出假失败（实测：PLC 断言里的「轮转」撞上轮次名）。
+    // 各组正文本就不同的试验（如齐平线对照）必须留默认值，那里正文漏词就是真漏。
+    const haystack = scanBody ? e.message : skel;
     for (const word of banned) {
       if (!word) continue;
-      if (e.message.toLowerCase().includes(String(word).toLowerCase())) {
+      if (haystack.toLowerCase().includes(String(word).toLowerCase())) {
         throw new Error(`盲评自检失败：${e.sid} 的判官输入里出现标识「${word}」`);
       }
     }
