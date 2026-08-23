@@ -168,11 +168,33 @@ export class Budget {
 
 // ---------------------------------------------------------------- 模型直调
 
+/**
+ * 取判官用的 key。**按顺序找三处，不复制密钥到第四个文件**。
+ *
+ * 两侧各有一份 env 是既有事实：课堂侧 `.env.local` 给 Next 用，
+ * 引擎侧 `.env` 给 FastAPI 用，key 可能只配在其中一边（本机就只在引擎侧）。
+ * 原来只找课堂那一份，于是脚本在一台配好了 key 的机器上照样报「没有 key」。
+ * 环境变量放最前：CI 与临时覆盖都走它，不该被文件盖掉。
+ */
 export function loadApiKey() {
-  const envPath = path.join(CLASSROOM, '.env.local');
-  const key = /^SILICONFLOW_API_KEY=(.+)$/m.exec(readFileSync(envPath, 'utf8'))?.[1]?.trim();
-  if (!key) throw new Error(`${envPath} 里没有 SILICONFLOW_API_KEY`);
-  return key;
+  if (process.env.SILICONFLOW_API_KEY?.trim()) return process.env.SILICONFLOW_API_KEY.trim();
+  const candidates = [
+    path.join(CLASSROOM, '.env.local'),
+    path.join(CLASSROOM, '..', 'agent-engine', '.env'),
+  ];
+  for (const envPath of candidates) {
+    let text;
+    try {
+      text = readFileSync(envPath, 'utf8');
+    } catch {
+      continue; // 这一份不在盘上，换下一处
+    }
+    const key = /^SILICONFLOW_API_KEY=(.+)$/m.exec(text)?.[1]?.trim();
+    if (key) return key;
+  }
+  throw new Error(
+    `找不到 SILICONFLOW_API_KEY。找过：环境变量、${candidates.join('、')}`,
+  );
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
