@@ -328,12 +328,83 @@ def load_markdown(root: Path) -> dict[str, str]:
     }
 
 
+#: 文档**身份**里的序号：`pv-ops-01.md`、`chapter1-02-preparation.md`、`第3章-定时器.md`。
+#: 认三种写法——分隔符后的数字、`chapter1` 这类连写、中文「第N章」。
+_DOC_ORDER = re.compile(
+    r"(?:[/_\-\s]\d{1,3}(?:[._\-]\d{1,2})*(?=[._\-\s/]|$))"
+    r"|(?:(?:chapter|chap|ch|part|lesson|unit|sec|step)\s*\d{1,3})"
+    r"|(?:第\s*[一二三四五六七八九十百\d]+\s*[章节讲篇课])",
+    re.I,
+)
+#: 站点导航文件。有它说明顺序写在别处，而我们收进来的 md 里没有。
+_NAV_FILES = {
+    "summary.md", "toc.md", "_sidebar.md", "mkdocs.yml",
+    "sidebar.json", "_toc.yml", "toctree.rst",
+}
+#: 判成 textbook 需要多少比例的文档在**身份**上带序号。
+#: 六份真语料实测分得极开——pv-ops 100%、cold-chain 100%、rag-adv 90%、vecdb 100%
+#: 对 iotdb 0%、odoo 0%——中间是空的，所以阈值取哪个都一样，取 0.5 留余量。
+_TEXTBOOK_MIN_RATIO = 0.5
+
+
+def detect_form(files: dict[str, str], root: Path | None = None) -> dict:
+    """这份语料是**教材形态**还是**文档站形态**。零 API。
+
+    ## 为什么要分
+
+    2026-08-23 两轮实测（`docs/05-evidence/prereq-intent-coverage-20260823.md`）：
+    结构信号能不能用**由语料形态决定**，不是三条独立的局限，是一条规律。
+
+    - 教材形态（单书成册、标题带章节号）：章节序、指路措辞、篇内位置三样都在。
+    - 文档站形态（VuePress / rst 转 md）：**章节序全灭**——iotdb 带序号的目录
+      0/29、文件 0/242，odoo 0/161 与 0/962，且 odoo 的 rst `toctree`
+      在转换成 md 时一条都没活下来。措辞信号也只够得着一成（Odoo 90% 的引用
+      两个词表都不认）。
+
+    所以下游那些吃顺序的东西（前置边用章节序当默认、难度冷启动的位置先验）
+    只能在 textbook 形态上激活。docsite 形态**诚实降级**并说明原因，
+    不假装算得出来——「系统知道自己不知道」比硬凑一个数值钱。
+
+    ## 判据看文档身份，不看正文
+
+    第一版扫正文里的 `## 1. 步骤` 这类标题号，把 iotdb 判成了 textbook 99%——
+    **页内小标题文档站也有，跟文档之间的顺序毫无关系**。要的是「这些文档
+    本身排没排过序」，所以判据只看路径/文件名。改口径之后同一批语料：
+    pv-ops 100%、cold-chain 100%、rag-adv 90%、vecdb 100% 对 iotdb 0%、odoo 0%，
+    中间是空的。
+
+    导航文件的存在是**反**证据：顺序写在导航里，而导航不在我们收进来的正文里。
+    """
+    total = len(files)
+    if not total:
+        return {"form": "unknown", "numbered_ratio": 0.0, "nav_files": [], "why": "一个文档都没有"}
+
+    numbered = sum(1 for rel in files if _DOC_ORDER.search(rel))
+    ratio = numbered / total
+    navs = sorted(
+        {p.name for p in root.rglob("*") if p.is_file() and p.name.lower() in _NAV_FILES}
+    ) if root else []
+
+    if ratio >= _TEXTBOOK_MIN_RATIO:
+        form = "textbook"
+        why = f"{numbered}/{total}（{ratio:.0%}）的文档在文件名里带序号，作者写下了顺序"
+    else:
+        form = "docsite"
+        why = (
+            f"只有 {numbered}/{total}（{ratio:.0%}）的文档在文件名里带序号"
+            + (f"，顺序写在导航文件里（{'、'.join(navs)}）而导航不在正文中" if navs else "，也没有导航文件")
+            + "——这份语料里没有可用的章节序"
+        )
+    return {"form": form, "numbered_ratio": round(ratio, 3), "nav_files": navs, "why": why}
+
+
 def probe(root: Path) -> dict:
     """一次性给出这份语料的结构信号清单。调用侧据此决定走哪条路径。"""
     files = load_markdown(root)
     plane = chapter_plane(files)
     pair, total, same, _ctx, _intents = xref_counts(files)
     edges = structural_edges(files)
+    form = detect_form(files, root)
     return {
         "files": len(files),
         "chapters": len(plane),
@@ -343,6 +414,7 @@ def probe(root: Path) -> dict:
         "edges": edges,
         "plane": plane,
         "usable": len(edges) > 0,
+        "structure_form": form,
     }
 
 

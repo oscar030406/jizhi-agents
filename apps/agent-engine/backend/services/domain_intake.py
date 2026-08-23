@@ -762,6 +762,26 @@ def _stage_knowledge(run: IntakeRun) -> dict[str, Any]:
             chapters=structure["chapters"],
             candidate_edges=len(structure["edges"]),
         )
+        # 语料形态。**下游吃顺序的东西按它开关**：章节序当前置默认、
+        # 难度冷启动的位置先验，只在 textbook 形态上激活。
+        # docsite 形态如实说「这个库没有章节序」——不假装算得出来。
+        form = structure.get("structure_form") or {}
+        if form.get("form") == "docsite":
+            run.emit(
+                "knowledge",
+                "stage_warning",
+                f"这份语料是**文档站形态**：{form.get('why', '')}。"
+                "所以前置关系只能给措辞级的软建议，难度也不做位置推断——"
+                "这两样都要作者写下的顺序，这个库里没有。教材形态的库不受此限。",
+                structure_form=form,
+            )
+        elif form.get("form") == "textbook":
+            run.emit(
+                "knowledge",
+                "stage_progress",
+                f"这份语料是**教材形态**：{form.get('why', '')}。章节序可用作前置默认与难度位置先验。",
+                structure_form=form,
+            )
 
     vocab: list[dict] = []
     graph: dict[str, Any] = {"items": [], "clauses": {}}
@@ -797,6 +817,8 @@ def _stage_knowledge(run: IntakeRun) -> dict[str, Any]:
             "xrefs_total": structure["xrefs_total"],
             "xrefs_within_chapter": structure["xrefs_within_chapter"],
             "candidate_edges": len(structure["edges"]),
+            # 形态门控的判据落盘：下游（③ 前置默认序、D28 位置先验）读它决定激活不激活。
+            "structure_form": structure.get("structure_form"),
         },
         "corpus_index": {
             "path": run.record["products"].get("corpus_index", ""),
