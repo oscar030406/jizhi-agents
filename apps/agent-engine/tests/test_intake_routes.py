@@ -290,3 +290,50 @@ def test_clone_never_runs_in_the_request_path(dir_client, monkeypatch):
     body = resp.json()
     assert body["source"] == {"kind": "gitUrl", "deferred": True}
     assert body["run_id"] and body["files"] == 0
+
+
+def test_single_zip_in_the_files_field_is_rerouted_to_the_zip_path(dir_client):
+    """整包传错格子不该让人白等十分钟。
+
+    2026-08-24 实测：149MB 的 sm-merge.zip 从「多文件」那一格传上来，走了 dir 分支，
+    `collect_readable` 在目录里找不到 md/txt/rst/pdf，报「这份投料里没有任何可读文档」——
+    包完好、里面 389 个 md 也在，只是没人解它。**传完才失败**，那次白等了十分钟。
+    """
+    c, seen = dir_client
+    blob = _zip_bytes({"book/ch1/intro.md": "# 一\n".encode() + "正文内容".encode() * 100})
+    resp = c.post(
+        "/api/domain-intake/runs",
+        headers={"x-internal-token": "probe-token"},
+        files=[("files", ("sm-merge.zip", blob, "application/zip"))],
+        data={"corpus": "probe"},
+    )
+    assert resp.status_code == 200, resp.text
+    # 关键：从 files 那一格进来，仍然走 zip 那条路，包会被解开
+    assert seen["kind"] == "zip", "单个 zip 传进多文件格子时没有改道，又会在①站白失败一次"
+    from pathlib import Path
+
+    spooled = Path(seen["ref"])
+    assert spooled.exists() and spooled.read_bytes() == blob
+    assert seen["inbox_record"]["filename"] == "sm-merge.zip"
+    spooled.unlink()
+
+
+def test_unreadable_suffix_in_the_files_field_is_rejected_at_request_time(dir_client):
+    """收不了的格式当场退，别落盘之后到①站才说。
+
+    直传那条路（`create_run`）本来就按 ALLOWED_SUFFIXES 挡着，延迟收料这条路绕过了。
+    两条路的判据不该有分叉。
+    """
+    c, _seen = dir_client
+    resp = c.post(
+        "/api/domain-intake/runs",
+        headers={"x-internal-token": "probe-token"},
+        files=[
+            ("files", ("guide.md", "# 一\n正文".encode() * 50, "text/markdown")),
+            ("files", ("payload.exe", b"MZ" + b"\x00" * 200, "application/octet-stream")),
+        ],
+        data={"corpus": "probe"},
+    )
+    assert resp.status_code == 400, resp.text
+    detail = resp.json()["detail"]
+    assert ".exe" in detail and "压缩包" in detail, detail

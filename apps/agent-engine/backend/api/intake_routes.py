@@ -133,15 +133,43 @@ async def create_run(
     stamp = f"{int(time.time() * 1000):x}"
     try:
         if given[0] == "files":
-            # 多文件也不整包进内存：逐个边读边写。
-            staged = inbox_dir / f"files-{stamp}"
-            staged.mkdir(parents=True, exist_ok=True)
-            for item in files:
-                target = staged / Path(item.filename or "unnamed").name
-                with target.open("wb") as fh:
-                    while chunk := await item.read(1 << 20):
+            # 传进「多文件」那一格的整包，改走 zip 那条路，别让它十分钟后才失败。
+            #
+            # 2026-08-24 实测：一个 149MB 的 sm-merge.zip 从这一格传上来，落进
+            # `_inbox/files-<stamp>/`，走 dir 分支；`collect_readable` 在目录里找不到
+            # md/txt/rst/pdf，报「这份投料里没有任何可读文档」——包本身完好、
+            # 里面 389 个 md 也在，只是没人解它。**传完才失败，那次白等了十分钟。**
+            #
+            # 直传那条路（`create_run`）本来就按 ALLOWED_SUFFIXES 挡了 .zip 并说得清楚，
+            # 但延迟收料这条路绕过了那道校验。两条路的判据不该有分叉。
+            names = [Path(f.filename or "").suffix.lower() for f in files]
+            single_zip = len(files) == 1 and names[0] == ".zip"
+            bad = sorted({x for x in names if x not in domain_intake.ALLOWED_SUFFIXES})
+            if bad and not single_zip:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"不收 {'、'.join(x or '无扩展名' for x in bad)} 格式："
+                    f"这一格只收 {'/'.join(sorted(x.lstrip('.') for x in domain_intake.ALLOWED_SUFFIXES))}。"
+                    "整包语料请传到「压缩包」那一格（单个 .zip 传到这里会自动改走压缩包那条路）。",
+                )
+            if single_zip:
+                spooled = inbox_dir / f"upload-{stamp}.zip"
+                with spooled.open("wb") as fh:
+                    while chunk := await files[0].read(1 << 20):
                         fh.write(chunk)
-            run = domain_intake.create_run_deferred("dir", str(staged), **options)
+                run = domain_intake.create_run_deferred("zip", str(spooled), **options)
+                run.record["inbox"]["filename"] = files[0].filename or spooled.name
+                run.flush()
+            else:
+                # 多文件也不整包进内存：逐个边读边写。
+                staged = inbox_dir / f"files-{stamp}"
+                staged.mkdir(parents=True, exist_ok=True)
+                for item in files:
+                    target = staged / Path(item.filename or "unnamed").name
+                    with target.open("wb") as fh:
+                        while chunk := await item.read(1 << 20):
+                            fh.write(chunk)
+                run = domain_intake.create_run_deferred("dir", str(staged), **options)
         elif given[0] == "zip":
             spooled = inbox_dir / f"upload-{stamp}.zip"
             with spooled.open("wb") as fh:
