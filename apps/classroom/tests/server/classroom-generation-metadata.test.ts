@@ -44,11 +44,19 @@ vi.mock('@/lib/generation/scene-generator', () => ({
 
 vi.mock('@/lib/server/classroom-storage', () => ({ persistClassroom: mocks.persistClassroom }));
 
-// 只替换两个「出网」函数，其余（presentationTier / blueprintDirective / 计票口径）用真实现——
-// 这条测试要验的正是它们的输出，桩掉就什么都没验。
+// 只替换「出网」的那几个函数，其余（presentationTier / blueprintDirective / 计票口径）
+// 用真实现——这条测试要验的正是它们的输出，桩掉就什么都没验。
+//
+// `zeroEvidenceReason` 也必须桩掉：它是开跑前的零命中闸，自己发一次真请求。
+// 不桩的话这条测试就变成「本机引擎起没起就换结果」——2026-08-24 实测，
+// 本地引擎一起，它拿 anyLiveCorpus() 选中的 iotdb 去查「教会我 RAG」，
+// 确实零命中、当场拦车，测试红。**闸没错，是这条测试的主题不是闸**
+// （它验的是元数据落库），所以在这里放行。闸本身另有用例守
+// （tests/generation/zero-evidence-preflight.test.ts）。
 vi.mock('@/lib/generation/evidence-grounding', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/generation/evidence-grounding')>()),
   fetchEvidence: mocks.fetchEvidence,
+  zeroEvidenceReason: async () => null,
 }));
 vi.mock('@/lib/generation/learner-profile', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/generation/learner-profile')>()),

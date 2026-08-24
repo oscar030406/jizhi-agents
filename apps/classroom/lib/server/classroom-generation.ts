@@ -33,6 +33,7 @@ import { boundedRunner } from '@/lib/utils/concurrency';
 import { corpusUnavailableReason } from '@/lib/server/knowledge-center';
 import {
   fetchEvidence,
+  zeroEvidenceReason,
   evidenceDirective,
   evidenceForJudge,
   excerptDirective,
@@ -252,6 +253,14 @@ async function generateClassroomInner(
   // 与交互式路径同一道闸：显式选了没建索引的库，一开始就说清楚，不许跑到一半空手而归。
   const corpusBlock = await corpusUnavailableReason(input.learnerProfile?.corpus);
   if (corpusBlock) throw new Error(corpusBlock);
+
+  // 库建好了不等于查得到。这一道问的是「这条需求在这个库里有没有东西」——
+  // 2026-08-23 ③ 跨域三联实测：一条领域中性的需求在三个库里检索全部返回空，
+  // 产品照样生成了三门通用课，证据块 0、所有屏 grounded:false。
+  // 记录是诚实的，但学习者拿到的是一门看起来正常、却跟所选库毫无关系的课。
+  // 探针只在「确实零命中」时拦车；没配检索或探针自身失败一律放行（见 zeroEvidenceReason）。
+  const zeroBlock = await zeroEvidenceReason(requirement, input.learnerProfile?.corpus);
+  if (zeroBlock) throw new Error(zeroBlock);
 
   await options.onProgress?.({
     step: 'initializing',

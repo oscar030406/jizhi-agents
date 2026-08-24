@@ -787,3 +787,64 @@ function excerptCharBudget(el: Record<string, unknown>): number {
   if (charsPerLine <= 0 || maxLines <= 0) return 60;
   return Math.max(60, charsPerLine * maxLines);
 }
+
+/**
+ * 开跑前问一句：这个库里查不查得到与需求相关的资料。
+ *
+ * ## 为什么要单开一个函数，不复用 `fetchEvidence`
+ *
+ * `fetchEvidence` 把四种情况**全部返回 `null`**：没配 `GROUNDING_URL`、
+ * 请求失败、零命中、引擎判「证据不足」。对生成主路径来说这样是对的
+ * （四种都该降级成裸生成，别拦车），但对**开跑前的判断**就不够了——
+ * 「本机没配检索」和「这个库真查不到」必须分开：前者拦车会让本地开发跑不动，
+ * 后者不拦车就会产出一门零据课。
+ *
+ * ## 为什么要有这道闸
+ *
+ * 2026-08-23 ③ 跨域三联实测：一条领域中性的需求
+ * （「给零基础新人的入门第一课」）在 ai / smart-manufacturing / iotdb
+ * **三个库里检索全部返回空**，产品照样生成了三门通用 Python 课，
+ * 证据块 0、所有屏 `grounded: false`。记录是诚实的，但学习者拿到的是
+ * 一门看起来正常的课，而它跟所选的库毫无关系。
+ *
+ * 返回 `null` = 不该拦（没配检索、或探针本身失败——探针不可靠时宁可放行，
+ * 不能因为一次网络抖动把人的生成挡了）。返回字符串 = 拦车理由，人话。
+ */
+export async function zeroEvidenceReason(
+  requirement: string,
+  corpus?: string,
+): Promise<string | null> {
+  const base = process.env.GROUNDING_URL;
+  if (!base) return null; // 没配检索：本地开发常态，不拦
+  const query = requirement.trim();
+  if (!query) return null;
+  try {
+    const params = new URLSearchParams({ query, top_k: '6', corpus: corpus?.trim() || 'default' });
+    const resp = await fetch(
+      `${base.replace(/\/$/, '')}/internal/v1/personalize/evidence?${params}`,
+      {
+        headers: { 'x-internal-token': process.env.GROUNDING_TOKEN ?? '' },
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        cache: 'no-store',
+      },
+    );
+    if (!resp.ok) return null; // 探针失败不拦车
+    const payload = (await resp.json()) as { data?: { chunks?: unknown[] } };
+    const chunks = payload.data?.chunks;
+    // **拦车的理由必须是「查过、确实没有」，不能是「读不懂回包」。**
+    // 缺 `data.chunks` 这个键说明对面回的不是我们认识的形状（版本不一致、
+    // 换了网关、测试里的桩），那时候不知道有没有命中——不知道就放行。
+    // 一版写成 `chunks?.length ?? 0`，把缺字段当成零命中，
+    // 当场误拦了一条只想验元数据落库的用例（classroom-generation-metadata）。
+    if (!Array.isArray(chunks)) return null;
+    if (chunks.length > 0) return null;
+    const where = corpus?.trim() ? `知识库「${corpus.trim()}」` : '当前知识库';
+    return (
+      `${where}里查不到与这条需求相关的资料（检索 0 命中）。\n` +
+      `继续生成的话，整门课都会没有出处可依——那不是这个产品该给的东西。\n` +
+      `两条出路：把需求写得贴近这个库真正讲的内容，或者换一个库。`
+    );
+  } catch {
+    return null; // 探针本身出错：宁可放行，不因一次抖动挡住生成
+  }
+}
