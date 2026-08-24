@@ -952,8 +952,20 @@ def _extract_concepts(run: IntakeRun) -> tuple[list[dict], dict[str, Any], str]:
     if not gateway.route_for(AGENT_CONCEPT).enabled:
         return [], {"items": [], "clauses": {}}, "未抽取——LLM 路由未启用（检查 SILICONFLOW_API_KEY 与 AGENT_GENERATION_MODE）"
 
+    # 解析失败的节数。`structured_chat` 重试几次仍解析不动就返回 None，
+    # 而 `extract_from_sections` 拿到 None 时这一节**静默贡献零个概念**——
+    # 不数一下的话，「词表覆盖打了折扣」打了多少，事后从 readiness 里查不出来。
+    # 2026-08-24 实测：SM 那批线代教材有几节说明文本带嵌套引号，撞坏 JSON、
+    # 三次重试都没过。解析器**刻意不修**这类（见 `_parse_json_object` 的注释：
+    # 补引号的规则会误伤正文），所以丢弃是设计内的——但**丢弃必须记账**。
+    ask_failures = 0
+
     def ask(system: str, user: str) -> dict | None:
-        return gateway.structured_chat(AGENT_CONCEPT, system, user, temperature=0.1, max_tokens=800)
+        nonlocal ask_failures
+        out = gateway.structured_chat(AGENT_CONCEPT, system, user, temperature=0.1, max_tokens=800)
+        if out is None:
+            ask_failures += 1
+        return out
 
     sections = run.ctx["sections"]
     max_sections = int(run.record["options"].get("max_sections", 120))
@@ -965,12 +977,20 @@ def _extract_concepts(run: IntakeRun) -> tuple[list[dict], dict[str, Any], str]:
     kept = prune(found)
     merged, _log = merge_candidates(kept, ask)
     vocab = to_vocabulary(merged)
+    lost = (
+        f"；另有 {ask_failures} 次抽取解析不动（那些节没贡献概念，词表覆盖据此打折）"
+        if ask_failures
+        else ""
+    )
     run.emit(
         "knowledge",
         "stage_progress",
-        f"词表：候选 {len(found)} → 支撑够 {len(kept)} → 归并后 {len(merged)}",
+        f"词表：候选 {len(found)} → 支撑够 {len(kept)} → 归并后 {len(merged)}{lost}",
         candidates=len(found),
         vocabulary=len(merged),
+        # 抽取本身失败几次。0 也写出来——**「没失败」和「没数过」必须分得开**。
+        ask_failures=ask_failures,
+        sections_sampled=len(picked),
     )
     if len(merged) < 2:
         return vocab, {"items": [], "clauses": {}}, f"词表只抽到 {len(merged)} 个概念，前置图无从谈起"
