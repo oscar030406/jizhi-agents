@@ -406,6 +406,36 @@ export function sd(xs) {
 }
 
 /**
+ * 自助重抽的 95% 分位区间。**样本小的时候只报点估计是不负责任的**——
+ * 三门课算出来的 88.7% 与 88.8% 看着有差，区间一画就知道那是同一个数。
+ *
+ * 同一个种子同一批数据结果可复算。不足 2 个样本返回 null，不硬造区间。
+ */
+export function bootCI(values, { iters = 2000, seed = 20260823 } = {}) {
+  if (values.length < 2) return null;
+  const rnd = mulberry32(seed);
+  const means = [];
+  for (let i = 0; i < iters; i++) {
+    let s = 0;
+    for (let j = 0; j < values.length; j++) s += values[Math.floor(rnd() * values.length)];
+    means.push(s / values.length);
+  }
+  means.sort((a, b) => a - b);
+  return {
+    lo: means[Math.floor(iters * 0.025)],
+    hi: means[Math.floor(iters * 0.975)],
+    n: values.length,
+  };
+}
+
+/** 把区间写成人话。`pct=true` 时按百分数。 */
+export function ciText(ci, { pct = false } = {}) {
+  if (!ci) return '样本不足，不报区间';
+  const f = (x) => (pct ? `${(x * 100).toFixed(1)}%` : x.toFixed(2));
+  return `${f(ci.lo)}–${f(ci.hi)}`;
+}
+
+/**
  * 自助重抽：点估计贴着判据线的时候，报「有多大比例的重抽落在线的同一侧」。
  * 样本小的时候点估计不能单独看，这一条是给它配的诚实说明。
  */

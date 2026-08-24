@@ -71,6 +71,7 @@ import {
   parseJsonObject,
   productJudgeSystem,
   assertBlind,
+  bootCI,
   bootstrapCoverage,
   mulberry32,
   emit,
@@ -416,22 +417,6 @@ function tally(rows, pick, strictPick) {
   };
 }
 
-/**
- * 自助重抽的 95% 分位区间。小格子（unit_swap / consequence_flip 各几十条）
- * 的点估计单看没有意义，这条给它配的诚实说明。
- */
-function bootCI(values, { iters = 2000, seed = 20260823 } = {}) {
-  if (values.length < 2) return null;
-  const rnd = mulberry32(seed);
-  const means = [];
-  for (let i = 0; i < iters; i++) {
-    let s = 0;
-    for (let j = 0; j < values.length; j++) s += values[Math.floor(rnd() * values.length)];
-    means.push(s / values.length);
-  }
-  means.sort((a, b) => a - b);
-  return { lo: means[Math.floor(iters * 0.025)], hi: means[Math.floor(iters * 0.975)], n: values.length };
-}
 
 const pct = (x) => (x == null ? '—' : `${(x * 100).toFixed(1)}%`);
 

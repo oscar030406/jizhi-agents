@@ -25,6 +25,8 @@ import {
   BudgetStop,
   EVIDENCE,
   arg,
+  bootCI,
+  ciText,
   flag,
   list,
   loadApiKey,
@@ -320,13 +322,20 @@ function reportMd(plan, rows, budget, stopped) {
     const vague = audits.reduce((n, a) => n + a.uncertainCount, 0);
     // 事实性按断言加权合并，不是各门取平均——门与门的断言数差好几倍。
     const fact = claims ? `${(((claims - wrong - vague) / claims) * 100).toFixed(1)}%` : '—';
+    // 区间按**断言**重抽，不按门重抽：n=3 门重抽出不了有意义的区间，
+    // 而断言是几百条。每条断言记 1（既没判错也没存疑）或 0。
+    const bits = audits.flatMap((a) => [
+      ...Array(Math.max(0, a.totalClaims - a.incorrectCount - a.uncertainCount)).fill(1),
+      ...Array(a.incorrectCount + a.uncertainCount).fill(0),
+    ]);
+    const factCI = ciText(bootCI(bits), { pct: true });
     const leaks = mine.reduce((n, x) => n + (x.readings?.scaffold?.residualLeaks ?? 0), 0);
     const blocks = mine.reduce((n, x) => n + (x.readings?.scaffold?.textBlocks ?? 0), 0);
     return `| ${r.id} | ${r.name} | ${mine.length} | ${cells.join(' | ')} | ${
       claims || '—'
     } | ${audits.length ? wrong : '—'} | ${audits.length ? vague : '—'} | ${fact} | ${
-      blocks ? `${leaks}/${blocks}` : '—'
-    } |`;
+      claims ? factCI : '—'
+    } | ${blocks ? `${leaks}/${blocks}` : '—'} |`;
   });
 
   const missing = plan
@@ -340,8 +349,8 @@ ${DRY ? '> **DRY-RUN 产物：一次请求都没发。** 分值列全是空的�
 
 ## 一、爬升表
 
-| 档 | 加了什么 | 门数 | ${dims.map(([, l]) => l).join(' | ')} | 断言 | 判错 | 存疑 | 事实性 | 脚手架残留 |
-|---:|---|---:|${dims.map(() => '---:').join('|')}|---:|---:|---:|---:|---:|
+| 档 | 加了什么 | 门数 | ${dims.map(([, l]) => l).join(' | ')} | 断言 | 判错 | 存疑 | 事实性 | 95% 区间 | 脚手架残留 |
+|---:|---|---:|${dims.map(() => '---:').join('|')}|---:|---:|---:|---:|:--:|---:|
 ${ladder.join('\n')}
 
 「门数」是这一档实际跑了几门。**门数为 1 的档不构成爬升证据**——四档屏数本身就不定，
