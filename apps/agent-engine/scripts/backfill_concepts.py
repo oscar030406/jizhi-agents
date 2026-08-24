@@ -37,10 +37,10 @@ from backend.rag.intake import (  # noqa: E402
 class OfflineRun:
     """_extract_concepts 只碰 run 的这几个面：corpus / ctx / record / emit。"""
 
-    def __init__(self, corpus: str, sections: list, tier_range: str):
+    def __init__(self, corpus: str, sections: list, tier_range: str, max_sections: int):
         self.corpus = corpus
         self.ctx = {"sections": sections}
-        self.record = {"options": {"tier_range": tier_range}}
+        self.record = {"options": {"tier_range": tier_range, "max_sections": max_sections}}
 
     def emit(self, station: str, level: str, message: str, **data) -> None:
         print(f"[{station}/{level}] {message}")
@@ -84,7 +84,11 @@ def main() -> int:
     print(f"重放 {len(sections)} 节，与活块数一致")
 
     tier_range = str(readiness.get("corpus_index", {}).get("tier_range") or "L1-L3")
-    run = OfflineRun(corpus, sections, tier_range)
+    # 第三个位置参数：抽取采样上限。默认沿引擎的 120；第一轮补站在两个新库上
+    # 实测 120 采样太稀（1703 节采 120，同一概念的 support 被稀释到过不了支撑闸，
+    # 候选 210 → 剩 1），加密采样是 run 参数不是判据——支撑闸本身一个字不动。
+    max_sections = int(sys.argv[3]) if len(sys.argv) > 3 else 120
+    run = OfflineRun(corpus, sections, tier_range, max_sections)
     vocab, graph, note = _extract_concepts(run)
     # 词表闸三态的边界（personalize_service._vocabulary_verdict）：note 里带「未抽取」
     # 判 skipped 不拦库，写「抽到 N 个」判 failed 直接把库挡出学习端。补站在
