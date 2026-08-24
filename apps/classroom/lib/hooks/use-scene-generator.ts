@@ -1464,10 +1464,56 @@ function readStoredLearnerProfile(): LearnerProfileFields | undefined {
   if (typeof window === 'undefined') return undefined;
   try {
     const raw = window.localStorage.getItem(LEARNER_PROFILE_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as LearnerProfileFields) : undefined;
+    const stored = raw ? (JSON.parse(raw) as LearnerProfileFields) : undefined;
+    return withCourseOrigin(stored);
   } catch {
     return undefined;
   }
+}
+
+/**
+ * 把「这门课出自哪个库」盖在浏览器画像上。
+ *
+ * ## 为什么必须盖
+ *
+ * localStorage 里的画像是**浏览器此刻选的库**，不是**这门课出自的库**。
+ * 一门课的后续屏是学习者翻页时才逐屏生成的——中间只要去别的域开过一门课，
+ * 存的画像就换了，回头补屏就跑在错的库上。
+ *
+ * 2026-08-24 实测（P4 走读产物 `juOtyfUKQ8`，iotdb 域的权限管理课）：
+ * 第 4 屏的 `audit.corpus` 落盘写着 **'ai'**，证据是主语料的两块具身智能内容
+ * （`em01s14#s2` 课程总结、`em01s24#s1` 正逆运动学）。仲裁自己判了
+ * 「参考资料内容为 ROS2 参数系统、tf2 坐标变换、URDF 及正逆运动学，
+ * 与权限机制毫无关联」——**一门 iotdb 的课，拿主库的书来评**。
+ * 同一门课早先生成的屏引的是 iotdb 自己的块，所以不是整门课错，
+ * 是「后补的屏跟着当前选择跑偏」。
+ *
+ * ## 为什么收在这里
+ *
+ * 三条客户端出口都读这份画像：正文（`withStoredProfile`）、判官
+ * （`fetchSceneAudit`）、补救插页。补在调用点等于给自己留三个再忘一次的机会
+ * ——这个文件里已经为同一个病收过两次口了（判官那一路的注释还在上面）。
+ *
+ * 课自己没记出身时（老课、或建课时没选库）原样返回存的画像，不硬造。
+ */
+function withCourseOrigin(stored?: LearnerProfileFields): LearnerProfileFields | undefined {
+  let origin: { corpus?: string; domain?: string } | undefined;
+  try {
+    origin = useStageStore.getState().stage?.origin;
+  } catch {
+    origin = undefined;
+  }
+  const corpus = origin?.corpus?.trim();
+  const domain = origin?.domain?.trim();
+  if (!corpus && !domain) return stored;
+  // 课记了什么就用什么：`corpusOf` 的口径是 corpus 优先、缺了才看 domain，
+  // 所以两格都按课记的覆盖，不与浏览器里那份混着用——混出来的组合
+  // （这门课的库 + 上一门课的域）盘上从来没存在过。
+  return {
+    ...(stored ?? {}),
+    ...(corpus ? { corpus } : { corpus: undefined }),
+    ...(domain ? { domain } : {}),
+  } as LearnerProfileFields;
 }
 
 /**
