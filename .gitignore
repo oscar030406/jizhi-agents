@@ -29,6 +29,9 @@ apps/classroom/data/classrooms/*.bak*
 # ── 构建与依赖 ───────────────────────────────────────────────────────
 node_modules/
 .next/
+# 实验用的 distDir（消融各档、修复验证…）。一条通吃，
+# 不要再按名字一个个加——上一次就漏掉了 .next-fixverify。
+.next-*/
 .venv/
 __pycache__/
 .pytest_cache/
