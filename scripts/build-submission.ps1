@@ -43,6 +43,10 @@ if ($missing.Count) {
     Write-Host "  真源目录：docs\06-defense\（写完再打包）" -ForegroundColor Yellow
     exit 1
 }
+$ppt = Join-Path $defense '集智答辩-v2.pptx'
+if (Test-Path $ppt) { Copy-Item $ppt $mat } else {
+    Write-Host "[阻断] 未找到答辩 PPT（docs\06-defense\集智答辩-v2.pptx）" -ForegroundColor Red; exit 1
+}
 $video = Get-ChildItem $defense -Filter '*.mp4' -ErrorAction SilentlyContinue
 if ($video) { $video | ForEach-Object { Copy-Item $_.FullName $mat } }
 elseif (-not $SkipVideoCheck) {
@@ -68,6 +72,11 @@ Write-Host "导出测试数据..." -ForegroundColor Yellow
 $dataOut = Join-Path $stage '03-测试数据'
 python (Join-Path $root 'scripts\export-submission-data.py') --out $dataOut
 if ($LASTEXITCODE -ne 0) { Write-Host "[阻断] 测试数据导出失败" -ForegroundColor Red; exit 1 }
+
+# ---- 数字对账（对外数字位 vs metrics.json 真源，作废读数零容忍）----------------
+Write-Host "数字对账..." -ForegroundColor Yellow
+python (Join-Path $root 'scripts\audit_outward_numbers.py') --pptx
+if ($LASTEXITCODE -ne 0) { Write-Host "[阻断] 对外文档存在作废读数（见上方输出）" -ForegroundColor Red; exit 1 }
 
 # ---- 扫描（与 publish-repo 同口径：密钥零容忍 + 协作痕迹词表）------------------
 Write-Host "扫描密钥..." -ForegroundColor Yellow
