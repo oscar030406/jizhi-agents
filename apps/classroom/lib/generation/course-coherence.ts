@@ -249,3 +249,35 @@ export function coherenceFromOutlines(
   }
   return { frame, progress };
 }
+
+/**
+ * 从**已经生成的一屏正文**里补出全课类比。
+ *
+ * ## 为什么需要这一步
+ *
+ * `courseFrameFromOutlines` 去大纲的 `keyPoints` 里找「就像 / 好比 / 相当于」，
+ * 而大纲要点的规格是三个短名词短语（模板原样：`["调节推力大小", "观察速度变化",
+ * "实现软着陆"]`），**从头到尾没有一处要求写类比**，那个形状也装不下一句「就像……」。
+ * 于是 `frame.analogy` 基本恒为 undefined，`coherenceDirective` 的招牌那一条
+ * 【全课统一类比】**从来没发出去过**。
+ *
+ * 2026-08-23 实测佐证（`S7-1200 高速计数器原理`，产品默认形态、连贯层开着）——
+ * 六屏六个**不同的喻体**：人眼 / 上课分心 / 人工清点 / 发身份证 / 超速相机 /
+ * 超市计数器。正是那条指令明令禁止的「每段一个新类比，读者每段都要重新建立映射」。
+ *
+ * ## 为什么从第一屏的成品正文取
+ *
+ * 类比是正文生成阶段才写出来的，大纲阶段拿不到。生成是顺序的（并发旋钮只作用于
+ * 审核相位），所以「第一个写出类比的屏」有确定含义：拿它定调，后面各屏跟着它走。
+ *
+ * 抠不出来就返回 `undefined`，`frame.analogy` 保持空、那条指令照旧不发——
+ * **不硬造一个类比**。硬造的比喻比没有比喻更糟：它会把后面所有屏都锚死在
+ * 一个可能不合适的喻体上。
+ */
+export function analogyFromGeneratedText(text: string): string | undefined {
+  const sentences = text
+    .split(/[。；！？\n]/)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 6);
+  return extractAnalogy(sentences);
+}

@@ -51,6 +51,7 @@ import {
 } from '@/lib/generation/learner-profile';
 import {
   coherenceDirective,
+  analogyFromGeneratedText,
   courseFrameFromOutlines,
   emptyProgress,
   extractWorkedExample,
@@ -58,7 +59,7 @@ import {
 } from '@/lib/generation/course-coherence';
 import { sceneConceptsFromChunks } from '@/lib/evidence/scene-concepts';
 import type { CourseGenerationMeta } from '@/lib/server/classroom-storage';
-import { auditSceneContent } from '@/lib/generation/hallucination-audit';
+import { auditSceneContent, extractTeachingText } from '@/lib/generation/hallucination-audit';
 import { buildAuditPanel } from '@/lib/server/audit-panel';
 import {
   generateMediaForClassroom,
@@ -959,6 +960,21 @@ async function auditAndBuildScene(p: PreparedScene) {
     if (!content) {
       log.warn(`Skipping scene "${safeOutline.title}" — content generation failed`);
       continue;
+    }
+
+    // 全课类比：大纲里抠不出来（要点是三个短名词短语，装不下「就像……」），
+    // 所以等第一屏正文写出来再定调，后面各屏跟着它走。
+    // 不这么做的话 `frame.analogy` 恒为空，`coherenceDirective` 的招牌那一条
+    // 【全课统一类比】从来发不出去——2026-08-23 实测一门连贯层开着的课，
+    // 六屏六个不同喻体（人眼/上课分心/人工清点/发身份证/超速相机/超市计数器）。
+    // 抠不出来就保持空，那条指令照旧不发——**不硬造**：硬造的比喻会把后面
+    // 所有屏锚死在一个可能不合适的喻体上，比没有更糟。
+    if (coherenceOn && !frame.analogy) {
+      const found = analogyFromGeneratedText(extractTeachingText(content));
+      if (found) {
+        frame.analogy = found;
+        log.info(`[课程一致性] 全课类比定调（第 ${index + 1} 屏）：${found}`);
+      }
     }
     // 记下这屏用了哪个模板，下一屏选的时候避开。`config.templateId` 只有
     // 模板池那条路会写；上游自由 HTML 与讲义降级都没有，正好不必去重。
