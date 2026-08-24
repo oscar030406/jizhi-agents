@@ -286,6 +286,58 @@ function stripHtmlToText(html: string): string {
     .trim();
 }
 
+/**
+ * 不是教学断言、不该送审的两类行。
+ *
+ * 【一 · 提示词回声】生成器有时把提示词里的硬要求原样写进正文
+ * （`- 【零基础硬要求】单个段落新术语不超过 2 个`、`- 每页最多 1-2 个摘录占位符`）。
+ * 交付前会被修订环清掉，学习者看不到，**但审核看得到**：判官与数字旁路把它们
+ * 逐条抽成断言判「存疑」。2026-08-24 实测一门带证据的课，14 条存疑里 **10 条**
+ * 是这么来的——**存疑率这个指标被自己的提示词顶高了**，而它正是我们用来论证
+ * 「泛化域差在检索覆盖」的那个数。
+ *
+ * 【二 · 摘录缺口说明】`（这里本应引用教材 [xxx#s1]，…）` 是 `excerptGap()`
+ * **故意留给学习者看的**（注释原话：「学习者至少知道这里本该有引用、可以去查那个出处」），
+ * 用来避免指代悬空。**它必须留在正文里**——所以这里只把它挡在审核之外，
+ * 不从内容里删。它是系统说明，不是关于世界的断言，判它真假没有意义。
+ *
+ * 判据只认**我们自己写的那几句字面量**，不做形态猜测：真教材不会说
+ * 「每页最多 1-2 个摘录占位符」。猜形态（比如「凡是 `- 【…】` 开头的行」）
+ * 会误伤正文里正常的方括号强调。字面量的出处由
+ * `tests/generation/directives-stay-out-of-speech.test.ts` 钉着，它们搬家时会红。
+ */
+const NOT_A_CLAIM = [
+  /【零基础硬要求】/,
+  /每页最多\s*1-2\s*个摘录占位符/,
+  /承载推导和因果/,
+  /这里本应引用教材\s*\[/,
+];
+
+export function isAuditableLine(text: string): boolean {
+  return !NOT_A_CLAIM.some((re) => re.test(text));
+}
+
+/**
+ * 把一段文字里不该送审的**句子**摘掉，其余原样留下。
+ *
+ * 不能整段判：`stripHtmlToText` 会把一屏的 HTML 压成一个长字符串，
+ * 整段匹配等于「一句回声连坐整屏」——实测一屏正文因此被抽成空串，
+ * **那不是少判几条，是整屏漏审**，比原来的问题严重得多。
+ *
+ * 按中文句读切，逐句判，再拼回去。句读表里除了句号分号叹问，还要有 `）` 和 `」`
+ * ——摘录缺口说明整句就是一对括号（`（这里本应引用教材 […]，…）`），
+ * 不认收尾括号的话它跟后面的正文切不开，又变成连坐。**实测栽过一次。**
+ *
+ * 切不出句子（整段确实只有一句）时退化成整段判，与 `isAuditableLine` 同义。
+ */
+export function dropNonClaimSentences(text: string): string {
+  if (isAuditableLine(text)) return text;
+  const kept = text
+    .split(/(?<=[。；！？）」\n])/)
+    .filter((s) => s.trim() && isAuditableLine(s));
+  return kept.join('').trim();
+}
+
 export function extractTeachingText(content: unknown): string {
   const parts: string[] = [];
   const seen = new Set<unknown>();
@@ -299,7 +351,9 @@ export function extractTeachingText(content: unknown): string {
         !/^(https?:|data:|#|rgb|gen_img|gen_vid)/.test(text) &&
         !/^[\w-]+$/.test(text)
       ) {
-        parts.push(text);
+        // 逐句摘，不整段扔——整段扔会让一句提示词回声把整屏带走。
+        const kept = dropNonClaimSentences(text);
+        if (kept) parts.push(kept);
       }
       return;
     }
