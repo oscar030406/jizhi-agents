@@ -890,25 +890,36 @@ async function auditAndBuildScene(p: PreparedScene) {
         : Promise.resolve(null),
     ]);
     const assemblyMode = sceneEvidence != null && process.env.EXCERPT_ASSEMBLY !== '0';
+    // 四段指令**只给正文生成器**，攒在这里，不往 `safeOutline.description` 上原地累加。
+    //
+    // 原来是就地改写那一格，于是同一个 outline 后面又被喂给讲稿生成器
+    // （`generateSceneActions(p.safeOutline, …)`），讲稿把指令当正文写了进去，
+    // 审核再把它们逐条抽成断言判「存疑」。2026-08-24 实测（P4 走读 `_ZbcAPo3x8`）：
+    // 17 条存疑里有 **7 条**是这么来的——`- 【零基础硬要求】单个段落新术语不超过 2 个`、
+    // `- 每页最多 1-2 个摘录占位符`、`- （这里本应引用教材 […]，这一屏引用已达上限）`。
+    // 交付的讲稿是干净的（修订环清掉了），所以学习者听不到；
+    // **但存疑率被这些非断言顶高了四成，读数因此不可信**。
+    let directives = '';
     if (sceneEvidence) {
-      safeOutline.description =
-        (safeOutline.description ?? '') +
-        evidenceDirective(sceneEvidence) +
-        (assemblyMode ? excerptDirective(sceneEvidence) : '');
+      directives +=
+        evidenceDirective(sceneEvidence) + (assemblyMode ? excerptDirective(sceneEvidence) : '');
     }
     if (scenePlan) {
       // 这一屏正在讲什么，两张清单都要把它排除——既不算已讲过，也不算还没讲。
       progress.teachingNow = safeOutline.title;
-      safeOutline.description =
-        (safeOutline.description ?? '') +
+      directives +=
         blueprintDirective(scenePlan, requirements.learnerProfile!) +
         (coherenceOn ? coherenceDirective(frame, progress) : '');
       courseBlueprint ??= scenePlan;
     }
+    // 正文生成用带指令的这一份；`safeOutline` 本身保持原样，讲稿与审核看到的是干净描述。
+    const outlineForContent = directives
+      ? { ...safeOutline, description: (safeOutline.description ?? '') + directives }
+      : safeOutline;
 
     const content = await withGenerationRetry(
       () =>
-        generateSceneContent(safeOutline, sceneAiCall, {
+        generateSceneContent(outlineForContent, sceneAiCall, {
           agents,
           languageDirective,
           allowProceduralSkill: vocationalActive,
