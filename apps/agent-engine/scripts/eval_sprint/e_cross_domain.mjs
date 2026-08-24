@@ -562,7 +562,7 @@ function reportMd(rows, sig, budget, stopped, floor) {
     '另一类会真误报，`sql`/`select`/`database` 按判据算 iotdb 特征词，' +
     '可一门讲 RAG 的 AI 课说到 SQL 完全正常。看表时按词判，别只看数。\n\n' +
     '## 三、常规读数（与齐平线同口径，但样本量不同）\n\n' +
-    '| 库 | 断言 | 判错 | 存疑 | 事实性 | 脚手架残留 |\n|---|---:|---:|---:|---:|---:|\n' +
+    '| 库 | 断言 | 判错 | 存疑 | 有据率 | 脚手架残留 |\n|---|---:|---:|---:|---:|---:|\n' +
     rows
       .map((r) => {
         const a = r.readings?.audit;
