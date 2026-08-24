@@ -2057,7 +2057,47 @@ def _scope_label(corpus: str, scope: str) -> str:
     而不是看到一个模型编出来的好听名字。
     """
     line = re.split(r"[。；;\n]", scope.strip())[0].strip()
-    return line[:24] or corpus
+    return _trim_at_word_boundary(line, 24) or corpus
+
+
+#: 断句点分两类，因为它们和后文的关系不一样。
+#: 「后置」＝这个字本身是上一段的结尾，断在它**后面**（冒号、逗号、顿号）。
+#: 「前置」＝这个字领起下一段，断在它**前面**（连词、开括号）——
+#: 断在「与」后面会留下「…与西门子」这种半句，实测就是这么难看的。
+#: 空格单列：它在中英混排里到处都是，混进前置表会**盖过真正的断点**
+#: （实测「…开发与西门子 」里空格在 23、「与」在 19，取最靠后就又切出半句），
+#: 所以只在一个真断点都找不到时才用它兜底。
+_BREAK_AFTER = "：:，,、"
+_BREAK_BEFORE = "与和及（(【["
+_BREAK_FALLBACK = " "
+
+
+def _trim_at_word_boundary(text: str, limit: int) -> str:
+    """截到 `limit` 字以内，但**不切在半个词上**。
+
+    硬切的后果实测过：疆域写「智能制造技能培训：ROS2 机器人开发与西门子 S7-1200
+    PLC 编程」，`line[:24]` 出来是「智能制造技能培训：ROS2 机器人开发与西门子 」——
+    断在「西门子」后面，尾巴还挂着个空格，读起来像话说了一半。
+
+    做法：先看有没有天然的断句点（冒号、顿号、括号、「与/和/及」）能落在
+    limit 以内且不至于把标签砍得太短（≥ 一半）；有就断在那儿，没有就退回硬切。
+    末尾的标点与空格一律去掉。
+    """
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    after = max((head.rfind(ch) for ch in _BREAK_AFTER), default=-1)
+    before = max((head.rfind(ch) for ch in _BREAK_BEFORE), default=-1)
+    # 后置断点连它自己一起留（「…培训：」再 rstrip 掉冒号），前置断点在它之前切断。
+    cut = max(after + 1 if after >= 0 else -1, before if before >= 0 else -1)
+    if cut < limit // 2:  # 真断点没有或太靠前，才轮到空格兜底
+        space = max((head.rfind(ch) for ch in _BREAK_FALLBACK), default=-1)
+        cut = space if space >= limit // 2 else cut
+    # 断点太靠前就不用它——「智能制造」比「智能制造技能培训：ROS2 机器人开发」信息量少。
+    if cut >= limit // 2:
+        head = head[:cut]
+    return head.rstrip(_BREAK_AFTER + _BREAK_BEFORE + _BREAK_FALLBACK + "-—…")
 
 
 def _corpus_examples(run: IntakeRun) -> tuple[list[dict[str, str]], str]:
