@@ -61,7 +61,25 @@ STALE: dict[str, str] = {
     "0.753": "SM 接入体检旧读数（引擎松口径「事实性」），且未标小样本",
     "0.823": "iotdb 接入体检旧读数；体检重跑后 0.927（同为松口径）",
     "0.573": "iotdb 重投批按有据率算的值，只在解释两套口径差时用，不作对外指标",
+    # 2026-08-24 泛化域定稿换届后作废的一批（Odoo 删除、iotdb 重投、旧五库口径退役）
+    "0.848": "Odoo 域接地率；该域已删除，正式泛化端换届为智能制造+iotdb",
+    "0.594": "iotdb 域旧接地率「待解释项」；已归因（量具污染+检索挑块）并修复，只在讲归因过程时引用",
+    "3046": "Odoo 语料块数；该域已删除",
+    "3202": "iotdb 旧库块数；重投后 2716",
+    "531": "旧五库体检断言合计；五库口径退役，新口径为两泛化库分列",
 }
+
+
+#: 逐处豁免：某个作废值在某份文件里被允许出现（引用它只为讲清它为什么作废）。
+#: 键是 (文件名, 数字字面)，值是理由。豁免一处必须写理由——没有理由的豁免不收。
+ALLOW: dict[tuple[str, str], str] = {
+    ("design-implementation.md", "0.594"): "§7.4 归因叙述：讲旧落差如何被查明修复，必须给出原数",
+    ("slide14.xml", "0.594"): "PPT 泛化页归因行：同上，讲修复故事需要原数",
+}
+
+
+def allowed(fname: str, num: str) -> bool:
+    return (fname, num) in ALLOW
 
 #: 冻结指标：不许被新读数覆盖，出现处必须带口径。这里只清点不判对错——
 #: 口径注记是不是齐全要人看，脚本判不了「这句话算不算口径」。
@@ -136,7 +154,7 @@ def main() -> int:
     print(f"扫了 {len(files)} 份对外文档，{len(all_hits)} 处数字")
     print("不扫：docs/05-evidence、docs/04-research、skill-map.json、.pptx（见模块头）\n")
 
-    stale_hits = [h for h in all_hits if h[2] in STALE]
+    stale_hits = [h for h in all_hits if h[2] in STALE and not allowed(h[0].name, h[2])]
     print(f"=== 作废读数命中：{len(stale_hits)} 处 ===")
     for f, lineno, num, line in stale_hits:
         print(f"  {f.relative_to(ROOT)}:{lineno}  {num}")
@@ -160,7 +178,7 @@ def main() -> int:
     if args.pptx:
         deck = ROOT / "docs/06-defense/集智答辩-v2.pptx"
         if deck.is_file():
-            pptx_hits = [h for h in scan_pptx(deck) if h[1] in STALE]
+            pptx_hits = [h for h in scan_pptx(deck) if h[1] in STALE and not allowed(h[0], h[1])]
             print(f"\n=== PPT 作废读数命中：{len(pptx_hits)} 处 ===")
             for slide, num, ctx in pptx_hits:
                 print(f"  {slide}  {num}  …{ctx.strip()}…")
