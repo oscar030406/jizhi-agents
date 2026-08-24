@@ -136,10 +136,29 @@ export async function generateCourse({ baseUrl, requirement, profile, budget, ti
 
   const t0 = Date.now();
   let last = '';
+  /** 连续几次读不到状态才放弃。生成本身还在服务端跑，客户端读不到不代表它死了。 */
+  const MAX_POLL_FAILS = 6;
+  let pollFails = 0;
   for (;;) {
     if (Date.now() - t0 > timeoutMs) throw new Error(`job ${jobId} 超过 ${timeoutMs / 60000} 分钟未完成`);
     await sleep(5000);
-    const job = await getJson(`${baseUrl}/api/generate-classroom/${jobId}`);
+    // 轮询要容忍瞬时失败：dev server 热重载时这个接口会回一页 HTML 错误页，
+    // 一次抖动就把跑了十分钟的整轮丢掉不划算。**只容忍读状态失败，不容忍
+    // job 自己报 failed**——后者是真结果，照旧立刻抛。
+    // 实测：编辑源码触发重编译（`compile: 861ms`）那一下，轮询拿到 HTTP 500。
+    let job;
+    try {
+      job = await getJson(`${baseUrl}/api/generate-classroom/${jobId}`);
+      pollFails = 0;
+    } catch (err) {
+      pollFails += 1;
+      if (pollFails > MAX_POLL_FAILS) {
+        throw new Error(`job ${jobId} 连续 ${MAX_POLL_FAILS} 次读不到状态：${String(err).slice(0, 160)}`);
+      }
+      process.stdout.write(`      读状态失败 ${pollFails}/${MAX_POLL_FAILS}，5 秒后重试
+`);
+      continue;
+    }
     if (job.message && job.message !== last) {
       last = job.message;
       process.stdout.write(`      ${job.status} ${job.progress ?? ''}% ${job.message}\n`);

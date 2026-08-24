@@ -12,6 +12,8 @@
  * 存 localStorage（与画像同层，本机优先），条数封顶防膨胀。
  */
 
+import { useAccountStore } from '@/lib/store/account';
+
 export interface MistakeEntry {
   at: string;
   sceneId: string;
@@ -54,14 +56,65 @@ export interface MistakeEntry {
   optionCount?: number;
 }
 
-const KEY = 'mistakeBank';
+const KEY_BASE = 'mistakeBank';
+
+/**
+ * 错题本按账号分桶。
+ *
+ * ## 为什么必须分
+ *
+ * 原来是全局单键 `mistakeBank`，同一台浏览器换个账号照样读得出上一个人的错题，
+ * 而学情报告拿它算掌握度——**别人的作答算进你的学情**。
+ * 2026-08-24 走读实锤：错题本里混进了同浏览器旧账号的 3 条题。
+ *
+ * 这个文件为「域」那根轴修过一次（见上面 `domain` 字段的注释：不带域的错题本
+ * 换库后必然把两个库的错题混排）。**账号那根轴当时没人想起来**——
+ * 同一个文件、同一种病，隔了几周才由走读发现。
+ *
+ * 键名沿用仓库已有的约定 `<base>@<accountId>`（`maic.learnerMerged@<id>` 同款），
+ * 不另起一套。
+ *
+ * ## 没登录的时候
+ *
+ * 用基础键（`mistakeBank`），也就是匿名桶。账户系统没启用的部署一切照旧。
+ */
+function bankKey(): string {
+  try {
+    const id = useAccountStore.getState().account?.id;
+    return id ? `${KEY_BASE}@${id}` : KEY_BASE;
+  } catch {
+    return KEY_BASE; // store 还没挂载（SSR / 早期调用）：退回匿名桶
+  }
+}
+
+/**
+ * 把匿名桶里的老数据认领进当前账号，认领完删掉老键。**每个账号只做一次**。
+ *
+ * 不做迁移的话，加前缀那一刻现存用户的错题本会凭空消失——新键是空的。
+ * 「认领」按先到先得：老数据没有主人标签，谁先登录归谁。
+ * 那也比现在强——现在是**所有账号都看得见**，认领之后只有一个人看得见。
+ */
+function claimLegacyOnce(key: string): void {
+  if (key === KEY_BASE) return; // 匿名桶自己就是老键，没什么可认领
+  try {
+    if (localStorage.getItem(key) !== null) return; // 这个账号已经有自己的桶
+    const legacy = localStorage.getItem(KEY_BASE);
+    if (legacy === null) return;
+    localStorage.setItem(key, legacy);
+    localStorage.removeItem(KEY_BASE);
+  } catch {
+    /* 存储不可用：认领失败不拦读写，最坏是这个账号从空错题本开始 */
+  }
+}
 /** 封顶条数。超出丢最旧的——错题本是近期回放，不是终身档案。 */
 const CAP = 200;
 
 export function readMistakes(): MistakeEntry[] {
   if (typeof localStorage === 'undefined') return [];
+  const key = bankKey();
+  claimLegacyOnce(key);
   try {
-    const raw = JSON.parse(localStorage.getItem(KEY) ?? '[]');
+    const raw = JSON.parse(localStorage.getItem(key) ?? '[]');
     return Array.isArray(raw) ? (raw as MistakeEntry[]) : [];
   } catch {
     return [];
@@ -73,7 +126,7 @@ export function appendMistakes(entries: ReadonlyArray<MistakeEntry>): void {
   if (typeof localStorage === 'undefined' || entries.length === 0) return;
   try {
     const merged = [...entries, ...readMistakes()].slice(0, CAP);
-    localStorage.setItem(KEY, JSON.stringify(merged));
+    localStorage.setItem(bankKey(), JSON.stringify(merged));
   } catch {
     // 配额满等情况：宁可丢错题记录也不打断交卷流程。
   }
