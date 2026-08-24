@@ -15,9 +15,19 @@ python scripts/audit_outward_numbers.py      # 对外数字位对账
 
 | 脚本 | 管什么 | 漏了会怎样 |
 |---|---|---|
-| `repo_hygiene_scan.py` | API key、token、`Co-Authored-By`、agent 工作日志、`.claude/` 之类 | 密钥泄漏；或者交付包一眼看出是 AI 做的 |
+| `repo_hygiene_scan.py` | API key、token、协作署名尾注、agent 工作日志、`.claude/` 之类 | 密钥泄漏；或者交付包一眼看出是 AI 做的 |
 | `check_metrics.py` | `metrics.json` 里每个指标的引用还在不在、有没有被陈旧值覆盖 | 材料里的数字和真源对不上，评委一查就露 |
 | `audit_outward_numbers.py` | 对外文档里出现的数字，比对作废读数表 | 引用了已经作废的读数（改口径、换读数之后最容易） |
+
+## 一个小坑：别在文档里写出被扫的字面量
+
+上面那格原本写的是协作署名的**全称**，结果 `repo_hygiene_scan.py` 把这份 README
+自己抓了——它不区分「出现了那个词」和「在讲那个词」。
+
+**处理方式是改措辞，不是加豁免。** 加豁免会让扫描器对整份文件失明，
+下次这里真混进一条署名就查不出来了。同理，往 `audit_outward_numbers.py`
+的 `STALE` 表里写作废值时，那张表本身在 `scripts/` 下、不在扫描范围内，
+所以不受影响。
 
 ## 三个之外还有什么没被扫
 
