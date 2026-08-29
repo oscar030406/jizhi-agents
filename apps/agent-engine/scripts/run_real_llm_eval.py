@@ -53,7 +53,6 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    os.environ["AGENT_GENERATION_MODE"] = "api"
     from backend.orchestration.workflow import AgentTrainingWorkflow
     from backend.services.data_loader import get_learner_profile, load_e2e_cases
     from backend.rag.claims import audited_char_ratio, claim_statistics

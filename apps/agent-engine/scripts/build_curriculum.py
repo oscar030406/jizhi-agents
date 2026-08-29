@@ -9,7 +9,7 @@
     → 落盘 data/curriculum/<concept>.json + catalog.json
 
 用法（引擎目录下）：
-    $env:AGENT_GENERATION_MODE="api"; python scripts\\build_curriculum.py --concept rag
+    python scripts\\build_curriculum.py --concept rag
     python scripts\\build_curriculum.py --catalog-only   # 只重建目录（无需网络）
 
 课程 JSON 是入库的静态资产：生成一次、可审计、可复算指认（答辩口径：
@@ -1632,7 +1632,7 @@ def build_course(concept: str) -> Course:
     meta, outline = graph[concept], COURSE_OUTLINES[concept]
     gateway = _build_gateway()
     if not gateway.is_enabled("ResourceGenerationAgent"):
-        raise SystemExit('LLM 路由未启用：请先 $env:AGENT_GENERATION_MODE="api"（key 在 .env）')
+        raise SystemExit('LLM 路由未启用：检查 .env 里的模型密钥')
 
     lessons = [build_lesson(gateway, concept, spec, meta.get("misconceptions", [])) for spec in outline["lessons"]]
     final_quiz = build_final_quiz(gateway, lessons, concept)
@@ -2095,7 +2095,7 @@ def build_semester_course(concept: str) -> Course:
     meta = graph[concept]
     gateway = _build_gateway()
     if not gateway.is_enabled("ResourceGenerationAgent"):
-        raise SystemExit('LLM 路由未启用：请先 $env:AGENT_GENERATION_MODE="api"')
+        raise SystemExit('LLM 路由未启用：检查 .env 里的模型密钥')
 
     cache_dir = ROOT / "data" / ".lesson_cache" / concept
     cache_dir.mkdir(parents=True, exist_ok=True)

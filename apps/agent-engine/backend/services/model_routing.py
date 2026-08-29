@@ -88,8 +88,10 @@ def route_for(agent: str, env: Mapping[str, str] | None = None) -> ModelRoute:
     model = _env_value(env, f"LLM_MODEL_{tier.upper()}", default_model)
     base_url = _env_value(env, f"LLM_BASE_URL_{tier.upper()}", PROVIDER_BASE_URLS.get(provider, ""))
     api_key_env = _env_value(env, f"LLM_API_KEY_ENV_{tier.upper()}", PROVIDER_KEY_ENV.get(provider, "LLM_API_KEY"))
-    generation_mode = _env_value(env, "AGENT_GENERATION_MODE", "deterministic").lower()
-    enabled = generation_mode in {"api", "hybrid"} and bool(env.get(api_key_env) or os.environ.get(api_key_env))
+    # 2026-08-28 起系统只有真实模型一条生成路径（AGENT_GENERATION_MODE 开关与
+    # 确定性兜底引擎一并移除）：路由是否可用只取决于密钥在不在。密钥缺失时
+    # 生成/审核环节显式报错，不再静默降级——降级会把"多智能体协同"变成可选项。
+    enabled = bool(env.get(api_key_env) or os.environ.get(api_key_env))
     return ModelRoute(
         agent=agent,
         tier=tier,

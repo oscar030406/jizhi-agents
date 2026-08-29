@@ -47,11 +47,6 @@ def _load_personalize_module() -> ModuleType:
     if root_text not in sys.path:
         sys.path.insert(0, root_text)
 
-    os.environ.setdefault(
-        "AGENT_GENERATION_MODE",
-        settings.agent_engine_generation_mode,
-    )
-
     try:
         module = importlib.import_module(
             "backend.integration.personalize_service"

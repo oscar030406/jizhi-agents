@@ -32,11 +32,10 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.judge != "deterministic":
-        os.environ["AGENT_GENERATION_MODE"] = "api"
         os.environ["LLM_MODEL_JUDGE"] = args.judge
         os.environ.setdefault("LLM_TIMEOUT_SECONDS", "300")
     else:
-        os.environ["AGENT_GENERATION_MODE"] = "deterministic"
+        raise SystemExit("确定性引擎已于 2026-08-28 移除；该口径需检出历史版本复算。")
 
     from backend.rag.claims import claim_statistics, extract_claims, verify_claims
     from backend.schemas.resources import KnowledgeChunk, LearningResources, RetrievalResult

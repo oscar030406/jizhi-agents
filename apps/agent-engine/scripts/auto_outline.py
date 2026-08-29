@@ -4,7 +4,7 @@
 产物落 data/outlines/<concept>.json，由 build_curriculum.py 消费（与人写大纲同管线）。
 
 用法：
-  $env:AGENT_GENERATION_MODE="api"; $env:LLM_TIMEOUT_SECONDS="300"
+  $env:LLM_TIMEOUT_SECONDS="300"  # key 在 .env
   python scripts\auto_outline.py --concept agent_tools --sources ha07 --title "工具使用与函数调用"
   python scripts\auto_outline.py --selftest   # 校验器自检（无网）
 
@@ -241,7 +241,7 @@ def build_outline(concept: str, sources: list[str], title: str, theory_exam_n: i
     chunks = load_chunks(sources)
     gateway = _build_gateway()
     if not gateway.is_enabled("ResourceGenerationAgent"):
-        raise SystemExit('LLM 路由未启用：$env:AGENT_GENERATION_MODE="api"')
+        raise SystemExit('LLM 路由未启用：检查 .env 里的模型密钥')
 
     system = OUTLINE_SYSTEM.format(
         min_chars=LESSON_MIN_CHARS, max_chars=LESSON_MAX_CHARS, concept=concept)

@@ -37,7 +37,7 @@ def preflight(corpus: str) -> list[str]:
       两屏并发撞上冷缓存翻倍到 13s，超过 classroom 侧旧 6s 超时——体检池 12/48 屏的
       桥故障全是开跑头两屏撞冷缓存。health 探针只验 learning-modes 路由，焐不热检索器，
       所以这里直接打一次**目标库**的检索：缓存焐热 + 顺带验证这个库真检索得通。
-    - **判官路由**：引擎侧盲评判档走 `LLMGateway`，`AGENT_GENERATION_MODE=deterministic`
+    - **判官路由**：引擎侧盲评判档走 `LLMGateway`，判官 key 缺失时
       时它整格空着。这条只警告不拦——另外两格照样出数。
     """
     import os
@@ -78,8 +78,8 @@ def preflight(corpus: str) -> list[str]:
             )
     if not LLMGateway().route_for("EvaluationJudge").enabled:
         print(
-            "警告：判官路由未启用（AGENT_GENERATION_MODE / API key），盲评判档那一格会空着。"
-            "要它出数就带 AGENT_GENERATION_MODE=api 跑。",
+            "警告：判官路由未启用（API key 缺失），盲评判档那一格会空着。"
+            "要它出数先在 .env 配好判官档 key。",
             flush=True,
         )
     return blockers

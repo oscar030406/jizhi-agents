@@ -29,6 +29,9 @@ import { cn } from '@/lib/utils';
 import { SiteHeader } from '@/components/site-header';
 import { EmptyState } from '@/components/ui/empty-state';
 import { AGENT_ART, AGENT_PERSONAS, type AgentKey } from '@/components/agents/agent-avatar';
+// 目标正确率带从真源取，不在文案里抄数字（2026-08-28 清查 M2：曾写死 70%-85%，
+// 与两个后端的 0.75–0.85 都对不上）。
+import { TARGET_SUCCESS_MAX, TARGET_SUCCESS_MIN } from '@/lib/generation/selection';
 import { summarizeGate } from '@/components/agents/gate-summary';
 import { arbiterLabel, judgePanelLabel } from '@/components/agents/judge-labels';
 import { fetchClassroomFromApi } from '@/lib/classroom/load-classroom';
@@ -46,7 +49,7 @@ interface AgentSpec {
   name: string;
   /** 拟人化形象 key（头像 / 姓名 / 口头禅） */
   persona: AgentKey;
-  /** 用什么模型 / 是否确定性。 */
+  /** 用什么模型 / 是否纯规则实现（可复算，不调模型）。 */
   engine: string;
   deterministic: boolean;
   input: string;
@@ -134,11 +137,11 @@ const AGENTS: AgentSpec[] = [
     name: '导学 Agent',
     persona: 'tutor',
     engine:
-      '讲义驱动路径：探问与判分由 LLM 从当前讲义节现生成（引用必须逐字锚定原文，引不出即丢弃；LLM 不可用如实标 unavailable）。题库路径：裁决走确定性规则',
+      '讲义驱动路径：探问与判分由 LLM 从当前讲义节现生成（引用必须逐字锚定原文，引不出即丢弃；LLM 不可用如实标 unavailable）。题库路径：裁决走显式规则',
     deterministic: false,
     input: '当前讲义节正文 / 概念 + 全量答题历史（引擎无状态，每轮由客户端重发）+ 画像推荐难度档',
     output:
-      '每轮：探测提问 → 判分 → 裁决（降维解释 / 推进 / 进阶挑战）附推导依据与掌握度估计。裁决绑定目标正确率带 70%-85%（Wilson 2019 最优学习正确率）：冲破带顶转进阶、跌破带底先降维。判分同时回传本小节的掌握度估计（带置信度），滚动修订学习者画像',
+      `每轮：探测提问 → 判分 → 裁决（降维解释 / 推进 / 进阶挑战）附推导依据与掌握度估计。裁决绑定目标正确率带 ${Math.round(TARGET_SUCCESS_MIN * 100)}%-${Math.round(TARGET_SUCCESS_MAX * 100)}%（下界为 Math Garden 工程取值，上界为 Wilson 2019 的 85% 规则）：冲破带顶转进阶、跌破带底先降维。判分同时回传本小节的掌握度估计（带置信度），滚动修订学习者画像`,
     source: 'app/api/tutor/route.ts → POST /internal/v1/personalize/tutor',
   },
 ];
@@ -704,7 +707,7 @@ function AgentsConsole() {
                           : 'bg-yellow-soft text-yellow-deep',
                       )}
                     >
-                      {a.deterministic ? '确定性' : '模型采样'}
+                      {a.deterministic ? '规则实现' : '模型采样'}
                     </span>
                     <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
                       {a.engine}

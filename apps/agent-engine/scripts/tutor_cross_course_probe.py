@@ -12,7 +12,7 @@
   5. 口语化复述判分要点 → 期望不判 incorrect（守 08-09 调过的判分口径：只数要点命中、
      同义转述算对）。没有这一步的话，一个恒判 incorrect 的判官也能通过前四步。
 
-用法（引擎需已在 :8001 以 AGENT_GENERATION_MODE=api 起着）：
+用法（引擎需已在 :8001 起着（key 在 .env））：
     python scripts/tutor_cross_course_probe.py
     python scripts/tutor_cross_course_probe.py --courses _m1O5OWXON r-kOa4ogHT --scene-index 2
 """

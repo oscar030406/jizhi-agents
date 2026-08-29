@@ -33,7 +33,7 @@ def test_model_route_enables_when_api_mode_has_key(monkeypatch):
 
 
 def test_llm_gateway_blocks_calls_without_enabled_route(monkeypatch):
-    monkeypatch.setenv("AGENT_GENERATION_MODE", "deterministic")
+    monkeypatch.setenv("SILICONFLOW_API_KEY", "")
     gateway = LLMGateway()
     assert gateway.is_enabled("ResourceGenerationAgent") is False
 

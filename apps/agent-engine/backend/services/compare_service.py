@@ -270,7 +270,7 @@ def compare_generate_profiles(learning_goal: str, profiles: List[LearnerProfile]
                               gateway=None) -> ComparisonReport:
     """同一目标 × N 画像（对象直传，支持评委现场拨出来的临时画像），
     各走一遍完整七 Agent 闭环，产出并排快照 + 归因差异。
-    引擎模式跟随 AGENT_GENERATION_MODE（演示用 api，回归测试用 deterministic）；
+    引擎只有真实模型一条路（回归测试用 FakeGateway 注入罐头输出）；
     gateway 可注入每请求模型配置（ai_learn modelConfig 桥接）。"""
     if len(profiles) < 2:
         raise ValueError("对比至少需要 2 个画像")

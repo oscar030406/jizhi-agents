@@ -137,13 +137,11 @@ def main() -> int:
     args = parser.parse_args()
 
     # 强制置位，不能用 setdefault：`backend/__init__` 在 import 时就把 .env 里的
-    # `AGENT_GENERATION_MODE=deterministic` 灌进来了，setdefault 会成为空操作。
     # 本脚本没有确定性形态可退——标注就是要问模型。
-    os.environ["AGENT_GENERATION_MODE"] = "api"
     gateway = LLMGateway()
     route = gateway.route_for(AGENT)
     if not route.enabled:
-        print(f"路由未启用：provider={route.provider} model={route.model}；检查 {route.api_key_env} 与 AGENT_GENERATION_MODE")
+        print(f"路由未启用：provider={route.provider} model={route.model}；检查 {route.api_key_env}")
         return 1
     print(f"模型 {route.provider}/{route.model}；提示词指纹 {PROMPT_FINGERPRINT}", flush=True)
 

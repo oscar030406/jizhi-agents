@@ -20,7 +20,6 @@ class Settings(BaseSettings):
     ai_grading_model_provider: str = ""
     ai_grading_timeout_seconds: int = 20
     ai_grading_max_output_tokens: int = 800
-    agent_engine_generation_mode: str = "deterministic"
 
     # 统一读取 ai-service/.env，保证本地启动方式稳定。
     model_config = SettingsConfigDict(env_file=BASE_DIR / ".env", env_file_encoding="utf-8", extra="ignore")

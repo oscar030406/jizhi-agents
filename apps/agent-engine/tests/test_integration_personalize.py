@@ -64,7 +64,6 @@ def test_generate_returns_apiresponse_envelope_and_metrics():
 
 def test_env_from_model_config_bridges_all_chat_tiers():
     env = env_from_model_config(ModelConfig(model="deepseek-ai/DeepSeek-V3", baseUrl="https://x/v1", apiKey="sk-x"))
-    assert env["AGENT_GENERATION_MODE"] == "api"
     for tier in ("FAST", "STRONG", "JUDGE"):
         assert env[f"LLM_MODEL_{tier}"] == "deepseek-ai/DeepSeek-V3"
         assert env[f"LLM_BASE_URL_{tier}"] == "https://x/v1"
@@ -75,10 +74,11 @@ def test_env_empty_when_no_valid_config():
     assert env_from_model_config(ModelConfig()) == {}
 
 
-def test_run_personalize_deterministic_without_config():
+def test_run_personalize_without_config_uses_default_routes():
+    """无 modelConfig 时走默认模型路由（测试里由罐头网关承接），不再有确定性兜底。"""
     run, metrics = run_personalize(PersonalizeRequest(userId="7", learningGoal="搭建多 Agent 协作的内容审核工作流"), "trace-x")
     assert run["run_id"]
-    assert metrics.fallbackUsed is True  # 无 modelConfig → 确定性兜底
+    assert metrics.fallbackUsed is False
     assert metrics.model == "deterministic"
 
 

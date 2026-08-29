@@ -106,8 +106,11 @@ class ResourceGenerationAgent:
         if llm_result is not None:
             self.last_engine = "llm"
             return llm_result
-        self.last_engine = "deterministic"
-        return self._run_deterministic(profile, learning_goal, diagnosis, retrieval, target_concepts)
+        # 2026-08-28 起不再提供无模型的模板兜底：生成失败就显式失败。
+        # 兜底会让"多智能体生成"退化成可选项，与赛题主张相悖；护栏拒收与
+        # 基础设施故障的区别保留在报错信息里，排障不丢线索。
+        reason = self.last_reject_reason or "模型调用或输出解析失败（已含网关内重试）"
+        raise RuntimeError(f"内容生成失败：{reason}。请检查模型路由与密钥后重试。")
 
     def self_critique(self, resources: LearningResources, retrieval: RetrievalResult) -> list[str]:
         """同模型自批评（消融 self_refine 档）：让生成模型自查初稿，返回问题清单。
@@ -198,9 +201,11 @@ class ResourceGenerationAgent:
         if llm_result is not None:
             self.last_engine = "llm"
             return llm_result, "llm_rewrite", "按审核意见重写了被质疑的内容并补齐引用。"
-        self.last_engine = "deterministic"
-        revised = self._revise_deterministic(resources, audit, retrieval, diagnosis)
-        return revised, "attach_evidence_and_recalibrate", "确定性修订：为缺引用的块补挂最强证据，并把任务难度对齐诊断结果。"
+        # 修订模型不可用时不做任何机械改写（2026-08-28 移除确定性修订兜底）：
+        # 原稿原样返回、审核标记原样保留，由仲裁按显式阈值决定放行还是拦截转
+        # 人工——这正是"决策"环节的设计出口，比静默修饰更诚实。
+        self.last_engine = "llm"
+        return resources, "revision_unavailable", "修订模型调用失败，保留原稿与全部审核标记，交仲裁裁决。"
 
     # ------------------------------------------------------------------ LLM engine
 
@@ -367,144 +372,6 @@ class ResourceGenerationAgent:
 
     # ------------------------------------------------------- deterministic engine
 
-    def _run_deterministic(
-        self,
-        profile: LearnerProfile,
-        learning_goal: str,
-        diagnosis: DiagnosisResult,
-        retrieval: RetrievalResult,
-        target_concepts: list[str],
-    ) -> LearningResources:
-        chunks = retrieval.retrieved_chunks
-        evidence_map = evidence_by_concept(chunks, target_concepts)
-        fallback_sources = [chunk.source_id for chunk in chunks[:3]]
-
-        blueprint = diagnosis.personalization_blueprint
-        learner_type = blueprint.learner_type if blueprint is not None else "practice_builder"
-        mix = blueprint.resource_mix if blueprint is not None else None
-        structure = self._deterministic_structure(learner_type)
-        mix_note = (
-            f"本节按配比计划呈现：支架档 {mix.scaffold_level}，类比取自{mix.analogy_domain}。"
-            if mix is not None
-            else f"结合你的学习偏好（{profile.learning_preference}），先复现上述要点，再进入下方实操。"
-        )
-        sections = []
-        for concept in target_concepts[:7]:
-            evidence_chunks = evidence_map.get(concept) or chunks[:1]
-            primary = evidence_chunks[0]
-            source_ids = [chunk.source_id for chunk in evidence_chunks[:2]]
-            citations = ", ".join(source_ids)
-            sections.append(
-                {
-                    "heading": structure["heading"].format(concept=concept),
-                    "body": (
-                        f"{concept} 的证据要点：{_quote(primary.content, 400)} "
-                        f"{mix_note}"
-                        f"来源：[{citations}]。"
-                    ),
-                    "source_ids": source_ids,
-                }
-            )
-        lecture = LectureResource(
-            title=f"个性化讲义：{learning_goal}",
-            sections=sections,
-        )
-        anchor_chunk = chunks[0] if chunks else None
-        scenario_evidence = _quote(anchor_chunk.content, 300) if anchor_chunk else "先检索证据，再基于证据生成并留下审核记录。"
-        practice = PracticeTask(
-            title=f"{diagnosis.recommended_difficulty} 实操：证据约束的 Agent 工作流",
-            scenario=(
-                f"依据证据要点：{scenario_evidence} "
-                f"请构建一个小型文档问答 Agent，显式记录检索、工具调用和审核输出。"
-            ),
-            steps=structure["steps"],
-            deliverable=structure["deliverable"],
-            acceptance_checks=structure["checks"],
-            difficulty=diagnosis.recommended_difficulty,
-            source_ids=fallback_sources,
-            environment_setup=[
-                "Python 3.11+ 与本课依赖（requirements.txt）已安装",
-                f"知识库切片就绪：本次检索到 {len(chunks)} 个证据块（{', '.join(fallback_sources)}）",
-            ],
-            verification_points=[
-                f"完成第 {i} 步后：{check}" for i, check in enumerate(structure["checks"], start=1)
-            ],
-            common_pitfalls=[
-                "生成结果没有 source_id 引用——回到检索步确认证据块已注入提示词",
-                "答案引用了检索结果之外的编号——属于锚定越界，应删除该结论或补检索",
-            ],
-        )
-        quiz = []
-        for index, concept in enumerate(target_concepts[:6], start=1):
-            evidence_chunks = evidence_map.get(concept) or chunks[:1]
-            primary = evidence_chunks[0]
-            quiz.append(
-                QuizItem(
-                    question=f"关于 {concept}，哪种设计最能降低幻觉风险？",
-                    options={
-                        "A": "只提醒模型小心，不提供任何来源。",
-                        "B": "附上检索到的证据并强制 source_id 引用。",
-                        "C": "向评审隐藏中间检索状态。",
-                        "D": "调高 temperature 追求更有创意的输出。",
-                    },
-                    answer="B",
-                    explanation=(
-                        f"{concept} 的证据要点：{_quote(primary.content, 120)}"
-                        f"（来源：{', '.join(chunk.source_id for chunk in evidence_chunks[:2])}）"
-                    ),
-                    concept_tags=[concept],
-                    difficulty=diagnosis.recommended_difficulty,
-                    source_ids=[chunk.source_id for chunk in evidence_chunks[:2]],
-                )
-            )
-        used_sources = list(dict.fromkeys(retrieval.source_ids))
-        return LearningResources(
-            lecture=lecture,
-            practice_task=practice,
-            graded_quiz=quiz,
-            used_sources=used_sources,
-            target_concepts=target_concepts,
-            evidence_plan=EvidencePlan(
-                planned_source_ids=used_sources[:5],
-                constraint_restatement=CONSTRAINT_RESTATEMENT,
-                out_of_scope_note="确定性引擎：仅复用检索命中的证据，未命中概念不虚构。",
-            ),
-            personalization_blueprint=blueprint,
-        )
-
-    def _revise_deterministic(
-        self,
-        resources: LearningResources,
-        audit: AuditResult,
-        retrieval: RetrievalResult,
-        diagnosis: DiagnosisResult,
-    ) -> LearningResources:
-        source_ids = list(dict.fromkeys(retrieval.source_ids))
-        chunk_by_id = {chunk.source_id: chunk for chunk in retrieval.retrieved_chunks}
-        citation_text = ", ".join(f"[{source_id}]" for source_id in source_ids[:3])
-        revised_sections = []
-        for section in resources.lecture.sections:
-            body = section.body
-            section_sources = section.source_ids or source_ids[:2]
-            anchor = chunk_by_id.get(section_sources[0]) if section_sources else None
-            if anchor:
-                anchor_quote = _quote(anchor.content, 300)
-                if anchor_quote[:40] not in body:
-                    body = f"{body} 证据补充：{anchor_quote}"
-            if citation_text not in body:
-                body = f"{body} 证据锚点：{citation_text}。"
-            revised_sections.append(section.model_copy(update={"body": body, "source_ids": section_sources}))
-        resources.lecture.sections = revised_sections
-        resources.practice_task.source_ids = resources.practice_task.source_ids or source_ids[:3]
-        if resources.practice_task.difficulty != diagnosis.recommended_difficulty:
-            resources.practice_task = resources.practice_task.model_copy(
-                update={"difficulty": diagnosis.recommended_difficulty}
-            )
-        for item in resources.graded_quiz:
-            item.source_ids = item.source_ids or source_ids[:2]
-        resources.used_sources = source_ids
-        return resources
-
     # ---------------------------------------------------------------- shared bits
 
     _SCAFFOLD_RULES = {
@@ -542,63 +409,4 @@ class ResourceGenerationAgent:
     def _goal_concepts(self, learning_goal: str) -> list[str]:
         """兼容旧调用；概念提取的唯一实现位于 services.goal_concepts。"""
         return goal_concepts(learning_goal)
-
-    @staticmethod
-    def _deterministic_structure(learner_type: str) -> dict[str, Any]:
-        if learner_type == "guided_beginner":
-            return {
-                "heading": "{concept} 类比与分步",
-                "opening": "先用直观类比建立概念边界，再拆成可观察的小步骤。",
-                "sequence": "类比→流程→最小示例→即时自检",
-                "steps": [
-                    "用一句生活类比说明目标概念解决什么问题。",
-                    "按输入、处理、输出画出最小流程，并标出 source_id。",
-                    "在半成品模板中补全检索与生成两个步骤。",
-                    "逐项运行并记录每一步的输入、输出和错误。",
-                    "按提示加入审核步骤，检查每条结论是否有来源。",
-                ],
-                "deliverable": "一份分步流程图、一个可运行的最小示例和一份自检记录。",
-                "checks": [
-                    "能够用自己的话解释每一步，而不是只复制代码。",
-                    "最小示例可以运行，并能看到检索、生成和审核中间结果。",
-                    "每个事实性结论至少有一个 source_id 引用。",
-                ],
-            }
-        if learner_type == "systems_engineer":
-            return {
-                "heading": "{concept} 接口契约与失败模式",
-                "opening": "从状态机、接口契约和故障边界出发组织内容。",
-                "sequence": "契约→并发/超时→失败注入→指标验证",
-                "steps": [
-                    "定义组件接口、状态转移和结构化错误契约。",
-                    "实现可替换的检索、生成与审核组件，并保留 trace_id。",
-                    "注入超时、空证据、冲突证据和无效模型响应。",
-                    "验证取消、降级、重试边界和幂等行为。",
-                    "记录覆盖率、幻觉率、P95 延迟和 fallback 率。",
-                ],
-                "deliverable": "一个具备接口契约、故障注入脚本和指标报告的可部署服务切片。",
-                "checks": [
-                    "组件可替换且失败不会破坏 WorkflowRun schema。",
-                    "空证据和冲突证据会触发拒绝、修订或仲裁。",
-                    "质量指标与延迟指标均可由命令复算。",
-                ],
-            }
-        return {
-            "heading": "{concept} 机制与可运行示例",
-            "opening": "先解释核心机制，再通过可运行示例定位常见错误。",
-            "sequence": "机制→示例→错误诊断→验收清单",
-            "steps": [
-                "定义任务目标和结构化输出格式。",
-                "准备 3-5 个带 source_id 的知识片段。",
-                "补全检索、生成与审核模板并运行。",
-                "定位一次引用缺失或难度不匹配问题并修复。",
-                "按验收清单保存 trace 和最终结果。",
-            ],
-            "deliverable": "一个可运行的 API 端点和一份包含错误修复过程的 trace JSON。",
-            "checks": [
-                "每个事实性结论至少有一个 source_id 引用。",
-                "一次响应包含诊断、资源、审核和学习路径。",
-                "能够解释并修复至少一种常见失败。",
-            ],
-        }
 

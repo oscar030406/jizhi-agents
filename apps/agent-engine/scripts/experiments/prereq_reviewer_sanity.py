@@ -85,7 +85,6 @@ def main() -> int:
         print("取到 0 条边——自检无从做起，先查 prereq_graph.json 的形状")
         return 1
 
-    os.environ["AGENT_GENERATION_MODE"] = "api"
     gateway = LLMGateway()
     rows = []
     for i, (a, b) in enumerate(pairs, 1):

@@ -63,9 +63,10 @@ python scripts\run_eval.py --gold both --mode deterministic
 
 ## 配置
 
-默认 `AGENT_GENERATION_MODE=deterministic`，不需要任何 key，CI 和演示都靠它稳定。
-要接真实模型改成 `api`，并填 `.env` 里的 provider 与 key。当前推荐硅基流动一个 key 覆盖
-三档异构模型（Qwen 快线 / DeepSeek 生成 / GLM 审核），模型 ID 以供应商实际返回的列表为准。
+系统只有真实模型一条生成路径：在 `.env` 里配好 provider 与 key 即启用（缺 key 时
+生成环节显式报错，不做无模型降级）。当前推荐硅基流动一个 key 覆盖三档异构模型
+（Qwen 快线 / DeepSeek 生成 / GLM 审核），模型 ID 以供应商实际返回的列表为准。
+回归测试不依赖任何 key：套件向真实代码路径注入罐头输出封闭运行。
 
 `.env` 不进 git、不进 Docker 镜像、不进交付包。
 

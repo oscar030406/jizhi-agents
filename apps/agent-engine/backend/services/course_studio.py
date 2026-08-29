@@ -141,7 +141,6 @@ def start_job(concept: str, generator_model: str = "") -> StudioJob:
         import os
         import sys
 
-        os.environ.setdefault("AGENT_GENERATION_MODE", "api")
         if generator_model:
             os.environ["CURRICULUM_GENERATOR_MODEL"] = generator_model
         sys.path.insert(0, str(ROOT / "scripts"))

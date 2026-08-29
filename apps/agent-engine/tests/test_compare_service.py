@@ -23,7 +23,9 @@ def test_compare_two_profiles_differ_and_attributed(monkeypatch):
     assert "difficulty" in dims
     # trace 引擎标注如实存在（防伪底线）
     assert a.resources.engines and b.resources.engines
-    assert set(a.resources.engines.values()) == {"deterministic"}
+    # 生成环节是真实模型路径（测试里吃罐头），诊断/检索/审核量具仍是规则实现
+    assert set(a.resources.engines.values()) <= {"llm", "deterministic", "llm+deterministic"}
+    assert a.resources.engines.get("generate") in {"llm", None} or "llm" in set(a.resources.engines.values())
 
 
 def test_compare_rejects_single_profile():

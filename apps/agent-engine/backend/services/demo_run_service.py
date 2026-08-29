@@ -21,11 +21,28 @@ def build_demo_runs(
     generation_mode: str = "deterministic",
 ) -> dict[str, Any]:
     """生成两种画像和高/低反馈链，并写入可校验 manifest。"""
+    # 2026-08-28 移除确定性引擎后 mode 只剩两义：api/env=用真实路由；
+    # deterministic=临时剥掉密钥（配合测试的罐头网关跑零成本演示轨）。
+    # 剥离必须**临时**：全局抹空会污染同进程后续的嵌入检索（08-29 实测
+    # 把三条按向量排序校准的检索测试打翻），函数退出时原样恢复。
     if generation_mode not in {"deterministic", "api", "env"}:
         raise ValueError(f"unsupported generation mode: {generation_mode}")
-    if generation_mode != "env":
-        os.environ["AGENT_GENERATION_MODE"] = generation_mode
+    _saved_keys: dict[str, str | None] = {}
+    if generation_mode == "deterministic":
+        for _k in ("SILICONFLOW_API_KEY", "DASHSCOPE_API_KEY", "DEEPSEEK_API_KEY", "GOOGLE_API_KEY"):
+            _saved_keys[_k] = os.environ.get(_k)
+            os.environ[_k] = ""
+    try:
+        return _build_demo_runs_inner(output_dir, generation_mode)
+    finally:
+        for _k, _v in _saved_keys.items():
+            if _v is None:
+                os.environ.pop(_k, None)
+            else:
+                os.environ[_k] = _v
 
+
+def _build_demo_runs_inner(output_dir: Path, generation_mode: str) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     for path in output_dir.glob("*.json"):
         path.unlink()

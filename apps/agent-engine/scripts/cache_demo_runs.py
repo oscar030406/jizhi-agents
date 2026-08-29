@@ -35,7 +35,10 @@ def main() -> None:
     parser.add_argument("--mode", choices=["env", "deterministic", "api"], default="api")
     args = parser.parse_args()
     if args.mode != "env":
-        os.environ["AGENT_GENERATION_MODE"] = args.mode
+        if args.mode == "deterministic":
+            raise SystemExit(
+                "确定性引擎已于 2026-08-28 移除（运行时统一为真实模型单路径）。"
+                "deterministic 口径仅供历史复算：请检出当日之前的 git 版本运行。")
 
     from backend.orchestration.workflow import workflow
     from backend.services.data_loader import get_learner_profile
@@ -43,7 +46,7 @@ def main() -> None:
     from backend.services.model_routing import route_for
 
     generation_enabled = route_for("ResourceGenerationAgent").enabled
-    print(f"mode={os.environ.get('AGENT_GENERATION_MODE')}, generation LLM enabled={generation_enabled}")
+    print(f"mode={args.mode}, generation LLM enabled={generation_enabled}")
     if args.mode == "api" and not generation_enabled:
         print("警告：api 模式但未检测到可用 key，将全部走确定性引擎。")
 

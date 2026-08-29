@@ -164,11 +164,12 @@ def main() -> None:
                         help="v1=自证基线；v2=独立金标(破循环)；both=两者对比(默认)")
     args = parser.parse_args()
     if args.mode != "env":
-        os.environ["AGENT_GENERATION_MODE"] = args.mode
+        if args.mode == "deterministic":
+            raise SystemExit("确定性引擎已于 2026-08-28 移除；该口径需检出历史版本复算。")
 
     from backend.services.model_routing import route_for
 
-    print(f"generation mode: {os.environ.get('AGENT_GENERATION_MODE', 'deterministic')}"
+    print(f"generation mode: {args.mode}"
           f" (ResourceGenerationAgent LLM enabled: {route_for('ResourceGenerationAgent').enabled})")
     if args.limit > 0:
         print(f"[subset run: first {args.limit} cases; full run needed for competition numbers]")
@@ -196,7 +197,7 @@ def main() -> None:
         metadata = load_gold_metadata(gold)
         claimability = evidence_claimability(
             metadata,
-            generation_mode=os.environ.get("AGENT_GENERATION_MODE", "deterministic"),
+            generation_mode=args.mode,
             sample_count=avg["n"],
             thresholds_met=thresholds_met,
         )

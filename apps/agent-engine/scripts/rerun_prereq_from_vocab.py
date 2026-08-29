@@ -46,7 +46,6 @@ def main() -> int:
         print(f"词表只有 {len(vocab)} 个概念，前置图无从谈起")
         return 1
 
-    os.environ["AGENT_GENERATION_MODE"] = "api"
     gateway = LLMGateway()
     route = gateway.route_for("PrereqEdgeClassifier")
     if not route.enabled:

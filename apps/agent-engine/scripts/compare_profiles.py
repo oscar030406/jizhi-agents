@@ -28,7 +28,10 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.mode != "env":
-        os.environ["AGENT_GENERATION_MODE"] = args.mode
+        if args.mode == "deterministic":
+            raise SystemExit(
+                "确定性引擎已于 2026-08-28 移除（运行时统一为真实模型单路径）。"
+                "deterministic 口径仅供历史复算：请检出当日之前的 git 版本运行。")
 
     report = compare_generate(args.goal, [p.strip() for p in args.profiles.split(",") if p.strip()])
 

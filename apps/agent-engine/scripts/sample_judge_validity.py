@@ -27,7 +27,8 @@ OUT_DIR = ROOT / "data" / "eval" / "judge_validity"
 
 def cmd_sample(args) -> None:
     if args.mode != "env":
-        os.environ["AGENT_GENERATION_MODE"] = args.mode
+        if getattr(args, "mode", "api") == "deterministic":
+            raise SystemExit("确定性引擎已于 2026-08-28 移除；该口径需检出历史版本复算。")
     from backend.agents.content_audit_agent import ContentAuditAgent
     from backend.agents.knowledge_retrieval_agent import KnowledgeRetrievalAgent
     from backend.agents.learner_diagnosis_agent import LearnerDiagnosisAgent

@@ -30,7 +30,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-os.environ.setdefault("AGENT_GENERATION_MODE", "deterministic")
+# 省钱闸：bench 不该调真模型。旧机制靠 AGENT_GENERATION_MODE=deterministic，
+# 该开关已随确定性引擎移除——改为直接剥密钥，谁想跑带模型的 bench 自己显式恢复。
+for _k in ("SILICONFLOW_API_KEY", "DASHSCOPE_API_KEY", "DEEPSEEK_API_KEY", "GOOGLE_API_KEY"):
+    os.environ[_k] = ""
 
 import backend.rag.retriever as retriever  # noqa: E402
 from backend.services import domain_intake  # noqa: E402

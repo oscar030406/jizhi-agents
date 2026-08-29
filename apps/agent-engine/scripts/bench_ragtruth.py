@@ -223,7 +223,7 @@ def _run_judge_comparison(records: list[dict], n: int, tau: float) -> None:
     from backend.services.llm_gateway import llm_gateway
 
     if not llm_gateway.is_enabled("EvaluationJudge"):
-        print("\n[--judge] 未启用真实 LLM（设 AGENT_GENERATION_MODE=api 并配 key），跳过两级对比。")
+        print("\n[--judge] 未启用真实 LLM（缺模型 key），跳过两级对比。")
         return
     half = max(1, n // 2)
     pos = [r for r in records if r["gold"]][:half]

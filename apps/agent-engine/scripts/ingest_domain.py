@@ -614,7 +614,6 @@ def main() -> int:
         print("\n--dry：到此为止，未调用任何 API")
         return 0
 
-    os.environ["AGENT_GENERATION_MODE"] = "api"
     gateway = LLMGateway()
     if not gateway.route_for(AGENT_CONCEPT).enabled:
         print("路由未启用，检查 SILICONFLOW_API_KEY")

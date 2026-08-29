@@ -1,4 +1,4 @@
-"""LLM 路径测试：用假网关验证「LLM 优先、确定性兜底」的双引擎契约，不发真实请求。"""
+"""LLM 路径测试：用假网关验证真实模型单路径的护栏契约（2026-08-28 起无确定性兜底）。"""
 
 from backend.agents.content_audit_agent import ContentAuditAgent
 from backend.agents.feedback_decision_agent import FeedbackDecisionAgent
@@ -75,22 +75,25 @@ def test_generation_uses_llm_payload_when_valid():
     assert all(section.source_ids for section in resources.lecture.sections)
 
 
-def test_generation_falls_back_on_fabricated_sources():
+def test_generation_rejects_fabricated_sources_with_explicit_error():
+    """护栏拒收伪造引用后不再兜底改写：显式失败，报错里带护栏理由。"""
+    import pytest
     profile, diagnosis, retrieval = _context()
     payload = _valid_generation_payload(retrieval)
     payload["lecture"]["sections"][0]["source_ids"] = ["kb999_not_retrieved"]
     agent = ResourceGenerationAgent(gateway=FakeGateway(payload))
-    resources = agent.run(profile, profile.learning_goal, diagnosis, retrieval)
-    assert agent.last_engine == "deterministic"
-    assert resources.lecture.sections
+    with pytest.raises(RuntimeError, match="内容生成失败"):
+        agent.run(profile, profile.learning_goal, diagnosis, retrieval)
+    assert agent.last_reject_reason == "guardrail_evidence_invariant"
 
 
-def test_generation_deterministic_when_gateway_disabled():
+def test_generation_fails_explicitly_when_gateway_disabled():
+    """模型路由不可用不再有模板兜底：生成必须显式失败，不产出任何内容。"""
+    import pytest
     profile, diagnosis, retrieval = _context()
     agent = ResourceGenerationAgent(gateway=DisabledGateway())
-    resources = agent.run(profile, profile.learning_goal, diagnosis, retrieval)
-    assert agent.last_engine == "deterministic"
-    assert resources.graded_quiz
+    with pytest.raises(RuntimeError, match="内容生成失败"):
+        agent.run(profile, profile.learning_goal, diagnosis, retrieval)
 
 
 def test_feedback_rejects_illegal_difficulty_jump():
@@ -107,10 +110,34 @@ def test_feedback_rejects_illegal_difficulty_jump():
     assert decision.updated_difficulty in {"L1", "L2", "L3"}
 
 
+
+
+def _canned_resources(profile, diagnosis, retrieval):
+    from fake_gateway import extract_source_ids, generation_payload
+
+    class CannedGen:
+        def is_enabled(self, agent):
+            return True
+
+        def structured_chat(self, agent, system, user, **kwargs):
+            return generation_payload(extract_source_ids(user))
+
+    return ResourceGenerationAgent(gateway=CannedGen()).run(
+        profile, profile.learning_goal, diagnosis, retrieval)
+
 def test_audit_judge_rehabilitates_disputed_claims():
     """两级审核：初筛存疑的声明由 judge 终裁。judge 判 supported 后幻觉率应下降。"""
     profile, diagnosis, retrieval = _context()
-    resources = ResourceGenerationAgent(gateway=DisabledGateway()).run(profile, profile.learning_goal, diagnosis, retrieval)
+    from fake_gateway import extract_source_ids, generation_payload
+
+    class CannedGen:
+        def is_enabled(self, agent):
+            return True
+
+        def structured_chat(self, agent, system, user, **kwargs):
+            return generation_payload(extract_source_ids(user))
+
+    resources = ResourceGenerationAgent(gateway=CannedGen()).run(profile, profile.learning_goal, diagnosis, retrieval)
     # 剥掉引用制造"初筛全存疑"的局面
     for section in resources.lecture.sections:
         section.source_ids = []
@@ -139,8 +166,7 @@ def test_audit_judge_reviews_every_claim_not_just_disputed():
     所以判官必须看到每一条。
     """
     profile, diagnosis, retrieval = _context()
-    resources = ResourceGenerationAgent(gateway=DisabledGateway()).run(
-        profile, profile.learning_goal, diagnosis, retrieval)
+    resources = _canned_resources(profile, diagnosis, retrieval)
     baseline = ContentAuditAgent(gateway=DisabledGateway()).run(resources, diagnosis, retrieval)
     assert baseline.claims_total > 0
 
@@ -162,8 +188,7 @@ def test_judge_verdict_without_quote_is_treated_as_unsupported():
     """「不确定判 weak」曾是零代价的安全出口：weak 不进幻觉分子、对分数几乎无影响。
     现在判 supported/weak 必须引出证据原文，引不出就按无据收。"""
     profile, diagnosis, retrieval = _context()
-    resources = ResourceGenerationAgent(gateway=DisabledGateway()).run(
-        profile, profile.learning_goal, diagnosis, retrieval)
+    resources = _canned_resources(profile, diagnosis, retrieval)
 
     no_quote = {"verdicts": [{"index": i + 1, "verdict": "supported"} for i in range(24)]}
     audited = ContentAuditAgent(gateway=FakeGateway(no_quote)).run(resources, diagnosis, retrieval)

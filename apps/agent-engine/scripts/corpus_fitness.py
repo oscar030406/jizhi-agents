@@ -183,7 +183,7 @@ def score_blocks(rows: list[dict], sample: int, workers: int = 8) -> dict:
 
     gw = LLMGateway()
     if not gw.is_enabled(AGENT):
-        raise SystemExit("打分档未启用。需要 AGENT_GENERATION_MODE=api 且配好 fast 档的 key。")
+        raise SystemExit("打分档未启用。需要配好 fast 档的 key（.env）。")
     rng = random.Random(SEED)
     picked = rng.sample(rows, min(sample, len(rows)))
 

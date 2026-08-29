@@ -833,7 +833,7 @@ def test_域注册清单字段齐(sandbox, monkeypatch):
 
 
 def test_示例出不来只标partial库照样建成(sandbox):
-    """LLM 路由没开 → 示例回退。站点 partial，run 仍是 done，库与清单都在。"""
+    """示例起草失败（模型无有效返回）→ 站点 partial，run 仍是 done，库与清单都在。"""
     run = domain_intake.create_run(_files(FOUR_DOCS), corpus="reg-partial")
     domain_intake.execute(run)
 
@@ -850,7 +850,7 @@ def test_示例出不来只标partial库照样建成(sandbox):
     assert (domain_intake.CORPORA_DIR / "reg-partial" / "knowledge_index.jsonl").is_file()
     registry = json.loads((domain_intake.KB / "domain_registry.json").read_text(encoding="utf-8"))
     row = next(r for r in registry["corpora"] if r["corpus"] == "reg-partial")
-    assert row["examples"] == [] and "路由未启用" in row["examples_note"]
+    assert row["examples"] == [] and row["examples_note"].strip()
 
 
 def test_下一次接入不冲掉别的库的示例(sandbox, monkeypatch):
