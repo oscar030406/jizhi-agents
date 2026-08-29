@@ -15,6 +15,8 @@ CULPRIT = "ha04s01#s2"
 ALL_OVER_LIMIT_QUERY = "LangGraph 状态图 编译 节点 边"
 
 
+import pytest
+
 def test_longest_code_block_counts_unclosed_fence():
     """未闭合围栏按到文末算——注入器会截断原文，半截围栏照样贴整段代码。"""
     assert longest_code_block("没有代码") == 0
@@ -24,6 +26,10 @@ def test_longest_code_block_counts_unclosed_fence():
     assert longest_code_block("```py\na\n```\n文字\n```py\nb\nc\nd\n```") == 3
 
 
+@pytest.mark.skipif(
+    not __import__("os").environ.get("SILICONFLOW_API_KEY"),
+    reason="依赖真实嵌入接口的检索排序口径（配 SILICONFLOW_API_KEY 后启用；分钱级成本）",
+)
 def test_culprit_chunk_passes_difficulty_cap_but_not_code_cap():
     """病灶取证：难度档合规、代码形态不合规——两道上限确实各管一段。"""
     hit = next(
@@ -52,6 +58,10 @@ def test_code_cap_skips_with_reason_and_never_returns_empty():
     assert len(capped["chunks"]) <= 6
 
 
+@pytest.mark.skipif(
+    not __import__("os").environ.get("SILICONFLOW_API_KEY"),
+    reason="依赖真实嵌入接口的检索排序口径（配 SILICONFLOW_API_KEY 后启用；分钱级成本）",
+)
 def test_code_cap_keeps_one_when_everything_is_over_limit():
     """全军覆没也要留一块，理由照常带出——零证据=裸生成，幻觉风险比超档更糟。"""
     plain = evidence_retrieve_api(ALL_OVER_LIMIT_QUERY, top_k=6)

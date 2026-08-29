@@ -8,6 +8,8 @@ from backend.services.adversarial_service import (
 )
 
 
+import pytest
+
 def test_adversarial_dataset_has_required_size_and_categories():
     cases = load_adversarial_cases()
 
@@ -16,6 +18,10 @@ def test_adversarial_dataset_has_required_size_and_categories():
     assert {"prompt_injection", "missing_evidence", "difficulty", "feedback", "constraints"} <= categories
 
 
+@pytest.mark.skipif(
+    not __import__("os").environ.get("SILICONFLOW_API_KEY"),
+    reason="依赖真实嵌入接口的检索排序口径（配 SILICONFLOW_API_KEY 后启用；分钱级成本）",
+)
 def test_workflow_adversarial_case_executes_assertions():
     case = AdversarialCase.model_validate(
         {

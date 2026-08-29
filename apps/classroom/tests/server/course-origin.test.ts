@@ -59,13 +59,13 @@ describe('课程归属的判据优先级', () => {
     ).toBe('smart-manufacturing');
   });
 
-  it('没有出身记录时，路径规则照旧纠正前缀投票', () => {
+  it('em 前缀归主库：路径内外都判 ai（先导语料早已合入主索引）', () => {
     const cited = {
       ...empty,
       scenes: [{ audit: { sources: [{ source_id: 'em1#s2' }] } }],
     };
     expect(courseDomainOf(cited as never, true)).toBe('ai');
-    expect(courseDomainOf(cited as never, false)).toBe('embodied');
+    expect(courseDomainOf(cited as never, false)).toBe('ai');
   });
 });
 

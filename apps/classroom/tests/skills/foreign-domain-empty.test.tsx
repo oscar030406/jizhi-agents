@@ -32,7 +32,9 @@ describe('非 AI 域的岗位技能页空态', () => {
 
   it('给出两条去处：回首页看本域课程、或换回跟随培训领域', () => {
     const out = html('智能制造');
-    expect(out).toContain('href="/"');
-    expect(out).toContain('href="/profile"');
+    // 两条去处都指首页：画像弹层在首页，独立 /profile 路由不存在（曾 404，08-28 线上实走修复）
+    const homeLinks = out.match(/href="\/"/g) ?? [];
+    expect(homeLinks.length).toBeGreaterThanOrEqual(2);
+    expect(out).not.toContain('href="/profile"');
   });
 });

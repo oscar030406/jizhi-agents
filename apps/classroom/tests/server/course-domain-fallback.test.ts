@@ -32,12 +32,11 @@ describe('课程自己记的出身最大', () => {
   });
 });
 
-describe('路径规则只压前缀投票', () => {
-  it('没有出身记录时，路径上的课判 ai——这条纠偏还留着', () => {
-    // 具身语料并进主索引，AI 课引用 em 块是常态，按投票会误判成 embodied
+describe('em 前缀归主库', () => {
+  it('引 em 块的课路径内外都判 ai（2026-08-28 起 em 规则直接映射主库，不再靠路径纠偏）', () => {
     const c = course({ scenes: [{ audit: { sources: [{ source_id: 'em1#s2' }] } }] });
     expect(courseDomainOf(c, true)).toBe('ai');
-    expect(courseDomainOf(c, false)).toBe('embodied');
+    expect(courseDomainOf(c, false)).toBe('ai');
   });
 });
 

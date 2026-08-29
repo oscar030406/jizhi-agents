@@ -20,14 +20,15 @@ describe('域工作区：PathOrDomainCard 三态', () => {
     }
   });
 
-  it('具身智能域列出该域课程并可进课堂，不显示 AI 路径', () => {
+  it('外域（智能制造）走域课程卡：本地快照无课时给诚实空态，不显示 AI 路径', () => {
+    // 该域的公开课在生产环境（运行时 /api/course-domains 口径）；本地快照没有，
+    // 卡片必须如实说「还没有生成课程」而不是拿 AI 课冒充——列课行为由下面
+    // DomainCoursesCard 注入映射的用例覆盖。
     const out = html(
-      createElement(PathOrDomainCard, { corpus: 'embodied', progressByCourseId: {} }),
+      createElement(PathOrDomainCard, { corpus: 'smart-manufacturing', progressByCourseId: {} }),
     );
     expect(out).toContain('领域课程');
-    expect(out).toContain('ROS2 机器人系统入门');
-    expect(out).toContain('/classroom/r-kOa4ogHT');
-    expect(out).toContain('VLA 视觉 - 语言 - 动作模型入门');
+    expect(out).toContain('还没有生成课程');
     expect(out).not.toContain('我的学习路径');
     expect(out).toContain('学习路径目前只覆盖人工智能应用开发领域');
   });

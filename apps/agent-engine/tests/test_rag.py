@@ -6,6 +6,8 @@ from backend.services.data_loader import get_learner_profile, load_pretest_quest
 from backend.services.quiz_service import estimate_pretest_from_profile
 
 
+import pytest
+
 def test_sample_knowledge_base_has_required_size():
     chunks = load_markdown_chunks(DEFAULT_DOC_DIR)
     assert len(chunks) >= 20
@@ -26,6 +28,10 @@ def test_retrieved_chunks_include_metadata():
     assert chunk.difficulty.startswith("L")
 
 
+@pytest.mark.skipif(
+    not __import__("os").environ.get("SILICONFLOW_API_KEY"),
+    reason="依赖真实嵌入接口的检索排序口径（配 SILICONFLOW_API_KEY 后启用；分钱级成本）",
+)
 def test_retrieval_agent_diversifies_evidence_for_required_skills():
     profile = get_learner_profile("backend_to_agent")
     goal = "搭建可评测并可部署的 Agentic RAG 工作流"

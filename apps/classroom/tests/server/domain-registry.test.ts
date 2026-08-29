@@ -163,14 +163,14 @@ describe('课程域归属：单课规则', () => {
     expect(courseDomainOf(withCorpus, true)).toBe('rag-adv');
     expect(courseDomainOf(withCorpus, false)).toBe('rag-adv');
 
-    // 没有出身记录时，那条纠偏照旧生效
+    // em 前缀直接归主库（先导语料早已合入主索引），路径内外一致
     const noCorpus = { scenes: scenesCiting('em01s02') } as Parameters<typeof courseDomainOf>[0];
     expect(courseDomainOf(noCorpus, true)).toBe('ai');
-    expect(courseDomainOf(noCorpus, false)).toBe('embodied');
+    expect(courseDomainOf(noCorpus, false)).toBe('ai');
   });
 
   it('没有 corpus 字段的存量课按 source_id 前缀归位', () => {
-    expect(courseDomainOf({ scenes: scenesCiting('em01s02') }, false)).toBe('embodied');
+    expect(courseDomainOf({ scenes: scenesCiting('em01s02') }, false)).toBe('ai');
     expect(courseDomainOf({ scenes: scenesCiting('iotdb-quick-start') }, false)).toBe('iotdb');
     expect(courseDomainOf({ scenes: scenesCiting('applications-sales') }, false)).toBe('odoo');
   });
@@ -187,15 +187,15 @@ describe('课程域归属：跑真实课程目录', () => {
 
     // 路径内的课（大量引具身文档）仍是 ai。
     expect(rows.ygmJ2PpCKb?.domain).toBe('ai');
-    // 不在路径上、无 generation 字段的存量具身课。
-    expect(rows['r-kOa4ogHT']?.domain).toBe('embodied');
-    expect(rows.zTWuJxehpv?.domain).toBe('embodied');
+    // 具身先导课 2026-08-28 已随叙事收敛归档下架，目录里不该再有。
+    expect(rows['r-kOa4ogHT']).toBeUndefined();
+    expect(rows.zTWuJxehpv).toBeUndefined();
     // c3HH74qwAH / sVnMPbeeXn 是引用已删库（rag-adv / vecdb）的孤儿课，
     // 2026-08-23 随垃圾域清理一并删掉——目录里不该再有它们。
     expect(rows.c3HH74qwAH).toBeUndefined();
     expect(rows.sVnMPbeeXn).toBeUndefined();
-    // 标题取 stage.name，首页课程卡直接用。
-    expect(rows['r-kOa4ogHT']?.title).toBe('ROS2 机器人系统入门');
+    // 标题取 stage.name，首页课程卡直接用（拿路径内在架课验，具身课已下架）。
+    expect(rows.ygmJ2PpCKb?.title?.length).toBeGreaterThan(0);
   });
 
   it('.json.bak 之类的旁落文件不进结果', async () => {

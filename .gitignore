@@ -50,3 +50,6 @@ apps/classroom/.git.upstream-bak/
 # ── 不属于本项目的文件与上游宣传素材 ─────────────────────────────────
 *.pptx
 apps/classroom/assets/
+
+# 先行架构研究实验区（赛后论文素材，不公开）
+审核架构实验/
