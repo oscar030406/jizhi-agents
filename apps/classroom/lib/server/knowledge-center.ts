@@ -26,8 +26,8 @@ import path from 'node:path';
 
 import { domainLabel } from '@/lib/knowledge/domain-labels';
 
-/** 引擎数据目录。与 admin-overview.ts 同一约定（dev 下 cwd = apps/classroom）。 */
-function engineDataDir(): string {
+/** 引擎数据目录——唯一真源（admin-overview 也 import 这份；2026-08-28 清查 L5 前各抄一份）。 */
+export function engineDataDir(): string {
   return process.env.ENGINE_DATA_DIR || path.join(process.cwd(), '..', 'agent-engine', 'data');
 }
 

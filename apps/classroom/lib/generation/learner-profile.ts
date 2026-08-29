@@ -154,6 +154,10 @@ export async function fetchLearnerBlueprint(
         engineering_level: profile.engineering_level ?? 1,
         learning_preference: profile.learning_preference || '可运行示例与分步练习',
         time_budget_hours: profile.time_budget_hours ?? 24,
+        // 引擎按它选概念集；不传=空串=永远走主域分支，AI 概念会被补进别的
+        // 领域的课程（引擎 schemas/learner.py 的 #6 跨域污染注释）。口径同
+        // corpusOf——检索、判官、诊断三路必须同源。
+        corpus: corpusOf(profile) ?? '',
       }),
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       cache: 'no-store',

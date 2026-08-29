@@ -21,6 +21,9 @@ DEFAULT_INDEX_PATH = PROJECT_ROOT / "data" / "knowledge_base" / "knowledge_index
 
 # 领域语料库（"换语料库即换领域"）：默认索引是 AI 领域；其他领域各自一个子目录。
 CORPORA_DIR = PROJECT_ROOT / "data" / "knowledge_base" / "corpora"
+# 指向主语料的全部写法——**全库唯一真源**（2026-08-28 清查 M3 之前抄了五份）。
+# 判「是不是主库」一律 import 这份：漏一处的失败形态是检索去 corpora/<新名>/
+# 找索引、找不到、静默降级。
 DEFAULT_CORPUS_ALIASES = {"", "default", "ai"}
 #: 语料名进路径，字符集先卡死（外部 HTTP 参数是不可信输入）。
 #: 单一真源：检索入口、语料库枚举、接入流水线三处都用这一条。

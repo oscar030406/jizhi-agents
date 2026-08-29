@@ -30,11 +30,15 @@ const pathCourseIds = new Set(
 
 const SID_RE = /"([a-z][a-z0-9-]{1,60})#s\d+"/g;
 
+// 前缀表真源 data/domain-prefixes.json（运行时 lib/server/course-domains.ts 读同一份）。
+// 本脚本的兜底是 'ai'：历史课清单以主域为主、无引用老课也归主域——与运行时侧
+// 「认不出不投票」的语义不同，各自注释各自的理由，别顺手统一。
+const prefixRules = JSON.parse(
+  readFileSync(join(root, 'data', 'domain-prefixes.json'), 'utf-8'),
+).rules.map((r) => ({ re: new RegExp(r.pattern), domain: r.domain }));
+
 function domainOfSid(sid) {
-  if (/^em\d/.test(sid)) return 'embodied';
-  if (/^(table|sql|ainode|iotdb|timecho|deployment-and-maintenance|user-manual)/.test(sid))
-    return 'iotdb';
-  if (/^(content|applications|administration|developer)/.test(sid)) return 'odoo';
+  for (const rule of prefixRules) if (rule.re.test(sid)) return rule.domain;
   return 'ai';
 }
 

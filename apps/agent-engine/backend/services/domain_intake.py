@@ -60,8 +60,9 @@ KB = ROOT / "data" / "knowledge_base"
 RUNS_DIR = KB / "intake_runs"
 CORPORA_DIR = KB / "corpora"
 GOLD_DIR = ROOT / "data" / "eval" / "kc_gold_derived"
-# 指向主语料的几个写法（与 `retriever.DEFAULT_CORPUS_ALIASES` 同一套）。
-_MAIN_CORPUS_ALIASES = {"", "default", "ai"}
+# 指向主语料的几个写法——真源在 retriever.DEFAULT_CORPUS_ALIASES（M3 收编）。
+from backend.rag.ingest import MAX_CHUNK_CHARS, TARGET_CHUNK_CHARS  # noqa: E402
+from backend.rag.retriever import DEFAULT_CORPUS_ALIASES as _MAIN_CORPUS_ALIASES  # noqa: E402
 
 # ── 上传限额：只留一条防崩底线，不设拒收闸 ──────────────────────────────────
 # 这里经历过两版都是错的：
@@ -107,8 +108,8 @@ MAX_EST_CHUNKS = 200_000
 ALLOWED_SUFFIXES = {".md", ".markdown", ".txt", ".rst", ".pdf"}
 
 #: 语料名进路径，字符集与 `retriever.CORPUS_NAME_RE` 同一条——外部输入不可信。
-#: 这几个名字指向主语料，永远不许被流水线建的新库占用。
-RESERVED_NAMES = {"", "default", "ai"}
+#: 这几个名字指向主语料，永远不许被流水线建的新库占用（真源同 _MAIN_CORPUS_ALIASES）。
+RESERVED_NAMES = frozenset(_MAIN_CORPUS_ALIASES)
 
 
 def now_iso() -> str:
@@ -859,8 +860,21 @@ def _stage_knowledge(run: IntakeRun) -> dict[str, Any]:
     report = {
         "domain": run.corpus,
         "scope": run.record.get("scope", ""),
-        "source_dir": str(run.docs_dir),
+        # 相对引擎根落盘（docs_dir 恒在 data/knowledge_base/intake_runs/<id>/docs）。
+        # 绝对路径是接入那台机器的私有事实，跟着产物走会让别的机器上「原件」栏
+        # 静默空白（2026-08-28 硬编码清查 H5，线上 iotdb 的 readiness 已实锤）。
+        "source_dir": run.docs_dir.relative_to(KB.parents[1]).as_posix()
+        if run.docs_dir.is_relative_to(KB.parents[1])
+        else None,
+        "source_dir_note": None
+        if run.docs_dir.is_relative_to(KB.parents[1])
+        else f"原件在引擎目录外，接入机绝对路径：{run.docs_dir}",
         "produced_by": {"pipeline": "domain_intake", "run_id": run.run_id, "at": now_iso()},
+        # 当次切块口径落盘：块数是对外读数，读数必须能追溯到产生它的参数（M6）。
+        "chunking": {
+            "target_chunk_chars": TARGET_CHUNK_CHARS,
+            "max_chunk_chars": MAX_CHUNK_CHARS,
+        },
         "license": {"spdx": lic.spdx, "evidence": lic.evidence, "unknown": lic.unknown},
         "intake": {
             "accepted_files": len(manifest.accepted),
@@ -950,7 +964,7 @@ def _extract_concepts(run: IntakeRun) -> tuple[list[dict], dict[str, Any], str]:
 
     gateway = LLMGateway()
     if not gateway.route_for(AGENT_CONCEPT).enabled:
-        return [], {"items": [], "clauses": {}}, "未抽取——LLM 路由未启用（检查 SILICONFLOW_API_KEY 与 AGENT_GENERATION_MODE）"
+        return [], {"items": [], "clauses": {}}, "未抽取——LLM 路由未启用（检查 SILICONFLOW_API_KEY 是否配置）"
 
     # 解析失败的节数。`structured_chat` 重试几次仍解析不动就返回 None，
     # 而 `extract_from_sections` 拿到 None 时这一节**静默贡献零个概念**——
@@ -1722,7 +1736,7 @@ def _blind_tier_judge(run: IntakeRun, trial: dict) -> dict[str, Any]:
 
     gateway = LLMGateway()
     if not gateway.route_for("EvaluationJudge").enabled:
-        return {"ran": False, "reason": "判官路由未启用（AGENT_GENERATION_MODE / API key），盲评这一格空着"}
+        return {"ran": False, "reason": "判官路由未启用（API key 缺失），盲评这一格空着"}
 
     items = [(tier, scene) for tier in trial["courses"] for scene in trial["courses"][tier]]
     rows = []
@@ -2149,7 +2163,7 @@ def _corpus_examples(run: IntakeRun) -> tuple[list[dict[str, str]], str]:
     gateway = LLMGateway()
     route = gateway.route_for(EXAMPLE_AGENT)
     if not route.enabled:
-        return [], "LLM 路由未启用（检查 SILICONFLOW_API_KEY 与 AGENT_GENERATION_MODE）"
+        return [], "LLM 路由未启用（检查 SILICONFLOW_API_KEY 是否配置）"
     if not any(m in route.model.lower() for m in EXAMPLE_MODEL_WHITELIST):
         allowed = "、".join(EXAMPLE_MODEL_WHITELIST)
         return [], f"当前 strong 档是 {route.model}，不在出题白名单（{allowed}）内"

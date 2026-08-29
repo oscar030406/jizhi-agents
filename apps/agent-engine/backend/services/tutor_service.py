@@ -33,7 +33,10 @@ ADVANCE_STREAK = 3  # 连对 N 题 → 进阶挑战
 # 测量埋点：带命中与否随 because 链落盘。
 BAND_WINDOW = 5
 BAND_HIGH = 0.85
-BAND_LOW = 0.70
+# 下界 0.75 = Math Garden 的目标正确率工程取值（3648 名儿童/350 万题），与
+# decision_negotiation.TARGET_BAND、classroom selection.ts 同口径——此前这里是
+# 0.70 而另两处 0.75，同一个概念两个进程两个数（2026-08-28 清查 M2）。
+BAND_LOW = 0.75
 
 
 def _band_note(corrects: List[bool]) -> tuple[str, float]:
@@ -96,6 +99,8 @@ def cap_verdict_by_hints(verdict: str, hints_used: int) -> tuple[str, str]:
 # 定向检查问题并对照原文判分。LLM 不可用时如实返回 unavailable，绝不编造题目。
 
 LECTURE_AGENT = "ConversationTutor"  # fast 档路由（model_routing.AGENT_TIERS）
+# 只做上限复核。真源在客户端 lib/classroom/lecture-text.ts（发出前已截同值）：
+# 想给导学更长上下文要先改那边，只改这里不生效（2026-08-28 硬编码清查 H4）。
 LECTURE_TEXT_CAP = 3000
 LECTURE_VERDICTS = {"correct", "partial", "incorrect"}
 
@@ -479,7 +484,7 @@ def lecture_tutor_turn(request: TutorRequest, gateway=None) -> LectureTutorTurn:
     gw = gateway or llm_gateway
     if not gw.is_enabled(LECTURE_AGENT):
         return _lecture_unavailable(
-            "LLM 路由未启用（AGENT_GENERATION_MODE≠api 或缺 key）——讲义驱动探问必须真模型出题，不编造题目")
+            "LLM 路由未启用（缺 key）——讲义驱动探问必须真模型出题，不编造题目")
     text = " ".join(request.lecture_text.split())[:LECTURE_TEXT_CAP]
     header = (
         f"课程：{request.course_title or '（未提供）'}\n"

@@ -45,36 +45,36 @@ ROOT_DEF = re.compile(
 )
 
 
-def levels_up(chain: str) -> int:
-    """接在 `Path(__file__)` 后面时往上走几层——**起点是文件所在目录**。
-
-    `Path(__file__).parents[0]` 就是文件所在目录，所以从「文件所在目录」这个起点算，
-    `.parents[N]` 只要再往上 N 层。`.parent` 算 1 层。
-    """
-    n = chain.count(".parent") - len(re.findall(r"\.parents\[", chain))
-    n += sum(int(m) for m in re.findall(r"\.parents\[(\d)\]", chain))
-    return n
-
-
 def levels_up_from_dir(chain: str) -> int:
-    """接在一个**目录**（ROOT 之类）后面时往上走几层。
+    """接在一个**目录**后面时往上走几层：`.parent` 走 1 层，`.parents[N]` 走 N+1 层。
 
-    与 `levels_up` 差一层，这是实测踩出来的：`ROOT.parents[0]` 是 ROOT 的上一级，
-    不是 ROOT 自己。按 `levels_up` 算会少走一层，把
-    `ROOT.parents[0] / "classroom"`（真值 `apps/classroom/`，存在）
-    错报成 `apps/agent-engine/classroom/`（不存在）——2026-08-17 这条规则一次报出
-    3 处假断链，占当时报告的一半。
+    这是唯一一处步数语义（2026-08-28 清查 L10 收编）：`dir.parents[0]` 是上一级、
+    不是自己——2026-08-17 曾按错口径把 `ROOT.parents[0]/"classroom"` 报成假断链。
     """
-    return levels_up(chain) + len(re.findall(r"\.parents\[", chain))
+    bare = chain.count(".parent") - len(re.findall(r"\.parents\[", chain))
+    return bare + sum(int(m) + 1 for m in re.findall(r"\.parents\[(\d+)\]", chain))
+
+
+def levels_up(chain: str) -> int:
+    """接在 `Path(__file__)` 后面时相对**文件所在目录**往上走几层。
+
+    比目录口径少 1：第一步 `.parent`（或 `.parents[0]`）只是回到文件所在目录本身。
+    旧实现把裸 `.parent` 记 1 层且被自测钉死，`Path(__file__).resolve().parent.parent`
+    一律多走一层——2026-08-28 实跑报出两条假警（audit_outward_numbers.py 两处，
+    目标文件都在）。会喊狼的闸没人看。
+    """
+    return levels_up_from_dir(chain) - 1
 
 
 def selftest() -> None:
     """两套口径各自钉死。差一层的 bug 就是从这里漏过去的。"""
-    # 接在 Path(__file__) 后：起点是文件所在目录
-    assert levels_up(".parent") == 1
+    # 接在 Path(__file__) 后：起点是文件所在目录，第一步 .parent 只是回到该目录
+    assert levels_up(".parent") == 0
+    assert levels_up(".parents[0]") == 0
     assert levels_up(".parents[1]") == 1
     assert levels_up(".parents[2]") == 2
-    assert levels_up(".parent.parent") == 2
+    assert levels_up(".parent.parent") == 1
+    assert levels_up(".parent.parent.parent") == 2
     # 接在目录后：parents[0] 已经是上一级
     assert levels_up_from_dir(".parent") == 1
     assert levels_up_from_dir(".parents[0]") == 1

@@ -186,6 +186,16 @@ def load_embedding_matrix(npz_path: Path) -> tuple[np.ndarray, list[str]] | None
         return None
     try:
         data = np.load(npz_path, allow_pickle=False)
+        # 模型名校验：索引向量与查询向量必须同一个嵌入模型，否则余弦整体塌到
+        # 门禁分以下、检索恒空且零报错（最难查的一类静默降级）。不符就当索引
+        # 不存在，回落 TF-IDF 并把原因喊出来。
+        stored = str(data["model"]) if "model" in data else ""
+        if stored and stored != EMBED_MODEL:
+            logger.warning(
+                "向量索引模型不符：索引由 %s 建，当前查询用 %s——回落 TF-IDF。重跑 scripts/build_embedding_index.py",
+                stored, EMBED_MODEL,
+            )
+            return None
         return data["matrix"], [str(s) for s in data["source_ids"]]
     except Exception:  # 损坏索引视同不存在，别让检索层崩
         logger.warning("向量索引损坏：%s", npz_path)

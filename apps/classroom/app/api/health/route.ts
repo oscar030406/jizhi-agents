@@ -21,7 +21,9 @@ const version = process.env.npm_package_version || '0.1.0';
  * 探针端点从 skill-map 换成 learning-modes：skill-map 每次要读磁盘 job 数据，
  * 冷盘时超过原来的 3 秒限时，引擎明明活着却被报 down（实测误报）。
  * learning-modes 只返回内存里的 dataclass 清单，是最轻的带鉴权只读端点——
- * 仍能验出 token 配错/路由没挂。超时同时放宽到 8 秒，与四个引擎桥的口径一致。
+ * 仍能验出 token 配错/路由没挂。超时放宽到 8 秒。
+ * （旧注释写「与四个引擎桥口径一致」已腐烂：各桥现状 8s×2 / 10s×2 / 60s×1，
+ * 按各自端点的冷启动实测各配各的，本探针不是它们的口径真源——别照着这里改桥。）
  */
 async function probeEngineBridge(): Promise<'ok' | 'down' | 'unconfigured'> {
   const base = process.env.GROUNDING_URL;

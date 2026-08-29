@@ -8,7 +8,12 @@
 
 import type { Scene } from '@/lib/types/stage';
 
-const LECTURE_TEXT_CAP = 3000;
+/**
+ * 讲义文本送导学的截断上限——客户端唯一真源（tutor-panel 也 import 这份，
+ * 2026-08-28 硬编码清查 H4 之前它自己抄了一份同名常量）。引擎侧
+ * tutor_service.LECTURE_TEXT_CAP 只做上限复核：客户端先截，改引擎不生效。
+ */
+export const LECTURE_TEXT_CAP = 3000;
 
 export function sceneLectureText(scene: Scene | null | undefined): string {
   if (!scene) return '';

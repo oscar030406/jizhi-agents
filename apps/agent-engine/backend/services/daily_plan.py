@@ -16,6 +16,10 @@ from pydantic import BaseModel, Field
 
 from backend.services.review_scheduler import ReviewCard, due_cards
 
+# 三个用时是**工程估值，未经实测标定**（如实记录，2026-08-28 清查 L2）：
+# 复习卡 3 分钟≈间隔重复类产品的单卡节奏量级；新概念 12 分钟≈一屏讲义+一道
+# 检查题的估读写时长；挑战 8 分钟为二者之间取值。它们只决定「今日约 N 分钟」
+# 的展示预算与条目配比，不进任何对外指标；要标定应回收真实停留时长再回填。
 REVIEW_MINUTES_PER_CARD = 3
 NEW_CONCEPT_MINUTES = 12
 CHALLENGE_MINUTES = 8

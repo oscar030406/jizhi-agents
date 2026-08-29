@@ -26,7 +26,7 @@ CONCEPT_FLOORS = {
 #: 别假装我们知道「制冷机组日常巡检」该卡在 0.42 还是 0.48。
 DEFAULT_CONCEPT_FLOOR = 0.45
 
-_MAIN_CORPUS = {"", "ai", "default"}
+from backend.rag.retriever import DEFAULT_CORPUS_ALIASES as _MAIN_CORPUS  # 真源见 retriever（M3）
 
 #: ⑤ 站冻结金标的根目录。抽成常量是为了测试能把它指到 tmp——
 #: 否则测试只能自己重实现一遍查找逻辑，那就成了测自己的副本。

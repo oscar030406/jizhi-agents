@@ -14,6 +14,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Info } from 'lucide-react';
 import { loadLearnerProfile } from '@/components/generation/learner-profile-popover';
+import { JOB_MAP_CORPUS } from '@/components/skills/practice-projects';
 import { domainLabel } from '@/lib/knowledge/domain-labels';
 
 export function DomainScopeNotice({
@@ -29,7 +30,9 @@ export function DomainScopeNotice({
     setCorpus(loadLearnerProfile().corpus?.trim() ?? '');
   }, []);
 
-  if (!corpus || corpus === 'ai') return null;
+  // 本页策展数据（学习路径/岗位图谱）的所属域用 JOB_MAP_CORPUS 判，不内联 'ai'
+  // （2026-08-28 清查 L11：与 skills 页曾经的写死是同一假设的两处落点）。
+  if (!corpus || corpus === JOB_MAP_CORPUS) return null;
 
   return (
     <div
@@ -41,7 +44,7 @@ export function DomainScopeNotice({
     >
       <Info className="mt-0.5 size-4 shrink-0" />
       <span>
-        本页{scope}覆盖人工智能应用开发领域。你的画像当前选择的知识库是
+        本页{scope}目前只覆盖「{domainLabel(JOB_MAP_CORPUS)}」领域。你的画像当前选择的知识库是
         「{domainLabel(corpus)}」——该领域按课程逐门学习，
         <Link href="/" className="mx-1 text-foreground underline underline-offset-2">
           回首页查看该领域课程

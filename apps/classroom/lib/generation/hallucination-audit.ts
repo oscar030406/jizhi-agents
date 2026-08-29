@@ -96,6 +96,11 @@ export interface SceneAudit {
   corpus?: string;
   evidenceCount: number;
   /**
+   * 送审前被 MAX_CONTENT_CHARS 截掉的教学文本字数。>0 表示这一屏的尾段
+   * 没进断言分母——账单必须能看出「审的不是全文」，否则有据率被动虚高。
+   */
+  truncatedChars?: number;
+  /**
    * Cross-validation trail. `undefined` = single judge (no panel ran);
    * `[]` = the panel ran and agreed on everything — the UI must say so plainly
    * rather than imply a debate happened.
@@ -246,7 +251,13 @@ function ruleOnClaims(
 
 export type AiCall = (system: string, user: string) => Promise<string>;
 
+// 送审文本上限。依据：判官走 fast 档、证据窗另占 1400 字/块（JUDGE_EVIDENCE_CHARS，
+// 维度不同别一起改），9000 字约当 6-7k token 的正文预算，再大先挤掉证据、后撞窗。
+// 截掉的部分不进断言分母——所以必须入账（truncatedChars），不许静默变好看
+// （2026-08-28 清查 M4）。
 const MAX_CONTENT_CHARS = 9000;
+// 防御性遍历上限：单屏内容极端膨胀（几十 KB 教具 HTML）时也别无界拼接。
+const WALK_HARD_CEILING = 60000;
 
 //: 管道字段，不是教学内容。判官看见它们只会被噪声干扰。
 //:
@@ -339,10 +350,19 @@ export function dropNonClaimSentences(text: string): string {
 }
 
 export function extractTeachingText(content: unknown): string {
+  return extractTeachingTextMeta(content).text;
+}
+
+/** 带截断账目的版本：审核链用它，把截掉的字数写进审核结果而不是吞掉。 */
+export function extractTeachingTextMeta(content: unknown): {
+  text: string;
+  truncatedChars: number;
+} {
   const parts: string[] = [];
+  let collected = 0;
   const seen = new Set<unknown>();
   const walk = (node: unknown): void => {
-    if (!node || parts.join('').length > MAX_CONTENT_CHARS) return;
+    if (!node || collected > WALK_HARD_CEILING) return;
     if (typeof node === 'string') {
       const text = node.trim();
       // Skip ids/urls/colors/enum-ish tokens — audit prose, not plumbing.
@@ -353,7 +373,10 @@ export function extractTeachingText(content: unknown): string {
       ) {
         // 逐句摘，不整段扔——整段扔会让一句提示词回声把整屏带走。
         const kept = dropNonClaimSentences(text);
-        if (kept) parts.push(kept);
+        if (kept) {
+          parts.push(kept);
+          collected += kept.length;
+        }
       }
       return;
     }
@@ -388,7 +411,11 @@ export function extractTeachingText(content: unknown): string {
     }
   };
   walk(content);
-  return parts.join('\n').slice(0, MAX_CONTENT_CHARS);
+  const full = parts.join('\n');
+  return {
+    text: full.slice(0, MAX_CONTENT_CHARS),
+    truncatedChars: Math.max(0, full.length - MAX_CONTENT_CHARS),
+  };
 }
 
 const JUDGE_SYSTEM = `你是独立的教学内容事实审核员。你审核的是另一个模型生成的课堂教学内容。
@@ -1046,6 +1073,7 @@ export async function auditSceneContent(
       judgeModel,
       rounds,
       durationMs: Date.now() - started,
+      ...(truncatedChars > 0 ? { truncatedChars } : {}),
       decision,
       rationale,
       grounded: Boolean(evidence),
@@ -1069,13 +1097,21 @@ export async function auditSceneContent(
    * *replaces* the previous round's trail instead of appending to it — otherwise
    * "仲裁 N 条分歧" counts disputes over claims that were already rewritten away.
    */
+  let truncatedChars = 0;
   const runRound = async (
     textOverride?: string,
   ): Promise<{
     claims: AuditClaim[];
     debate?: DebateRound[];
   } | null> => {
-    const text = textOverride ?? extractTeachingText(content);
+    let text: string;
+    if (textOverride !== undefined) {
+      text = textOverride;
+    } else {
+      const meta = extractTeachingTextMeta(content);
+      text = meta.text;
+      truncatedChars = meta.truncatedChars;
+    }
     if (judges.length === 1) {
       const claims = await runJudge(judges[0], sceneTitle, text, evidence, sceneType);
       return claims && { claims };

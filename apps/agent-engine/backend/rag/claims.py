@@ -85,6 +85,12 @@ TEACHING_META = re.compile(
     r"|^步骤(非常)?清晰|^步骤如下|^流程如下"
 )
 
+# 这两条线只做检索接地**初筛**，不是有据/幻觉的判定主体——对外幻觉率的
+# supported/weak 终判在 LLM 判官层（异厂商、引证据原文，见
+# docs/05-evidence/evaluation_protocol.md §1「判定主体：两级」）。初值未做过
+# 独立标定（如实记录，2026-08-28 硬编码清查 H3）；它们的失真上限被判官层
+# 全量复核兜住：初筛偏严只是多送判官几条，偏松的漏网由判官补判。
+# 动它之前先跑 scripts/run_real_llm_eval.py 对照冻结口径，别裸调。
 SUPPORTED_THRESHOLD = 0.55
 WEAK_THRESHOLD = 0.25
 # 概念标签命中原来是加 0.4 的通行证：0.4 > WEAK_THRESHOLD 0.25，意味着句子里

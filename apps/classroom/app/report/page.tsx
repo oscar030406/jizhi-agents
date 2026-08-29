@@ -1213,7 +1213,9 @@ function DifficultyCurveChart({
  * 因为拓扑序只在缺口清单内部排，图上必经但清单没列的点它看不见。
  */
 export function NextStepPanel({ bp, gapConcepts }: { bp: LearnerBlueprint; gapConcepts: string[] }) {
-  const graph = prereqGraphFor('ai');
+  // 按学习者画像取域，不焊死主域（2026-08-28 清查 M1）。没有图的域返回空图 →
+  // matched 为 0 → 面板不渲染，与下面的降级注释同一条路，不会拿错域的图硬排。
+  const graph = prereqGraphFor(learnerDomain() ?? LEGACY_DOMAIN);
   const inGraph = new Set(graph.items);
   const matched = gapConcepts.filter((c) => inGraph.has(c));
   // 一个缺口都不在图的词表内时不渲染：那时所有结论都退化成「不可达」，
@@ -1318,7 +1320,7 @@ function LearningPathChart({ bp, course }: { bp: LearnerBlueprint; course: Cours
   // 所以这是在原排序上加一层约束，不是换一套排序。
   const ordering = orderByPrereq(
     byPriority.map((g) => g.concept),
-    'ai',
+    learnerDomain() ?? LEGACY_DOMAIN,
   );
   const gapByConceptId = new Map(byPriority.map((g) => [g.concept, g] as const));
   const gaps = ordering.concepts.map((c) => gapByConceptId.get(c)!).filter(Boolean);

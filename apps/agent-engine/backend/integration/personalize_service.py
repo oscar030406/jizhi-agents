@@ -90,7 +90,7 @@ def env_from_model_config(cfg: ModelConfig) -> dict[str, str]:
     """
     if not (cfg and cfg.model.strip() and cfg.baseUrl.strip() and cfg.apiKey.strip()):
         return {}
-    env: dict[str, str] = {"AGENT_GENERATION_MODE": "api", "PERSONALIZE_API_KEY": cfg.apiKey.strip()}
+    env: dict[str, str] = {"PERSONALIZE_API_KEY": cfg.apiKey.strip()}
     for tier in CHAT_TIERS:
         env[f"LLM_PROVIDER_{tier}"] = "custom"
         env[f"LLM_MODEL_{tier}"] = cfg.model.strip()
@@ -457,11 +457,9 @@ def learner_blueprint_api(
         # 决定学情诊断用哪个域的概念集。不传就是跟随培训领域（主域 ai）。
         corpus=(corpus or "").strip(),
     )
-    # 双引擎：AGENT_GENERATION_MODE=api 时 LLM 优先（fast 档），失败/超时/未启用
-    # 自动降级到确定性规则——与全系统七个 Agent 同一套约定。
-    # 这里原来焊死 _NullGateway（外部系统要毫秒级响应的设计），审计判为短路：
-    # 「协同决策」环节永远走 if-else，且 UI 无从知道。engine 字段现在如实带出；
-    # 评测复算继续用 deterministic 模式（默认值没变），互不影响。
+    # 学情诊断的本体是规则+掌握度模型（设计如此，可复算）；fast 档 LLM 只做
+    # 摘要与风险补充，路由不可用时规则本体独立成立——这不是生成侧那种兜底，
+    # 诊断输出是下游约束，带采样随机性反而有害。engine 字段如实带出。
     _diag_agent = LearnerDiagnosisAgent(gateway=_bridge_gateway())
     diagnosis = _diag_agent.run(
         profile, PretestResult(learner_profile_id=profile.id), learning_goal
@@ -584,11 +582,9 @@ def verify_content_bridge_api(
 def _bridge_gateway() -> LLMGateway:
     """课堂桥的共享网关（前身是永远禁用 LLM 的 _NullGateway）。
 
-    行为由 AGENT_GENERATION_MODE 控制：
-    - deterministic（默认）：is_enabled=False，与旧 _NullGateway 行为逐字节一致，
-      评测复算不受影响；
-    - api：诊断/反馈决策走 fast 档 LLM，失败自动降级确定性规则（双引擎约定）。
-      延迟上限 = LLM_TIMEOUT_SECONDS（演示环境建议 8-10 秒，默认 30 偏大）。
+    路由可用性由密钥决定（fast 档 key 在则诊断/反馈的 LLM 摘要层生效）；
+    规则本体不依赖路由，永远可复算。延迟上限 = LLM_TIMEOUT_SECONDS
+    （演示环境建议 8-10 秒，默认 30 偏大）。
     """
     return LLMGateway()
 
@@ -730,7 +726,8 @@ def evidence_retrieve_api(
             ),
         }
     # goal_concepts 的关键词表是 AI 领域的，其他领域只认真实命中，不用它的兜底概念
-    is_default = corpus.strip().lower() in {"", "default", "ai"}
+    from backend.rag.retriever import DEFAULT_CORPUS_ALIASES
+    is_default = corpus.strip().lower() in DEFAULT_CORPUS_ALIASES
     tags = goal_concepts(query) if is_default else matched_goal_concepts(query)
     top_k = max(1, min(12, top_k))
     mastery_map = _resolve_mastery(mastery)

@@ -32,8 +32,14 @@ from backend.rag.retriever import (  # noqa: E402
     load_index,
 )
 
-MODEL = "BAAI/bge-m3"
-ENDPOINT = "https://api.siliconflow.cn/v1/embeddings"
+# 模型与端点的真源在检索端（backend/rag/embedding_retriever.py）：建索引的模型
+# 与查询的模型不同源，余弦就没有意义。这里 import 而不是抄——2026-08-28 硬编码
+# 清查（H2）之前这里是第二份字面量，改一处忘另一处的失败形态是检索恒空零报错。
+from backend.rag.embedding_retriever import (  # noqa: E402
+    EMBED_ENDPOINT as ENDPOINT,
+    EMBED_MODEL as MODEL,
+)
+
 BATCH = 32
 
 

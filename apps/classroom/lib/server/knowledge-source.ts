@@ -171,7 +171,17 @@ async function sourceRootOf(corpus: string): Promise<SourceRoot> {
     enginePath(`data/knowledge_base/${corpus}_intake/readiness.json`),
   );
   const declared = readiness?.source_dir?.trim();
-  return { dir: declared || null, label: declared || '', main: false, readiness };
+  if (!declared) {
+    // 引擎侧 H5 修复后：原件在引擎外时 source_dir 落 null、原始路径进 source_dir_note。
+    // 这里把 note 透出成 label，让页面能说清是「路径不可移植」而不是「没有原件」。
+    const note = (readiness as { source_dir_note?: string } | null)?.source_dir_note?.trim();
+    return { dir: null, label: note ?? '', main: false, readiness };
+  }
+  // 新格式是相对引擎根的 posix 路径（data/knowledge_base/...）；存量 readiness
+  // 里还有接入机绝对路径，原样保留兜底——在那台机器上仍然可用。
+  const isAbsolute = path.isAbsolute(declared) || /^[A-Za-z]:[\\/]/.test(declared);
+  const dir = isAbsolute ? declared : enginePath(declared);
+  return { dir, label: declared, main: false, readiness };
 }
 
 /** 走一遍原件目录。跳过的目录与 `intake.py` 一致，否则对不上账。 */

@@ -63,8 +63,12 @@ from typing import Callable
 #: 渲染页图的分辨率。100 与 150 的转写内容实测几乎一致，输入 token 差一倍多。
 RENDER_DPI = 100
 
-#: 只走这个。两个专用 OCR 模型实测都不可用，理由见模块文档。
-TRANSCRIBE_MODEL = "Qwen/Qwen3-VL-8B-Instruct"
+#: 默认走这个（两个专用 OCR 模型实测都不可用，理由见模块文档）。
+#: 开环境变量口子（L7）：换厂商时这条离线链的失败形态是「模型不存在」，
+#: 发现得晚——给个不改码的替换通道。
+import os as _os
+
+TRANSCRIBE_MODEL = _os.environ.get("TRANSCRIBE_MODEL", "Qwen/Qwen3-VL-8B-Instruct")
 
 #: 同时转几页。8B 档延迟约 17s/页，4 路把 877 页压到一小时出头；
 #: 再高就开始撞限流，而且失败重试的代价变大。

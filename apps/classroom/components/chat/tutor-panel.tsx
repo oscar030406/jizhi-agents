@@ -27,7 +27,7 @@ import {
 import { cn } from '@/lib/utils';
 import { AGENT_ART, AGENT_PERSONAS } from '@/components/agents/agent-avatar';
 import { useStageStore } from '@/lib/store';
-import { sceneLectureText } from '@/lib/classroom/lecture-text';
+import { LECTURE_TEXT_CAP, sceneLectureText } from '@/lib/classroom/lecture-text';
 import { stripSourceIds } from '@/lib/generation/tutor-prose';
 import { createLogger } from '@/lib/logger';
 import type {
@@ -36,8 +36,6 @@ import type {
   LectureExchange,
   HintLadder,
 } from '@/app/api/tutor/route';
-
-const LECTURE_TEXT_CAP = 3000;
 
 type Entry =
   | { kind: 'turn'; turn: TutorTurn }
@@ -161,6 +159,8 @@ export function TutorPanel({ currentSceneId }: { currentSceneId?: string | null 
       .map((s) => sceneLectureText(s))
       .filter(Boolean)
       .join('\n')
+      // 取尾是有意的：多屏历史里最靠近当前屏的一段最相关（单屏路径在
+      // sceneLectureText 里取头）。常量真源见 lib/classroom/lecture-text.ts。
       .slice(-LECTURE_TEXT_CAP);
   }, [currentScene, scenes, currentSceneId]);
   const sceneTitle = currentScene?.title ?? '';

@@ -15,10 +15,12 @@
  */
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const OPENMAIC = 'D:/UserData/Desktop/挑战杯/apps/classroom';
-const DATA_DIR = 'D:/UserData/Desktop/挑战杯/apps/agent-engine/data/experiments';
+// 锚定脚本自身位置，不写机器路径（L9）：scripts/experiments/ -> 引擎根 -> apps
+const ENGINE_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+const OPENMAIC = `${dirname(ENGINE_ROOT)}/classroom`;
+const DATA_DIR = `${ENGINE_ROOT}/data/experiments`;
 const TRUTH_SET = `${DATA_DIR}/claim_truth_set.json`;
 
 // 判官换型对比（08-03）：JUDGE_1 可由 env 覆盖，其余不动——

@@ -27,9 +27,8 @@ import {
   readClassroom,
 } from '@/lib/server/classroom-storage';
 
-function engineDataDir(): string {
-  return process.env.ENGINE_DATA_DIR || path.join(process.cwd(), '..', 'agent-engine', 'data');
-}
+// 真源在 knowledge-center.ts（L5 收编）
+import { engineDataDir } from '@/lib/server/knowledge-center';
 
 async function readJson<T>(file: string): Promise<T | null> {
   try {

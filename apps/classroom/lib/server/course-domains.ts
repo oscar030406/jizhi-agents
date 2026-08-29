@@ -39,6 +39,14 @@ export const UNKNOWN_DOMAIN = 'unknown';
 /** 出身记的库已经不在注册清单里（库被删了）。课还在，出处已经没了。 */
 export const RETIRED_DOMAIN = 'retired';
 
+/**
+ * 学习路径数据（data/learning-path.json）所属的域。路径表目前是单文件、只为主域
+ * 策展——「挂在路径上」这条归域规则因此只在这个域内成立。给第二个域建路径时，
+ * 路径表必须先按域组织，这个常量随之变成查表；在那之前把假设写在这里，
+ * 不散进判断逻辑（2026-08-28 清查 M7：曾内联 'ai'）。
+ */
+export const PATH_HOME_DOMAIN = 'ai';
+
 import { promises as fs } from 'node:fs';
 
 import {
@@ -55,13 +63,17 @@ export interface CourseDomain {
   title: string;
 }
 
-/** source_id 前缀 → 域。前缀表与 `scripts/build-course-domains.mjs` 同一份。 */
+/** source_id 前缀 → 域。真源 data/domain-prefixes.json（build-course-domains.mjs 读同一份）。 */
+import prefixTable from '@/data/domain-prefixes.json';
+
+const PREFIX_RULES: Array<{ re: RegExp; domain: string }> = prefixTable.rules.map((r) => ({
+  re: new RegExp(r.pattern),
+  domain: r.domain,
+}));
+
 function domainOfSourceId(sid: string): string | null {
-  if (/^em\d/.test(sid)) return 'embodied';
-  if (/^(table|sql|ainode|iotdb|timecho|deployment-and-maintenance|user-manual)/.test(sid))
-    return 'iotdb';
-  if (/^(content|applications|administration|developer)/.test(sid)) return 'odoo';
-  // 认不出的前缀**不投 ai 一票**。这张表是手工维护的，投币新建的库前缀一律不在表里——
+  for (const rule of PREFIX_RULES) if (rule.re.test(sid)) return rule.domain;
+  // 认不出的前缀**不投 ai 一票**。这张表是手工维护的，新建库的前缀一律不在表里——
   // 让它们默认投给主域，等于每建一个新库就往 ai 里掺一批不属于它的课。
   return null;
 }
@@ -105,9 +117,9 @@ export function courseDomainOf(
     // 库被删了就如实说「出处没了」，不退回主域冒充。
     return liveCorpora && !liveCorpora.has(own) ? RETIRED_DOMAIN : own;
   }
-  // ② 路径上的课判 ai。**只压前缀投票**——它存在的理由就是纠正投票误判，
+  // ② 路径上的课判路径所属域。**只压前缀投票**——它存在的理由就是纠正投票误判，
   //    没有理由去改写课程自己写下的出身（那条已经在上面返回了）。
-  if (onPath) return 'ai';
+  if (onPath) return PATH_HOME_DOMAIN;
   // ③ 前缀投票。认不出的前缀不投票，全认不出就当没有信号。
   // ④ 什么都没有 → unknown，不冒充主域。
   return majorityDomain(collectSourceIds(data.scenes)) ?? UNKNOWN_DOMAIN;

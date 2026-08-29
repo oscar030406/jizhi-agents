@@ -327,7 +327,6 @@ def main() -> int:
     if args.dry:
         return 0
 
-    os.environ["AGENT_GENERATION_MODE"] = "api"
     gateway = LLMGateway()
     route = gateway.route_for(AGENT)
     if not route.enabled:

@@ -10,6 +10,9 @@ import type {
 import { recordEvent } from './engagement';
 import { appendRuntimeEvent, milestoneIdForMicrotask, mintRuntimeEventId } from './runtime-events';
 
+// 60 = 百分制及格线惯例，非实测标定（如实记录，2026-08-28 清查 L3）。它卡的是
+// 学习者能否推进到下一个微任务：调高会把人堵在评分噪声里，调低放水——要动先看
+// grading_agent 的分数分布再动，且与界面「60 分及格」文案同步。
 export const TASK_EVAL_PASS_SCORE = 60;
 
 export function taskEvaluationCanComplete(evaluation: PBLEvaluation | undefined): boolean {

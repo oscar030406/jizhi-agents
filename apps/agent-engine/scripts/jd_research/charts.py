@@ -19,7 +19,8 @@ matplotlib.rcParams["axes.unicode_minus"] = False
 
 BASE = os.path.dirname(__file__)
 STATS = os.path.join(BASE, "stats")
-OUT = r"D:/UserData/Desktop/挑战杯/docs/assets/jd"
+# 锚定脚本位置到仓库根（scripts/jd_research -> engine -> apps -> 仓库根），不写机器路径（L9）
+OUT = os.path.join(BASE, "..", "..", "..", "..", "docs", "assets", "jd")
 os.makedirs(OUT, exist_ok=True)
 
 BLUE, ORANGE, AQUA, GRAY = "#2a78d6", "#eb6834", "#1baf7a", "#9a9891"

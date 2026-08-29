@@ -14,7 +14,8 @@ import sys
 from pathlib import Path
 from collections import Counter
 
-DATA = Path(r"D:/UserData/Desktop/挑战杯/apps/agent-engine/data/experiments")
+# 锚定脚本自身位置，不写机器路径（L9）：scripts/experiments/ -> 引擎根
+DATA = Path(__file__).resolve().parents[2] / "data" / "experiments"
 TRUTH = DATA / "claim_truth_set.json"
 _args = [a for a in sys.argv[1:] if not a.startswith("--")]
 RUNS = Path(_args[0]) if _args else DATA / "cross_validation_runs.json"

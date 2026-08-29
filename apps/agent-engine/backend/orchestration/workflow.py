@@ -46,6 +46,10 @@ from backend.services.feedback_adaptation import adapt_feedback
 from backend.services.model_routing import route_for
 from backend.services.quiz_service import estimate_pretest_from_profile
 
+# 为什么是 2：双审核分歧 → 一轮定向重写 → 复审，第二轮仍分歧就交仲裁终审。
+# 加轮次无收益有成本——《Should we be going MAD?》（ICML 2024）及后续受控实验
+# 均未测得增加辩论轮次的显著增益（本文档 §2.5 对比定位同一出处）；我们的架构
+# 本就不押辩论范式，收敛点在仲裁而不在回合数上。
 MAX_DEBATE_ROUNDS = 2
 
 

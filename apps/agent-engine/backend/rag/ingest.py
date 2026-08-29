@@ -28,6 +28,12 @@ def _split_tags(value: str) -> List[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+# 切块口径——直接决定「主库 1704 块」这类对外读数与全部覆盖率分母。依据：
+# 嵌入端 embed_texts 截 2000 字（超上限的尾巴不进向量，等于白切）；判官证据窗
+# 1400 字/块（hallucination-audit JUDGE_EVIDENCE_CHARS）——MAX 取判官窗同值让
+# 单块可整块引用；TARGET=900 约为 MAX 的三分之二，给 H2/H3 合并留余量。
+# **动这两个数=换分母口径**：所有块数、覆盖率不再与冻结读数可比，必须整批重建
+# 并重跑对外数字对账。当次参数随 readiness.json 落盘（domain_intake），块数可溯源。
 TARGET_CHUNK_CHARS = 900
 MAX_CHUNK_CHARS = 1400
 
