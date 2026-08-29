@@ -43,11 +43,12 @@ export function ForeignDomainEmpty({ label }: { label: string }) {
           <ArrowLeft className="size-3.5" />
           回首页看这个领域的课程
         </Link>
+        {/* 画像弹层在首页右侧，没有独立 /profile 路由——原先链过去是 404（08-28 线上实走逮到）。 */}
         <Link
-          href="/profile"
+          href="/"
           className="text-sm text-muted-foreground underline underline-offset-2 hover:text-foreground"
         >
-          或把知识库换回「跟随培训领域」
+          或回首页在画像里把知识库换回「跟随培训领域」
         </Link>
       </div>
     </section>

@@ -37,6 +37,15 @@ const LEVEL_ORDER: PracticeProject['level'][] = ['starter', 'advanced', 'portfol
 
 const ALL_PROJECTS = (practiceData as { projects: PracticeProject[] }).projects;
 
+/**
+ * 这份静态策展数据（岗位图谱 + 13 个项目）属于哪个知识库。
+ * 数据文件本身没有 domain 字段——它诞生于只有主库的年代。判断「当前域有没有
+ * 岗位/策展数据」的分支一律引用这个常量，不许把 'ai' 直接写进业务逻辑
+ * （2026-08-28 硬编码清查：skills 页曾写死 `!== 'ai'`）。
+ * 外域的实操供给走引擎 practice-scout（GitHub 实搜起草 + 管理员审核），不读本文件。
+ */
+export const JOB_MAP_CORPUS = 'ai';
+
 // focus 环，口径见 app/path/page.tsx 同名常量：--ring 带 alpha，实测 1.26:1 看不见，
 // 借满不透明度的中性蓝 chart-2 顶上。--ring 修好后三处一起换回。
 const FOCUS_RING =

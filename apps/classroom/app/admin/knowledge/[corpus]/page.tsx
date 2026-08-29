@@ -14,6 +14,7 @@ import { SiteHeader } from '@/components/site-header';
 import { FitnessLight, StationRow, stamp } from '@/components/admin/knowledge-center';
 import { SourceFilesPanel } from '@/components/admin/knowledge-source';
 import { CorpusPreviewButton } from '@/components/admin/corpus-preview-button';
+import { PracticeScoutPanel } from '@/components/admin/practice-scout-panel';
 import { domainLabel, hasDomainLabel } from '@/lib/knowledge/domain-labels';
 import { isValidCorpusName, readCorpus } from '@/lib/server/knowledge-center';
 import { readSourceView } from '@/lib/server/knowledge-source';
@@ -227,6 +228,9 @@ export default async function CorpusDetailPage({
             </div>
           </section>
         )}
+
+        {/* 域级实操项目：GitHub 实搜 + 模型起草 + 管理员勾选发布（7.3 机制的实操侧）。 */}
+        <PracticeScoutPanel corpus={corpus.corpus} />
 
         {/* 原件与处理过程。回答的是「这个库的原文件到底是哪些、你们对它做了什么」——
             上面五站只说产物文件在不在盘上，这一段把产物拆回到逐个原件。 */}

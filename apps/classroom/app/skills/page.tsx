@@ -47,7 +47,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { EmptyState } from '@/components/ui/empty-state';
 import { SiteHeader } from '@/components/site-header';
 import { DomainScopeNotice } from '@/components/path/domain-path-notice';
-import { PracticeCard, projectsForJob } from '@/components/skills/practice-projects';
+import {
+  JOB_MAP_CORPUS,
+  PracticeCard,
+  projectsForJob,
+  type PracticeProject,
+} from '@/components/skills/practice-projects';
 import { cn } from '@/lib/utils';
 import { conceptLabel } from '@/lib/knowledge/concept-labels';
 import { domainLabel } from '@/lib/generation/learner-profile';
@@ -377,13 +382,36 @@ function JobCard({
 export default function SkillsPage() {
   const router = useRouter();
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
-  /** 画像选定的知识库。非 AI 域整页换空态——岗位图谱是主域专有数据（几十 GB
-   *  招聘数据集 + 人工提炼），别的领域摆它只会误导学习方向。 */
+  /** 画像选定的知识库。岗位图谱是 JOB_MAP_CORPUS 专有数据（几十 GB 招聘数据集 +
+   *  人工提炼），别的领域摆它只会误导学习方向——外域岗位区换空态。
+   *  外域的实操项目则有自己的供给线：管理端 GitHub 实搜起草、审核发布后这里可见。 */
   const [profileCorpus, setProfileCorpus] = useState<string>('');
   useEffect(() => {
     setProfileCorpus(loadLearnerProfile().corpus?.trim() ?? '');
   }, []);
-  const foreignDomain = Boolean(profileCorpus) && profileCorpus !== 'ai';
+  const foreignDomain = Boolean(profileCorpus) && profileCorpus !== JOB_MAP_CORPUS;
+  /** 外域已发布的实操项目（引擎 practice-scout 真源，管理员审核后才有内容）。 */
+  const [domainPractice, setDomainPractice] = useState<PracticeProject[]>([]);
+  useEffect(() => {
+    if (!foreignDomain) {
+      setDomainPractice([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/practice-scout/${encodeURIComponent(profileCorpus)}`);
+        if (!res.ok) return;
+        const body = await res.json();
+        if (!cancelled) setDomainPractice((body?.projects ?? []) as PracticeProject[]);
+      } catch {
+        // 引擎不在线就当没有——空态照常，不报错
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [foreignDomain, profileCorpus]);
   const [openJob, setOpenJob] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   // 项目卡「相关课程」的课名。课程边（courseIds）在 data/practice-projects.json 里，
@@ -495,6 +523,20 @@ export default function SkillsPage() {
           </div>
         </div>
 
+        {foreignDomain && domainPractice.length > 0 && (
+          <section className="mb-8">
+            <h2 className="mb-1 text-sm font-medium">「{domainLabel(profileCorpus)}」实操项目</h2>
+            <p className="mb-3 text-[11px] leading-relaxed text-muted-foreground">
+              从 GitHub 实时搜索、经管理员逐条审核后发布的真实开源项目。星数、许可、
+              链接均来自搜索时的实拉数据。
+            </p>
+            <div className="space-y-2">
+              {domainPractice.map((p) => (
+                <PracticeCard key={p.id} project={p} />
+              ))}
+            </div>
+          </section>
+        )}
         {foreignDomain && <ForeignDomainEmpty label={domainLabel(profileCorpus)} />}
 
         {!foreignDomain && state.kind === 'loading' && (
