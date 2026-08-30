@@ -44,6 +44,20 @@ const LEDGER = [
       'cd apps/agent-engine && python scripts/ingest_embodied.py && python scripts/build_knowledge_base.py && python scripts/build_embedding_index.py；造课走 /api/generate-classroom',
   },
   {
+    label: '跨域画像适配准确率（两个泛化域）',
+    value: '智能制造 77.8%｜IoTDB 94.4%（各 n=18）',
+    caliber:
+      '与主域 85.2% 同一把尺子（rubric v4：每例三判官独立盲评 2-of-3），但 n 差六倍——' +
+      '主域 108 组、泛化域各 18 组（三档画像 × 6 主题），区间宽得多，只作等价检验不作优劣比较。' +
+      '用例集与选题规则测前冻结并留哈希（见提交包证据目录）；画像三档定义与主域逐字相同，' +
+      '只换 persona 行业背景与主题。分档 n=6，按档的数不可解读。' +
+      '这一栏是难度分层缺陷修复后的一轮：修复前同一份用例集是智能制造 66.7%、IoTDB 88.9%，' +
+      '两个域走向不一致，两比例检验判不出差异，两轮并列存档不择优。修复站得住的理由是机制证据——' +
+      '同一查询在不同摘录难度上限下返回的证据块变了；修复前整库难度恒为 L1，上限卡在哪里都一样。',
+    source:
+      'cd apps/agent-engine && python scripts/judge_adaptation_probe.py --panel --resources data/eval/adaptation_probe/resources-<域>-tiered --out data/eval/adaptation_probe/runs/crossdomain-<域>-tiered-v4',
+  },
+  {
     label: '核心知识点覆盖率',
     value: '96.0%（48/50，6 门金标课汇总）',
     caliber:
