@@ -202,6 +202,17 @@ export function StartIntake() {
         setError(body.error || '发起失败');
         return;
       }
+      // 机构联动（2026-08-30）：发起人属于机构时，新库自动归属其机构——
+      // 归属即学习端可见性（本机构学员可见，外机构不可见）。发起人无机构或
+      // 认领失败都不拦发起：库落成后随时可在 /admin/org 手动归属。
+      const corpusName = String(pending?.get('corpus') ?? '').trim();
+      if (corpusName) {
+        void fetch('/api/org/corpora', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ corpus: corpusName, action: 'claim' }),
+        }).catch(() => undefined);
+      }
       router.push(`/admin/knowledge/runs/${body.run.run_id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

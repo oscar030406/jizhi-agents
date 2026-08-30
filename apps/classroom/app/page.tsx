@@ -62,6 +62,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { useDraftCache } from '@/lib/hooks/use-draft-cache';
 import { SpeechButton } from '@/components/audio/speech-button';
 import { LearnerAccountSwitcher } from '@/components/learner-account-switcher';
+import { OrgBadge } from '@/components/home/org-badge';
 import { AccountMenu } from '@/components/account/account-menu';
 import { PublicLanding } from '@/components/home/public-landing';
 import { useAccountStore } from '@/lib/store/account';
@@ -716,6 +717,8 @@ function HomePage() {
                 <p className="text-sm leading-relaxed text-muted-foreground">
                   学情诊断 Agent 据此计算难度档、讲解深度、类比领域与测验难度带
                 </p>
+                {/* 机构归属：入组后可见本机构专属知识库（域清单按机构过滤） */}
+                <OrgBadge />
               </div>
             </section>
 

@@ -60,6 +60,21 @@ export interface SkillMapPayload {
 // 这不是缓存造假——是真数据+获取时间，引擎恢复后下一次请求即刷新。
 let lastGood: { data: SkillMapPayload; fetchedAt: string } | null = null;
 
+async function filterCorpora(data: SkillMapPayload): Promise<SkillMapPayload> {
+  // 机构可见性（2026-08-30）：画像下拉的库名单从这里出，归属库只给本机构成员。
+  try {
+    const { cookies } = await import('next/headers');
+    const { accountForSession } = await import('@/lib/accounts/store');
+    const { SESSION_COOKIE } = await import('@/lib/accounts/session');
+    const { corpusVisibilityFor } = await import('@/lib/accounts/org-store');
+    const account = await accountForSession((await cookies()).get(SESSION_COOKIE)?.value);
+    const visible = await corpusVisibilityFor(account?.id ?? null);
+    return { ...data, corpora: data.corpora.filter((c) => visible(c.corpus)) };
+  } catch {
+    return data; // 会话层异常时按公共视图放行——公共库本就人人可见
+  }
+}
+
 export async function GET() {
   const base = process.env.GROUNDING_URL;
   if (!base) return new Response(null, { status: 204 });
@@ -74,7 +89,7 @@ export async function GET() {
       cache: 'no-store',
     });
     if (!resp.ok) {
-      if (lastGood) return apiSuccess({ ...lastGood.data, stale_from: lastGood.fetchedAt } as unknown as Record<string, unknown>);
+      if (lastGood) return apiSuccess({ ...(await filterCorpora(lastGood.data)), stale_from: lastGood.fetchedAt } as unknown as Record<string, unknown>);
       return new Response(null, { status: 204 });
     }
     const payload = (await resp.json()) as { data?: SkillMapPayload };
@@ -84,10 +99,10 @@ export async function GET() {
       `Skill map: ${payload.data.jobs.length} jobs, ` +
         `${payload.data.corpora.filter((c) => c.available).length}/${payload.data.corpora.length} corpora built`,
     );
-    return apiSuccess(payload.data as unknown as Record<string, unknown>);
+    return apiSuccess((await filterCorpora(payload.data)) as unknown as Record<string, unknown>);
   } catch (err) {
     log.warn(`Skill map unavailable: ${String(err)}`);
-    if (lastGood) return apiSuccess({ ...lastGood.data, stale_from: lastGood.fetchedAt } as unknown as Record<string, unknown>);
+    if (lastGood) return apiSuccess({ ...(await filterCorpora(lastGood.data)), stale_from: lastGood.fetchedAt } as unknown as Record<string, unknown>);
     return new Response(null, { status: 204 });
   }
 }

@@ -204,6 +204,13 @@ export default async function AdminPage() {
                 >
                   领域泛化
                 </Link>
+                {' · '}
+                <Link
+                  href="/admin/org"
+                  className="underline underline-offset-2 hover:text-foreground"
+                >
+                  机构管理
+                </Link>
               </p>
             </div>
           </div>
