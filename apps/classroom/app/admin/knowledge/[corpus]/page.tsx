@@ -37,6 +37,9 @@ export default async function CorpusDetailPage({
   const { corpus: name } = await params;
   if (!(await managerAccount())) return <Denied />;
   if (!isValidCorpusName(name)) notFound();
+  // 页标题走 domainLabel，先灌域注册清单（同 admin 总览页的补法）
+  const { readDomainRegistry } = await import('@/lib/server/domain-registry');
+  await readDomainRegistry().catch(() => null);
   const corpus = await readCorpus(name);
   if (!corpus) notFound();
   const sources = await readSourceView(name);

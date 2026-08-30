@@ -42,6 +42,9 @@ function when(iso: string | null): string {
 
 export default async function IntakeRunsPage() {
   if (!(await managerAccount())) return <Denied />;
+  // run 行的库名走 domainLabel，先灌域注册清单（同 admin 总览页的补法）
+  const { readDomainRegistry } = await import('@/lib/server/domain-registry');
+  await readDomainRegistry().catch(() => null);
   const runs = await listRuns(30);
 
   return (

@@ -33,7 +33,20 @@
 
 import Link from 'next/link';
 import { cookies } from 'next/headers';
-import { Activity, ArrowLeft, Boxes, Gavel, Route, ShieldAlert, Target, Upload } from 'lucide-react';
+import {
+  Activity,
+  ArrowLeft,
+  ArrowRight,
+  Boxes,
+  Building2,
+  Gavel,
+  Globe2,
+  History,
+  Route,
+  ShieldAlert,
+  Target,
+  Upload,
+} from 'lucide-react';
 
 import { accountForSession, accountsEnabled } from '@/lib/accounts/store';
 import { SESSION_COOKIE } from '@/lib/accounts/session';
@@ -129,6 +142,12 @@ export default async function AdminPage() {
     return <Denied reason="当前账号是学习者身份。管理端只对管理者账号开放。" />;
   }
 
+  // 先灌域注册清单：本页语料卡标题走 domainLabel，服务端内存视图没人灌时
+  // 新库上屏就是裸英文目录名（smart-manufacturing 08-30 线上实测撞上，
+  // 同病 knowledge-center.ts readCorporaWithDrift 已修过一次——兄弟页这里补上）。
+  const { readDomainRegistry } = await import('@/lib/server/domain-registry');
+  await readDomainRegistry().catch(() => null);
+
   const [metrics, courses, intakes, maps, coverage, tiers] = await Promise.all([
     readHeadlineMetrics(),
     readAllCourseAudits(),
@@ -182,37 +201,54 @@ export default async function AdminPage() {
                 交一批文档进来，接入链跑完它就是一个能生成课程的库。
               </p>
             </div>
-            <div className="flex flex-col items-start gap-2.5">
+            <Link
+              href="/admin/knowledge"
+              className="inline-flex items-center gap-2.5 rounded-full bg-foreground px-7 py-3.5 text-base font-medium text-background shadow-card transition-opacity hover:opacity-90"
+            >
+              <Upload className="size-5" />
+              接入新知识库
+            </Link>
+          </div>
+          {/* 三个常驻工作台入口。08-30 用户验收：原来是按钮下三条 text-xs 文字链，
+              「应该放在明显的位置而不是依附在下面」——升级为并排功能卡。 */}
+          <div className={cn(CONTAINER, 'mt-8 grid gap-4 sm:grid-cols-3')}>
+            {(
+              [
+                {
+                  href: '/admin/knowledge/runs',
+                  icon: History,
+                  title: '接入记录',
+                  desc: '每次投料的九站流水线直播与留档',
+                },
+                {
+                  href: '/admin/generalization',
+                  icon: Globe2,
+                  title: '领域泛化',
+                  desc: '跨域重建的指标对比与体检判词',
+                },
+                {
+                  href: '/admin/org',
+                  icon: Building2,
+                  title: '机构管理',
+                  desc: '邀请码、成员名册、课程指派与库归属',
+                },
+              ] as const
+            ).map(({ href, icon: Icon, title, desc }) => (
               <Link
-                href="/admin/knowledge"
-                className="inline-flex items-center gap-2.5 rounded-full bg-foreground px-7 py-3.5 text-base font-medium text-background shadow-card transition-opacity hover:opacity-90"
+                key={href}
+                href={href}
+                className="group flex items-center gap-4 rounded-xl border border-border bg-white p-5 shadow-card transition-colors hover:border-foreground/30 dark:bg-background"
               >
-                <Upload className="size-5" />
-                接入新知识库
+                <span className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-blue-soft text-blue-deep dark:bg-muted dark:text-foreground">
+                  <Icon className="size-5" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[15px] font-semibold leading-snug">{title}</span>
+                  <span className="mt-0.5 block truncate text-xs text-muted-foreground">{desc}</span>
+                </span>
+                <ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
               </Link>
-              <p className="text-xs text-muted-foreground">
-                <Link
-                  href="/admin/knowledge/runs"
-                  className="underline underline-offset-2 hover:text-foreground"
-                >
-                  接入记录
-                </Link>
-                {' · '}
-                <Link
-                  href="/admin/generalization"
-                  className="underline underline-offset-2 hover:text-foreground"
-                >
-                  领域泛化
-                </Link>
-                {' · '}
-                <Link
-                  href="/admin/org"
-                  className="underline underline-offset-2 hover:text-foreground"
-                >
-                  机构管理
-                </Link>
-              </p>
-            </div>
+            ))}
           </div>
         </section>
 
