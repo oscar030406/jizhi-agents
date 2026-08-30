@@ -115,3 +115,62 @@ describe('GET /api/domain-path/[corpus]', () => {
     expect(body.path).toBeUndefined();
   });
 });
+
+describe('机构可见性闸', () => {
+  const originalUrl2 = process.env.GROUNDING_URL;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    process.env.GROUNDING_URL = originalUrl2;
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  it('别的机构的库：403，且不打引擎', async () => {
+    // 学习端一共三个取数口（domains / skills / 这条），隔离轴要列全——
+    // 少挡一个口，私有教材的概念表与目录结构就从这里漏出去。
+    vi.resetModules(); // 前面的用例已经把路由模块拉进注册表，不重置的话 doMock 不生效
+    process.env.GROUNDING_URL = 'http://engine.test';
+    vi.doMock('next/headers', () => ({ cookies: async () => ({ get: () => undefined }) }));
+    vi.doMock('@/lib/accounts/store', () => ({ accountForSession: async () => null }));
+    vi.doMock('@/lib/accounts/session', () => ({ SESSION_COOKIE: 'sid' }));
+    vi.doMock('@/lib/accounts/org-store', () => ({
+      corpusVisibilityFor: async () => (c: string) => c !== 'smart-manufacturing',
+    }));
+    const spy = vi.fn();
+    globalThis.fetch = spy as unknown as typeof fetch;
+
+    const { GET } = await import('@/app/api/domain-path/[corpus]/route');
+    const res = await GET({} as NextRequest, {
+      params: Promise.resolve({ corpus: 'smart-manufacturing' }),
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(403);
+    expect(body.success).toBe(false);
+    expect(body).not.toHaveProperty('path');
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('公共库：闸放行，照常打引擎', async () => {
+    vi.resetModules(); // 前面的用例已经把路由模块拉进注册表，不重置的话 doMock 不生效
+    process.env.GROUNDING_URL = 'http://engine.test';
+    vi.doMock('next/headers', () => ({ cookies: async () => ({ get: () => undefined }) }));
+    vi.doMock('@/lib/accounts/store', () => ({ accountForSession: async () => null }));
+    vi.doMock('@/lib/accounts/session', () => ({ SESSION_COOKIE: 'sid' }));
+    vi.doMock('@/lib/accounts/org-store', () => ({
+      corpusVisibilityFor: async () => () => true,
+    }));
+    globalThis.fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ data: { corpus: 'iotdb', source: 'intake', stages: [] } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    ) as unknown as typeof fetch;
+
+    const { GET } = await import('@/app/api/domain-path/[corpus]/route');
+    const res = await GET({} as NextRequest, { params: Promise.resolve({ corpus: 'iotdb' }) });
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.path.corpus).toBe('iotdb');
+  });
+});
