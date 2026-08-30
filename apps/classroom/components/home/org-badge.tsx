@@ -45,9 +45,12 @@ export function OrgBadge() {
 
   if (state.kind === 'member') {
     return (
-      <p className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-        <Building2 className="size-3" /> 机构：{state.name}
-      </p>
+      <div className="mt-2">
+        <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <Building2 className="size-3" /> 机构：{state.name}
+        </p>
+        <OrgAssignments />
+      </div>
     );
   }
 
@@ -93,6 +96,47 @@ export function OrgBadge() {
         </button>
       </div>
       {error && <p className="mt-1 text-[11px] text-red-600">{error}</p>}
+    </div>
+  );
+}
+
+/** 机构指派卡：管理员派的课直接可点进课堂。空清单不渲染，不占版面。 */
+function OrgAssignments() {
+  const [items, setItems] = useState<Array<{ id: string; courseId: string; title: string }>>([]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const resp = await fetch('/api/org/assignments', { cache: 'no-store' });
+        if (!resp.ok) return;
+        const body = await resp.json();
+        if (alive) setItems(body?.assignments ?? []);
+      } catch {
+        /* 引擎/接口异常按无指派处理 */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  if (items.length === 0) return null;
+  return (
+    <div className="mt-2 rounded-lg border border-border bg-muted/30 px-2.5 py-2">
+      <p className="text-[10px] font-medium text-muted-foreground">机构指派课程</p>
+      <ul className="mt-1 space-y-0.5">
+        {items.map((a) => (
+          <li key={a.id}>
+            <a
+              href={`/classroom/${a.courseId}`}
+              className="text-[11px] text-blue-deep underline underline-offset-2 hover:no-underline"
+            >
+              {a.title}
+            </a>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

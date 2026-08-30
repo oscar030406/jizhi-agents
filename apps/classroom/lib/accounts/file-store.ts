@@ -167,6 +167,17 @@ export const fileBackend = {
     });
   },
 
+  async resetPassword(accountId: string, passwordHash: string): Promise<{ ok: true } | { ok: false; message: string }> {
+    return enqueue(async () => {
+      const db = await load();
+      const record = db.accounts.find((a) => a.id === accountId);
+      if (!record) return { ok: false as const, message: '账户不存在' };
+      record.password = passwordHash;
+      await save(db);
+      return { ok: true as const };
+    });
+  },
+
   async readProfile(accountId: string): Promise<unknown | null> {
     const db = await load();
     return db.accounts.find((a) => a.id === accountId)?.profile ?? null;

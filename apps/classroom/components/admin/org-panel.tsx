@@ -30,6 +30,18 @@ interface Member {
   joinedAt: string;
 }
 
+interface Assignment {
+  id: string;
+  courseId: string;
+  title: string;
+  createdAt: string;
+}
+
+interface CourseOption {
+  id: string;
+  title: string;
+}
+
 interface CorpusRow {
   corpus: string;
   label: string;
@@ -42,6 +54,9 @@ export function OrgPanel() {
   const [members, setMembers] = useState<Member[]>([]);
   const [corpora, setCorpora] = useState<CorpusRow[]>([]);
   const [ownership, setOwnership] = useState<Record<string, string>>({});
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [courses, setCourses] = useState<CourseOption[]>([]);
+  const [pickCourse, setPickCourse] = useState('');
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -68,9 +83,25 @@ export function OrgPanel() {
         })),
       );
       if (orgBody?.org?.role === 'owner') {
-        const mResp = await fetch('/api/org/members', { cache: 'no-store' });
+        const [mResp, aResp, cResp] = await Promise.all([
+          fetch('/api/org/members', { cache: 'no-store' }),
+          fetch('/api/org/assignments', { cache: 'no-store' }),
+          fetch('/api/classroom', { cache: 'no-store' }),
+        ]);
         const mBody = await mResp.json();
         setMembers(mBody?.members ?? []);
+        const aBody = await aResp.json();
+        setAssignments(aBody?.assignments ?? []);
+        const cBody = await cResp.json().catch(() => null);
+        const rawList = Array.isArray(cBody) ? cBody : (cBody?.classrooms ?? cBody?.data ?? []);
+        setCourses(
+          (Array.isArray(rawList) ? rawList : [])
+            .map((c: { id?: string; title?: string; name?: string }) => ({
+              id: String(c.id ?? ''),
+              title: String(c.title ?? c.name ?? c.id ?? ''),
+            }))
+            .filter((c: CourseOption) => c.id),
+        );
       }
     } catch {
       setError('读取机构信息失败');
@@ -233,23 +264,46 @@ export function OrgPanel() {
                   </td>
                   <td className="py-2 text-right">
                     {m.role !== 'owner' && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="gap-1 text-xs"
-                        disabled={busy}
-                        onClick={() =>
-                          act(
-                            () =>
-                              fetch(`/api/org/members?accountId=${encodeURIComponent(m.accountId)}`, {
-                                method: 'DELETE',
-                              }),
-                            `已移出 ${m.displayName}`,
-                          )
-                        }
-                      >
-                        <UserMinus className="size-3.5" /> 移出
-                      </Button>
+                      <span className="inline-flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-xs"
+                          disabled={busy}
+                          onClick={() => {
+                            const pw = window.prompt(`给 ${m.displayName} 设新密码（6-64 位字母或数字）：`);
+                            if (!pw) return;
+                            void act(
+                              () =>
+                                fetch('/api/org/members', {
+                                  method: 'PATCH',
+                                  headers: { 'content-type': 'application/json' },
+                                  body: JSON.stringify({ accountId: m.accountId, newPassword: pw }),
+                                }),
+                              `已重置 ${m.displayName} 的密码——请当面告知，系统不再显示`,
+                            );
+                          }}
+                        >
+                          重置密码
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="gap-1 text-xs"
+                          disabled={busy}
+                          onClick={() =>
+                            act(
+                              () =>
+                                fetch(`/api/org/members?accountId=${encodeURIComponent(m.accountId)}`, {
+                                  method: 'DELETE',
+                                }),
+                              `已移出 ${m.displayName}`,
+                            )
+                          }
+                        >
+                          <UserMinus className="size-3.5" /> 移出
+                        </Button>
+                      </span>
                     )}
                   </td>
                 </tr>
@@ -263,6 +317,87 @@ export function OrgPanel() {
               )}
             </tbody>
           </table>
+        </section>
+      )}
+
+      {/* ── 课程指派 ── */}
+      {org.role === 'owner' && (
+        <section className="rounded-2xl border border-border bg-card p-6 shadow-card">
+          <h2 className="text-sm font-medium">课程指派</h2>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            指派的课程会出现在本机构每位学员首页的「机构指派」卡上；指派是登记不是复制，
+            学员点进的就是那门课本体。
+          </p>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <select
+              value={pickCourse}
+              onChange={(e) => setPickCourse(e.target.value)}
+              className="h-9 min-w-64 rounded-lg border border-border bg-background px-2 text-sm"
+            >
+              <option value="">选择要指派的课程…</option>
+              {courses
+                .filter((c) => !assignments.some((a) => a.courseId === c.id))
+                .map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.title}
+                  </option>
+                ))}
+            </select>
+            <Button
+              size="sm"
+              disabled={busy || !pickCourse}
+              onClick={() => {
+                const course = courses.find((c) => c.id === pickCourse);
+                if (!course) return;
+                setPickCourse('');
+                void act(
+                  () =>
+                    fetch('/api/org/assignments', {
+                      method: 'POST',
+                      headers: { 'content-type': 'application/json' },
+                      body: JSON.stringify({ courseId: course.id, title: course.title }),
+                    }),
+                  `已指派「${course.title}」`,
+                );
+              }}
+            >
+              指派
+            </Button>
+          </div>
+          <ul className="mt-4 space-y-2">
+            {assignments.map((a) => (
+              <li
+                key={a.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border px-3 py-2"
+              >
+                <span className="text-sm">{a.title}</span>
+                <span className="flex items-center gap-2">
+                  <span className="text-[11px] tabular-nums text-muted-foreground">
+                    {new Date(a.createdAt).toLocaleDateString('zh-CN')}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-xs"
+                    disabled={busy}
+                    onClick={() =>
+                      act(
+                        () => fetch(`/api/org/assignments?id=${encodeURIComponent(a.id)}`, { method: 'DELETE' }),
+                        `已撤回「${a.title}」`,
+                      )
+                    }
+                  >
+                    撤回
+                  </Button>
+                </span>
+              </li>
+            ))}
+            {assignments.length === 0 && (
+              <li className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-xs text-muted-foreground">
+                还没有指派课程。
+              </li>
+            )}
+          </ul>
         </section>
       )}
 

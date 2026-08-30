@@ -6,7 +6,7 @@
 import { cookies } from 'next/headers';
 import type { NextRequest } from 'next/server';
 
-import { accountForSession } from '@/lib/accounts/store';
+import { accountForSession, resetPassword, validateCredentials } from '@/lib/accounts/store';
 import { SESSION_COOKIE } from '@/lib/accounts/session';
 import { membersOf, orgForAccount, removeMember } from '@/lib/accounts/org-store';
 import { API_ERROR_CODES, apiError, apiSuccess } from '@/lib/server/api-response';
@@ -42,4 +42,24 @@ export async function DELETE(req: NextRequest) {
   if (!result.ok) return apiError(API_ERROR_CODES.MISSING_REQUIRED_FIELD, 400, result.message);
   log.info(`member ${accountId} removed from org ${gate.org.id}`);
   return apiSuccess({ removed: accountId });
+}
+
+export async function PATCH(req: NextRequest) {
+  const gate = await ownerOrg();
+  if ('error' in gate) return gate.error;
+  const body = (await req.json().catch(() => ({}))) as { accountId?: string; newPassword?: string };
+  const accountId = String(body.accountId ?? '');
+  const newPassword = String(body.newPassword ?? '');
+  const roster = await membersOf(gate.org.id);
+  const target = roster.find((m) => m.accountId === accountId);
+  if (!target) return apiError(API_ERROR_CODES.MISSING_REQUIRED_FIELD, 400, '该账户不在本机构。');
+  if (target.role === 'owner') {
+    return apiError(API_ERROR_CODES.UNAUTHORIZED, 403, '不能通过名册重置所有者自己的密码。');
+  }
+  const check = validateCredentials(target.username, newPassword);
+  if (!check.ok) return apiError(API_ERROR_CODES.MISSING_REQUIRED_FIELD, 400, check.message);
+  const result = await resetPassword(accountId, newPassword);
+  if (!result.ok) return apiError(API_ERROR_CODES.MISSING_REQUIRED_FIELD, 400, result.message);
+  log.info(`password reset for ${accountId} by org ${gate.org.id} owner`);
+  return apiSuccess({ reset: accountId });
 }

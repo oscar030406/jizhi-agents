@@ -94,6 +94,15 @@ async function getPool(): Promise<Pool> {
           created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         );
         CREATE INDEX IF NOT EXISTS org_invitations_org ON org_invitations(org_id);
+        CREATE TABLE IF NOT EXISTS org_assignments (
+          id          TEXT PRIMARY KEY,
+          org_id      TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+          course_id   TEXT NOT NULL,
+          title       TEXT NOT NULL,
+          assigned_by TEXT NOT NULL,
+          created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS org_assignments_org ON org_assignments(org_id);
         CREATE TABLE IF NOT EXISTS org_corpora (
           corpus     TEXT PRIMARY KEY,
           org_id     TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
@@ -113,6 +122,7 @@ async function getPool(): Promise<Pool> {
 
 interface FileOrgDb {
   orgs: Array<{ id: string; name: string; ownerAccountId: string; createdAt: string }>;
+  assignments: Array<{ id: string; orgId: string; courseId: string; title: string; assignedBy: string; createdAt: string }>;
   members: Array<{ accountId: string; orgId: string; role: 'owner' | 'member'; joinedAt: string }>;
   invitations: Array<{ code: string; orgId: string; createdBy: string; disabled: boolean; createdAt: string }>;
   corpora: Array<{ corpus: string; orgId: string; updatedAt: string }>;
@@ -136,12 +146,13 @@ async function loadFile(): Promise<FileOrgDb> {
     const raw = JSON.parse(await fs.readFile(fileDbPath(), 'utf-8')) as Partial<FileOrgDb>;
     return {
       orgs: Array.isArray(raw.orgs) ? raw.orgs : [],
+      assignments: Array.isArray(raw.assignments) ? raw.assignments : [],
       members: Array.isArray(raw.members) ? raw.members : [],
       invitations: Array.isArray(raw.invitations) ? raw.invitations : [],
       corpora: Array.isArray(raw.corpora) ? raw.corpora : [],
     };
   } catch {
-    return { orgs: [], members: [], invitations: [], corpora: [] };
+    return { orgs: [], members: [], invitations: [], corpora: [], assignments: [] };
   }
 }
 
@@ -468,4 +479,87 @@ export async function corpusVisibilityFor(
     const owner = ownership.get(corpus);
     return !owner || (org !== null && owner === org.id);
   };
+}
+
+// ----------------------------------------------------------------- 课程指派
+
+export interface OrgAssignment {
+  id: string;
+  courseId: string;
+  title: string;
+  assignedBy: string;
+  createdAt: string;
+}
+
+/** 机构指派清单（owner 管理、member 首页展示同一份）。 */
+export async function assignmentsOf(orgId: string): Promise<OrgAssignment[]> {
+  if (usePg()) {
+    const pool = await getPool();
+    const rows = await pool.query(
+      'SELECT id, course_id, title, assigned_by, created_at FROM org_assignments WHERE org_id = $1 ORDER BY created_at DESC',
+      [orgId],
+    );
+    return rows.rows.map((r) => ({
+      id: String(r.id),
+      courseId: String(r.course_id),
+      title: String(r.title),
+      assignedBy: String(r.assigned_by),
+      createdAt: new Date(String(r.created_at)).toISOString(),
+    }));
+  }
+  const db = await loadFile();
+  return db.assignments
+    .filter((a) => a.orgId === orgId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .map((a) => ({ id: a.id, courseId: a.courseId, title: a.title, assignedBy: a.assignedBy, createdAt: a.createdAt }));
+}
+
+/** 指派一门课（owner 专用；同课重复指派幂等——按 courseId 去重）。 */
+export async function addAssignment(
+  orgId: string,
+  courseId: string,
+  title: string,
+  byAccountId: string,
+): Promise<{ ok: true; assignment: OrgAssignment } | { ok: false; message: string }> {
+  const cleanCourse = courseId.trim();
+  const cleanTitle = title.trim();
+  if (!cleanCourse || !cleanTitle) return { ok: false, message: '课程与标题不能为空' };
+  const existing = (await assignmentsOf(orgId)).find((a) => a.courseId === cleanCourse);
+  if (existing) return { ok: true, assignment: existing };
+  const id = `asg_${randomBytes(6).toString('hex')}`;
+  if (usePg()) {
+    const pool = await getPool();
+    await pool.query(
+      'INSERT INTO org_assignments (id, org_id, course_id, title, assigned_by) VALUES ($1, $2, $3, $4, $5)',
+      [id, orgId, cleanCourse, cleanTitle, byAccountId],
+    );
+  } else {
+    await enqueue(async () => {
+      const db = await loadFile();
+      db.assignments.push({
+        id, orgId, courseId: cleanCourse, title: cleanTitle,
+        assignedBy: byAccountId, createdAt: new Date().toISOString(),
+      });
+      await saveFile(db);
+    });
+  }
+  const found = (await assignmentsOf(orgId)).find((a) => a.id === id);
+  return found ? { ok: true, assignment: found } : { ok: false, message: '指派后读取失败' };
+}
+
+/** 撤回指派（owner 专用）。 */
+export async function removeAssignment(orgId: string, assignmentId: string): Promise<boolean> {
+  if (usePg()) {
+    const pool = await getPool();
+    const res = await pool.query('DELETE FROM org_assignments WHERE org_id = $1 AND id = $2', [orgId, assignmentId]);
+    return !!res.rowCount;
+  }
+  return enqueue(async () => {
+    const db = await loadFile();
+    const before = db.assignments.length;
+    db.assignments = db.assignments.filter((a) => !(a.orgId === orgId && a.id === assignmentId));
+    if (db.assignments.length === before) return false;
+    await saveFile(db);
+    return true;
+  });
 }

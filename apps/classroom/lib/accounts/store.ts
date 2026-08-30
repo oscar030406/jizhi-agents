@@ -310,6 +310,21 @@ async function writeRawProfile(accountId: string, profile: unknown): Promise<voi
   ]);
 }
 
+/**
+ * 管理员重置成员密码（机构场景：无邮箱/手机号找回体系下的唯一兜底）。
+ * 归属校验在接口层（只有机构 owner 对本机构 member 可用），这里只管落盘。
+ */
+export async function resetPassword(accountId: string, newPassword: string): Promise<{ ok: true } | { ok: false; message: string }> {
+  const hash = await hashPassword(newPassword);
+  if (!usePg()) {
+    const { fileBackend } = await import('./file-store');
+    return fileBackend.resetPassword(accountId, hash);
+  }
+  const pool = await getPool();
+  const res = await pool.query('UPDATE accounts SET password = $2 WHERE id = $1', [accountId, hash]);
+  return res.rowCount ? { ok: true } : { ok: false, message: '账户不存在' };
+}
+
 function rowToAccount(row: Record<string, unknown>): Account {
   return {
     id: String(row.id),
