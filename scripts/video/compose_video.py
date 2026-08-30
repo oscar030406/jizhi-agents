@@ -31,6 +31,7 @@ from moviepy import (
     AudioFileClip,
     CompositeAudioClip,
     CompositeVideoClip,
+    ImageClip,
     TextClip,
     VideoFileClip,
     concatenate_videoclips,
@@ -42,6 +43,19 @@ W, H, FPS = 1920, 1080, 30
 
 
 def build_scene(base: Path, spec: dict, idx: int):
+    # ---- 静态图卡（片头/落版）：image + duration，秒数字段必填 ----
+    if spec.get("image"):
+        ipath = base / spec["image"]
+        if not ipath.exists():
+            raise SystemExit(f"镜 {idx}: 图卡不存在 {ipath}")
+        card = ImageClip(str(ipath)).with_duration(float(spec["duration"])).resized((W, H))
+        if spec.get("narration"):
+            npath = base / spec["narration"]
+            if not npath.exists():
+                raise SystemExit(f"镜 {idx}: 口播不存在 {npath}")
+            card = card.with_audio(AudioFileClip(str(npath)))
+        return card
+
     vpath = base / spec["video"]
     if not vpath.exists():
         raise SystemExit(f"镜 {idx}: 录屏不存在 {vpath}")
