@@ -1241,3 +1241,66 @@ def test_排队时告诉管理者前面还有几个(sandbox):
     assert "run_queued" in src
     assert "前面还有" in src
     assert "不用重投，轮到就自动开始" in src, "要说清不必人工干预"
+
+
+def test_投了岗位要求就一路落到学习端的技能地图(sandbox, monkeypatch):
+    """WO-5 那条链走一遍：投料 options → 域注册清单 → `skill_map_api(域)` 列出岗位。
+
+    这三段以前是断的：注册表有 `job_requirements` 这一格、学习端也会读它，
+    但**全仓没有一处往 options 里写它**，于是那格恒为 null，学习端只能一直说没有。
+    链上任何一段再断掉都不会有人报错（下游看来「这个域就是没登记岗位」），
+    所以得从投料端一路验到出口。
+    """
+    from backend.integration import personalize_service as ps
+    from backend.rag import retriever as retriever_mod
+    from backend.schemas.resources import RetrievalResult
+
+    jobs = [{
+        "job_id": "hydraulic_tech",
+        "title": "液压设备维护技师",
+        "summary": "负责产线液压回路的日常维护",
+        "skills": ["液压系统日常点检", "泵阀故障判读"],
+    }]
+    run = domain_intake.create_run(_files(TWO_DOCS), corpus="jobs-reg", scope="时序数据库运维")
+    # 路由那一跳的形制：校验过的清单补进 options 再 flush（`create_run` 的签名没动）
+    run.record["options"]["job_requirements"] = jobs
+    run.flush()
+    domain_intake.execute(run)
+
+    registry = json.loads((domain_intake.KB / "domain_registry.json").read_text(encoding="utf-8"))
+    row = next(r for r in registry["corpora"] if r["corpus"] == "jobs-reg")
+    assert row["job_requirements"] == jobs
+    # 别的库不许被这次 run 带上同一份岗位表（`_CARRIED_FIELDS` 是按库带的）
+    assert all(
+        r["job_requirements"] is None for r in registry["corpora"] if r["corpus"] != "jobs-reg"
+    )
+
+    class _NoEvidence:
+        """覆盖判定的桩：这条用例验的是岗位清单从哪来，不是判得准不准。"""
+
+        fallback = None
+        chunks: list = []  # `_corpus_status` 数块用；这条用例只关心岗位清单从哪来
+
+        def search(self, query, concept_tags=None, top_k=6, allow_lexical_fallback=True):
+            return RetrievalResult(
+                retrieved_chunks=[], source_ids=[], evidence_summary="",
+                missing_evidence_warning="桩：不出证据",
+            )
+
+    def _corpus_retriever(name):
+        return _NoEvidence() if name == "jobs-reg" else None
+
+    # sandbox 收尾会调 refresh_corpora()，它要清这个函数的 lru_cache——桩得有这一格
+    _corpus_retriever.cache_clear = lambda: None
+    monkeypatch.setattr(retriever_mod, "get_corpus_retriever", _corpus_retriever)
+    monkeypatch.setattr(
+        retriever_mod, "get_retriever", lambda: pytest.fail("外域岗位地图碰了主库检索器")
+    )
+    ps.skill_map_api.cache_clear()
+    payload = ps.skill_map_api("jobs-reg")
+    ps.skill_map_api.cache_clear()
+
+    assert payload["domain"] == "jobs-reg"
+    assert "reason" not in payload, "登记过就不该再报「未登记」"
+    assert [j["title"] for j in payload["jobs"]] == ["液压设备维护技师"]
+    assert [s["skill"] for s in payload["jobs"][0]["skills"]] == ["液压系统日常点检", "泵阀故障判读"]

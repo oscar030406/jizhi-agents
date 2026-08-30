@@ -337,3 +337,75 @@ def test_unreadable_suffix_in_the_files_field_is_rejected_at_request_time(dir_cl
     assert resp.status_code == 400, resp.text
     detail = resp.json()["detail"]
     assert ".exe" in detail and "压缩包" in detail, detail
+
+
+# ── 岗位/技能清单（WO-5：把「管理员可以补传」从空承诺变成真投料口）──────────
+#
+# 与档位定义相反，这一格要严：它会原样成为学习端岗位技能页的唯一数据源，
+# 静默丢一条坏岗位，学员看到的是一份没人写过的岗位表，而且没有任何一处会报错。
+
+JOBS_OK = (
+    '[{"title":"液压设备维护技师","summary":"负责产线液压回路的日常维护",'
+    '"skills":["液压系统日常点检","泵阀故障判读"]},'
+    '{"title":"电气控制工程师","skills":["PLC 梯形图编程"]}]'
+)
+
+
+def test_job_requirements_land_in_run_options(client):
+    """投的清单要原样落进 options —— ⑧ 站从这里取值写进域注册清单。"""
+    c, seen = client
+    assert _post(c, {"corpus": "probe", "job_requirements": JOBS_OK}).status_code == 200
+    jobs = seen["options"]["job_requirements"]
+    assert [j["title"] for j in jobs] == ["液压设备维护技师", "电气控制工程师"]
+    assert jobs[0]["skills"] == ["液压系统日常点检", "泵阀故障判读"]
+    assert jobs[0]["summary"] == "负责产线液压回路的日常维护"
+    # job_id 没给就按序号补：学习端拿它当列表 key，一串空串会让所有岗位共用一个 key
+    assert [j["job_id"] for j in jobs] == ["job-1", "job-2"]
+
+
+def test_job_requirements_absent_leaves_options_alone(client):
+    """不填也能建库——空的这一格不写进 options，⑧ 站照旧写 null。"""
+    c, seen = client
+    assert _post(c, {"corpus": "probe"}).status_code == 200
+    assert "job_requirements" not in seen.get("options", {})
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "{不是 json",                                    # 根本不是 JSON
+        '{"jobs":[]}',                                   # 不是数组
+        "[]",                                            # 空数组等于没登记，让他留空
+        '["液压技师"]',                                   # 条目不是对象
+        '[{"skills":["点检"]}]',                          # 没有岗位名
+        '[{"title":"液压技师"}]',                         # 没有 skills
+        '[{"title":"液压技师","skills":[]}]',             # skills 空
+        '[{"title":"液压技师","skills":"点检"}]',          # skills 不是数组
+        '[{"title":"液压技师","skills":["点检",42]}]',     # 混了非字符串——**不许静默跳过**
+        '[{"title":"液压技师","skills":["点检","  "]}]',   # 空白技能项同理
+    ],
+)
+def test_job_requirements_bad_shape_is_rejected_not_dropped(client, bad):
+    c, seen = client
+    resp = _post(c, {"corpus": "probe", "job_requirements": bad})
+    assert resp.status_code == 400, bad
+    assert resp.json()["detail"], "报错要说人话，不能只有状态码"
+    # 坏数据一条都不许进 options，run 也不许建（库名会被占住）
+    assert "kind" not in seen
+
+
+def test_job_requirements_rejected_on_append(client):
+    """追加模式整站跳过 ⑧，收下这份清单等于收下之后扔掉——当场拒，不静默丢。"""
+    c, _ = client
+    resp = _post(c, {"corpus": "probe", "append": "true", "job_requirements": JOBS_OK})
+    assert resp.status_code == 400
+    assert "追加" in resp.json()["detail"]
+
+
+def test_job_requirements_duplicate_ids_rejected(client):
+    """学习端拿 job_id 当列表 key，重了两个岗位会串成一个。"""
+    c, _ = client
+    dup = ('[{"job_id":"tech","title":"甲","skills":["a"]},'
+           '{"job_id":"tech","title":"乙","skills":["b"]}]')
+    resp = _post(c, {"corpus": "probe", "job_requirements": dup})
+    assert resp.status_code == 400 and "job_id" in resp.json()["detail"]

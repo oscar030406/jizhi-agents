@@ -2,6 +2,8 @@
 
 核心纪律：没建库的领域必须如实报空并说明原因，绝不回退到 AI 语料冒充命中。
 """
+import pytest
+
 from backend.integration.personalize_service import (
     DOMAIN_CORPORA,
     domain_corpora,
@@ -132,3 +134,87 @@ def test_一次性验证库不对学习者露面():
         assert is_scratch_corpus(name), name
     for name in ("smart-manufacturing", "iotdb", "odoo", "ai", "protein-design"):
         assert not is_scratch_corpus(name), f"{name} 是正经库，不许被误挡"
+
+
+# ── 岗位技能图谱的域化（2026-08-30 静默错配修复）─────────────────────────
+#
+# 病症：`skill_map_api` 无域参数、整表 lru_cache(1)，不管学员在哪个域都回主库那
+# 14 个 AI 岗位，返回体里连一格「这是哪个域」都没有。唯一的诚实分支活在浏览器里
+# （/skills 页一个 localStorage 判断），绕过页面直取接口就穿帮。
+
+
+def test_未登记岗位要求的域如实报空而不是拿主域顶替():
+    from backend.integration.personalize_service import skill_map_api
+
+    payload = skill_map_api("smart-manufacturing")
+    assert payload["domain"] == "smart-manufacturing"
+    assert payload["jobs"] == [], "外域不许出现主库的 AI 岗位"
+    assert payload["reason"], "报空必须说得出为什么"
+    assert payload["corpora"], "语料库状态照常带，这是「为什么没有」的现场证据"
+
+
+def test_登记了岗位要求就按这个域自己的库判覆盖(tmp_path, monkeypatch):
+    """`job_requirements` 目前所有域都是 null，这条路只能靠构造数据走一遍。
+
+    两件事一起验：岗位清单取自域注册清单（不是 job_skill_map.json），
+    覆盖判定用的是这个域自己的检索器（不是主库）。
+    """
+    import json
+
+    from backend.integration import personalize_service as ps
+    from backend.rag import retriever as retriever_mod
+    from backend.schemas.resources import KnowledgeChunk, RetrievalResult
+
+    (tmp_path / "domain_registry.json").write_text(
+        json.dumps({"corpora": [{
+            "corpus": "widgets",
+            "job_requirements": {"jobs": [{
+                "job_id": "hydraulic_tech",
+                "title": "液压设备维护技师",
+                "skills": ["液压系统日常点检", 42],  # 非字符串条目要被跳过，不许把整张图带崩
+            }]}},
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ps, "KB_DIR", tmp_path)
+
+    chunks = [
+        KnowledgeChunk(
+            source_id=f"widget{i}#s1", title=f"点检手册 {i}", topic="maintenance",
+            difficulty="L2", concept_tags=[], section="s1", content="液压回路点检要点。" * 12,
+            score=0.9,
+        )
+        for i in (1, 2)
+    ]
+
+    class _DomainRetriever:
+        fallback = None  # _judge 据此认定「这个后端支持关掉词法兜底」
+
+        def search(self, query, concept_tags=None, top_k=6, allow_lexical_fallback=True):
+            assert allow_lexical_fallback is False, "覆盖判定不许吃词法兜底"
+            return RetrievalResult(
+                retrieved_chunks=chunks, source_ids=[c.source_id for c in chunks],
+                evidence_summary="", missing_evidence_warning=None,
+            )
+
+    monkeypatch.setattr(
+        retriever_mod, "get_corpus_retriever",
+        lambda name: _DomainRetriever() if name == "widgets" else None,
+    )
+    # 主库检索器一旦被碰就是回退，直接判失败
+    monkeypatch.setattr(
+        retriever_mod, "get_retriever",
+        lambda: pytest.fail("外域覆盖判定碰了主库检索器"),
+    )
+
+    ps.skill_map_api.cache_clear()
+    try:
+        payload = ps.skill_map_api("widgets")
+    finally:
+        ps.skill_map_api.cache_clear()  # 构造出来的结果不许留在缓存里
+
+    assert payload["domain"] == "widgets" and "reason" not in payload
+    job = payload["jobs"][0]
+    assert job["title"] == "液压设备维护技师"
+    assert [s["skill"] for s in job["skills"]] == ["液压系统日常点检"]
+    assert job["covered_count"] == 1 and job["skills"][0]["source_id"] == "widget1#s1"

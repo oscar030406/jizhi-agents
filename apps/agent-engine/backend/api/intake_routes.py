@@ -40,6 +40,70 @@ from backend.services import domain_intake, intake_sources
 router = APIRouter(prefix="/api/domain-intake", tags=["domain-intake"])
 
 
+def parse_job_requirements(raw: str) -> list[dict[str, Any]]:
+    """岗位/技能清单：管理者投的料 → 域注册清单 `job_requirements` 槽的内容。
+
+    **校验严、一条坏就整份退**，与 `tier_definitions` 那一格的宽松处理相反，
+    因为两者的下游差得远：档位定义只在 run 页面回看时露一面，写坏了看的人一眼
+    就知道是自己填的；这份清单会原样成为学习端岗位技能页的唯一数据源，
+    静默丢掉一条坏岗位，学员看到的就是一份没人写过的岗位表——而且没有任何一处
+    会报错，因为在下游看来「这个域就登记了这么多岗位」。
+
+    投的人此刻还在表单前面，报错他能立刻改；学员看到错的岗位表，改不了也不知道。
+    """
+    try:
+        parsed = json.loads(raw)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"岗位/技能清单不是合法 JSON（{exc}）。形如："
+                   '[{"title":"液压设备维护技师","skills":["液压系统日常点检","泵阀故障判读"]}]',
+        ) from exc
+    if not isinstance(parsed, list) or not parsed:
+        raise HTTPException(
+            status_code=400,
+            detail="岗位/技能清单要是一个非空 JSON 数组，每项一个岗位。"
+                   "不想登记岗位就把这一格留空——留空是合法的，学习端会如实显示未登记。",
+        )
+    jobs: list[dict[str, Any]] = []
+    for i, job in enumerate(parsed, 1):
+        where = f"第 {i} 个岗位"
+        if not isinstance(job, dict):
+            raise HTTPException(status_code=400, detail=f"{where}不是一个对象：{job!r}")
+        title = str(job.get("title") or "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail=f"{where}缺 title（岗位名），这是列表上屏的那一行字")
+        skills = job.get("skills")
+        if not isinstance(skills, list) or not skills:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{where}「{title}」的 skills 要是一个非空字符串数组"
+                       "——没有技能项的岗位在技能地图上是一张空卡片",
+            )
+        cleaned: list[str] = []
+        for item in skills:
+            if not isinstance(item, str) or not item.strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{where}「{title}」的 skills 里有非字符串条目：{item!r}",
+                )
+            cleaned.append(item.strip())
+        jobs.append({
+            # job_id 缺了按序号补：学习端拿它当列表 key、也拿它挂实操项目，
+            # 一串空字符串会让所有岗位共用一个 key（React 渲染会串）。
+            "job_id": str(job.get("job_id") or f"job-{i}"),
+            "title": title,
+            "summary": str(job.get("summary") or "").strip(),
+            "skills": cleaned,
+        })
+    ids = [j["job_id"] for j in jobs]
+    dup = sorted({x for x in ids if ids.count(x) > 1})
+    if dup:
+        # 学习端拿 job_id 当列表 key、也拿它挂实操项目，重了两个岗位会串成一个。
+        raise HTTPException(status_code=400, detail=f"job_id 重复：{'、'.join(dup)}，每个岗位要有各自的 id")
+    return jobs
+
+
 @router.post("/runs", dependencies=[Depends(verify_internal_token)])
 async def create_run(
     files: list[UploadFile] = File(None, description="md / markdown / txt 多文件"),
@@ -54,6 +118,15 @@ async def create_run(
             "档位定义（JSON 数组，每项 {label, audience}）。管理端表单让接入者用自己的话"
             "写「这批语料的学习者分几档、每档面向谁」，档数经映射层折成 tier_range 传上来；"
             "这个字段存的是没被折过的原文，只落 run 记录供回看，链上任何一站都不读它。"
+        ),
+    ),
+    job_requirements: str = Form(
+        "",
+        description=(
+            "岗位/技能清单（JSON 数组，每项 {title, skills, summary?}）。选填，填了才进域注册"
+            "清单的 `job_requirements` 槽——学习端的岗位技能地图按它列岗位、拿这个域自己的库"
+            "逐技能判覆盖；不填那一页如实显示「该领域未登记岗位要求」。"
+            "形状不对当场 400，不静默丢条目。"
         ),
     ),
     build_vector: bool = Form(False, description="建向量索引——调嵌入 API，真花钱，默认关"),
@@ -97,6 +170,20 @@ async def create_run(
             status_code=400,
             detail="files / zip / gitUrl 三选一："
             + (f"这次给了 {len(given)} 条（{'、'.join(given)}）" if given else "这次一条都没给"),
+        )
+
+    # 岗位/技能清单的形状**在建 run 之前校**：纯字符串检查、零成本，和 gitUrl 的合法性
+    # 同一条理由。放到后面校的代价很实：`_reserve_corpus` 已经把库名占住了，
+    # 管理者拿着一句「形状不对」改完再投，会被告知这个库已经存在。
+    jobs = parse_job_requirements(job_requirements) if job_requirements.strip() else None
+    if jobs and append:
+        # 追加模式只跑 ①②③，⑧ 个性化注册站整站跳过（`APPEND_SKIP_REASON`），
+        # 收下这份清单就等于收下之后扔掉——投的人以为登记好了，学习端那一页照旧空着。
+        # 宁可当场拒，也不做这种没人看得见的丢弃。
+        raise HTTPException(
+            status_code=400,
+            detail="追加模式不重算域注册清单，这次投的岗位/技能清单不会生效。"
+                   "登记岗位要求请在整库重建（不勾追加）时投，或先把这一格清空再追加文档。",
         )
 
     options = {
@@ -198,6 +285,12 @@ async def create_run(
         except ValueError:
             parsed = tier_definitions
         run.record["options"]["tier_definitions"] = parsed
+        run.flush()
+    # 岗位/技能清单同路进 options：⑧ 个性化注册站从这里取值写进域注册清单的
+    # 同名槽（`_CARRIED_FIELDS` 保证后续别的库重跑时不被冲掉），学习端的
+    # `skill_map_api(域)` 读那一格列岗位。形状上面校过了，这里只落盘。
+    if jobs is not None:
+        run.record["options"]["job_requirements"] = jobs
         run.flush()
     domain_intake.start_run(run)
     return {

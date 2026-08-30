@@ -46,7 +46,6 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { SiteHeader } from '@/components/site-header';
-import { DomainScopeNotice } from '@/components/path/domain-path-notice';
 import {
   JOB_MAP_CORPUS,
   PracticeCard,
@@ -54,14 +53,12 @@ import {
   type PracticeProject,
 } from '@/components/skills/practice-projects';
 import { cn } from '@/lib/utils';
+import { REQUIREMENT_DRAFT_KEY } from '@/lib/hooks/use-draft-cache';
 import { conceptLabel } from '@/lib/knowledge/concept-labels';
-import { domainLabel } from '@/lib/generation/learner-profile';
+import { corpusOf, domainLabel } from '@/lib/generation/learner-profile';
 import { loadLearnerProfile } from '@/components/generation/learner-profile-popover';
 import { ForeignDomainEmpty } from '@/components/skills/foreign-domain-empty';
 import type { CorpusStatus, JobSkills, SkillCoverage } from '@/app/api/skills/route';
-
-/** Home page's requirement draft cache key (lib/hooks/use-draft-cache + app/page.tsx). */
-const REQUIREMENT_DRAFT_KEY = 'requirementDraft';
 
 /** Shape of `market_stats` in data/jobs/job_skill_map.json. Every field optional:
  *  a tile renders only when its number is really there. */
@@ -89,12 +86,22 @@ interface SkillMapData {
   jobs: JobSkills[];
   corpora: CorpusStatus[];
   coverage_rule?: string;
+  /** 这份图谱属于哪个领域（引擎按请求的域回带）。 */
+  domain?: string;
+  /** 该领域没有岗位数据时引擎给的原文说明，直接显示给学习者，不改写。 */
+  reason?: string;
   /** 引擎当前不可达、接口给的是 app/api/skills/route.ts 里最后一次成功读取的数据时，
    *  由接口带回那次读取的时间。 */
   stale_from?: string;
   /** public/skill-map.json 的生成时间（scripts/generate-skill-map-snapshot.mjs 写入）。 */
   snapshot_at?: string;
+  /** 取回时算的：这份数据是不是已经旧到该提示了。渲染期不许读时钟（react-hooks/purity），
+   *  所以在 `loadSkillMap` 里判一次带上来。 */
+  stale?: boolean;
 }
+
+/** 快照多久算旧。判据口径本身会随引擎变（08-21 换过一次），两周没重新落盘就该提示。 */
+const SNAPSHOT_STALE_MS = 14 * 24 * 3600 * 1000;
 
 type LoadState =
   | { kind: 'loading' }
@@ -112,7 +119,12 @@ async function loadSkillMap(url: string): Promise<SkillMapData | null> {
     const res = await fetch(url, { cache: 'no-store' });
     if (!res.ok) return null;
     const data = (await res.json()) as SkillMapData;
-    return data?.jobs?.length ? data : null;
+    // 空 jobs + reason 是引擎的正式答案（该域未登记岗位数据），必须放行——
+    // 当"没取到"退回快照，屏幕上就又是主域的 AI 岗位了。
+    if (!data || (!data.jobs?.length && !data.reason)) return null;
+    const asOf = data.snapshot_at ?? data.stale_from;
+    data.stale = asOf ? Date.now() - Date.parse(asOf) > SNAPSHOT_STALE_MS : false;
+    return data;
   } catch {
     return null;
   }
@@ -384,34 +396,20 @@ export default function SkillsPage() {
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
   /** 画像选定的知识库。岗位图谱是 JOB_MAP_CORPUS 专有数据（几十 GB 招聘数据集 +
    *  人工提炼），别的领域摆它只会误导学习方向——外域岗位区换空态。
-   *  外域的实操项目则有自己的供给线：管理端 GitHub 实搜起草、审核发布后这里可见。 */
-  const [profileCorpus, setProfileCorpus] = useState<string>('');
+   *  外域的实操项目则有自己的供给线：管理端 GitHub 实搜起草、审核发布后这里可见。
+   *
+   *  取域走 `corpusOf`（检索/判官/诊断三路共用的口径：显式选的库优先、缺了看培训领域）。
+   *  原来直接读 `.corpus`，画像只选了培训领域没单独选库时拿到空串，于是学智能制造的人
+   *  被判成"非外域"，照样看整张 AI 岗位图谱。
+   *  null = 还没读到画像（localStorage 只能在客户端读），此时先不发请求，
+   *  免得先按空域问一遍引擎再按真域重问。 */
+  const [profileCorpus, setProfileCorpus] = useState<string | null>(null);
   useEffect(() => {
-    setProfileCorpus(loadLearnerProfile().corpus?.trim() ?? '');
+    setProfileCorpus(corpusOf(loadLearnerProfile()) ?? '');
   }, []);
-  const foreignDomain = Boolean(profileCorpus) && profileCorpus !== JOB_MAP_CORPUS;
+  const corpus = profileCorpus ?? '';
   /** 外域已发布的实操项目（引擎 practice-scout 真源，管理员审核后才有内容）。 */
   const [domainPractice, setDomainPractice] = useState<PracticeProject[]>([]);
-  useEffect(() => {
-    if (!foreignDomain) {
-      setDomainPractice([]);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(`/api/practice-scout/${encodeURIComponent(profileCorpus)}`);
-        if (!res.ok) return;
-        const body = await res.json();
-        if (!cancelled) setDomainPractice((body?.projects ?? []) as PracticeProject[]);
-      } catch {
-        // 引擎不在线就当没有——空态照常，不报错
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [foreignDomain, profileCorpus]);
   const [openJob, setOpenJob] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   // 项目卡「相关课程」的课名。课程边（courseIds）在 data/practice-projects.json 里，
@@ -442,6 +440,7 @@ export default function SkillsPage() {
 
   // 重新读取时不回到 loading：屏幕上已有的数据留着，取回新的再换，中间不闪空屏。
   useEffect(() => {
+    if (profileCorpus === null) return; // 等画像读出来再取，见 profileCorpus 的注释
     let cancelled = false;
     (async () => {
       // 快照先上屏：与引擎在不在线无关，不等它。
@@ -449,7 +448,8 @@ export default function SkillsPage() {
       if (cancelled) return;
       if (snapshot) setState({ kind: 'ok', data: snapshot });
       // 引擎在线就换成实时数据；拿不到就保持快照，不改屏幕上的任何东西。
-      const live = await loadSkillMap('/api/skills');
+      // 带上域：外域拿回的是空 jobs + reason，页面据此换空态，不再靠客户端猜。
+      const live = await loadSkillMap(`/api/skills?domain=${encodeURIComponent(profileCorpus)}`);
       if (cancelled) return;
       if (live) setState({ kind: 'ok', data: live });
       else if (!snapshot) setState((prev) => (prev.kind === 'ok' ? prev : { kind: 'offline' }));
@@ -457,7 +457,7 @@ export default function SkillsPage() {
     return () => {
       cancelled = true;
     };
-  }, [reloadKey]);
+  }, [reloadKey, profileCorpus]);
 
   /** Hand the skill to the home page: write its requirement draft, then navigate. */
   const pickSkill = useCallback(
@@ -482,6 +482,35 @@ export default function SkillsPage() {
   const juniorShare = (exp['1-3年'] ?? 0) + (exp['经验不限'] ?? 0);
   // 屏幕上这份数是哪一刻的：快照有生成时间，接口的兜底数据有读取时间，实时数据两者都没有。
   const asOf = data?.snapshot_at ?? data?.stale_from ?? null;
+  // 快照是部署时落盘的。放着不提示，引擎离线时访客看到的就是一份没人知道有多旧的图谱。
+  const asOfStale = Boolean(asOf && data?.stale);
+
+  // 空态判据以服务端为准：引擎说这个域没有岗位数据（jobs 空 + reason），就是没有。
+  // 客户端那句只当降级——引擎还没答上来的头几百毫秒里，别让主域快照先糊到外域学员脸上。
+  const serverEmpty = Boolean(data && !data.jobs?.length && data.reason);
+  const clientForeign = Boolean(corpus) && corpus !== JOB_MAP_CORPUS;
+  const foreignDomain = serverEmpty || clientForeign;
+
+  useEffect(() => {
+    if (!foreignDomain) {
+      setDomainPractice([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/practice-scout/${encodeURIComponent(corpus)}`);
+        if (!res.ok) return;
+        const body = await res.json();
+        if (!cancelled) setDomainPractice((body?.projects ?? []) as PracticeProject[]);
+      } catch {
+        // 引擎不在线就当没有——空态照常，不报错
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [foreignDomain, corpus]);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -520,12 +549,17 @@ export default function SkillsPage() {
                 })}
               </p>
             )}
+            {asOfStale && (
+              <p className="max-w-xs text-right text-xs leading-relaxed text-amber-700 dark:text-amber-300">
+                快照可能已过期，引擎在线时以实时数据为准。
+              </p>
+            )}
           </div>
         </div>
 
         {foreignDomain && domainPractice.length > 0 && (
           <section className="mb-8">
-            <h2 className="mb-1 text-sm font-medium">「{domainLabel(profileCorpus)}」实操项目</h2>
+            <h2 className="mb-1 text-sm font-medium">「{domainLabel(corpus)}」实操项目</h2>
             <p className="mb-3 text-[11px] leading-relaxed text-muted-foreground">
               从 GitHub 实时搜索、经管理员逐条审核后发布的真实开源项目。星数、许可、
               链接均来自搜索时的实拉数据。
@@ -537,7 +571,12 @@ export default function SkillsPage() {
             </div>
           </section>
         )}
-        {foreignDomain && <ForeignDomainEmpty label={domainLabel(profileCorpus)} />}
+        {foreignDomain && (
+          <ForeignDomainEmpty
+            label={domainLabel(corpus || data?.domain)}
+            reason={serverEmpty ? data?.reason : undefined}
+          />
+        )}
 
         {!foreignDomain && state.kind === 'loading' && (
           <div className="flex items-center gap-2 py-16 text-sm text-muted-foreground">

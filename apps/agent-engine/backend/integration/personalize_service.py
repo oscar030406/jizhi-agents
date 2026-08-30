@@ -1228,14 +1228,39 @@ def _judge(retriever, query: str) -> dict[str, Any]:
     }
 
 
-@lru_cache(maxsize=1)
-def skill_map_api() -> dict[str, Any]:
-    """岗位技能地图 + 岗位市场事实 + 各领域语料库状态（企业内训/转岗培训入口页数据源）。
+def _domain_job_requirements(corpus: str) -> Any:
+    """域注册清单里这个库登记的岗位要求（⑧ 站写的 `job_requirements` 槽）。
 
-    数据全部来自磁盘既有资产：`data/jobs/job_skill_map.json`（岗位与技能清单、market_stats
-    真实统计）与受控知识库本身。
+    没登记返回 None。**没登记就是没有**，不拿主库那 14 个 AI 岗位顶替——
+    接入时管理者没投岗位/技能清单，这个域就没有岗位数据，如实说没有比给别人的答案强。
+    """
+    try:
+        data = json.loads((KB_DIR / "domain_registry.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None  # 清单不在盘上/坏了：未知，不当作「登记过空清单」
+    for row in data.get("corpora", []):
+        if isinstance(row, dict) and row.get("corpus") == corpus:
+            return row.get("job_requirements")
+    return None
 
-    **覆盖判定与生成/评测同源**：直接走 `get_retriever().search()`，用它自带的充分性门
+
+#: 覆盖判定口径。主域与外域共用这一份说明——尺子只有一把，不许各域各表。
+SKILL_COVERAGE_RULE = (
+    "覆盖 = 该技能（按完整技能名检索）在受控知识库拿到 ≥2 块语义相关证据"
+    "（bge-m3 余弦 ≥0.60，正文 ≥80 字符）。**不接受词法兜底**：兜底供生成用"
+    "（没素材总比空手强），但弱词面重叠不足以证明教材覆盖了该技能。"
+    "复合技能名另按顶层并列词（、与及，不拆括号、不拆「及其」）拆项各查一遍，"
+    "结果只用于补齐证据集与列出无料子项（missing_parts），不改判覆盖。"
+)
+
+
+def _jobs_coverage(retriever, jobs_raw: Any) -> list[dict[str, Any]]:
+    """岗位清单 × 某个域的知识库 → 逐技能覆盖判定。主域与外域共用同一把尺子。
+
+    岗位清单由调用方给：主域来自 `data/jobs/job_skill_map.json`，其他域来自域注册清单的
+    `job_requirements`。检索器也由调用方给——判哪个域的覆盖，就用哪个域的库。
+
+    **覆盖判定与生成/评测同源**：直接走检索器的 `search()`，用它自带的充分性门
     （bge-m3 语义余弦 ≥0.60，查询嵌入不可用时降级 TF-IDF ≥0.05；正文 ≥80 字符；
     可用块 ≥2），命中即覆盖，回带全部 source_id 供复核。
 
@@ -1246,16 +1271,13 @@ def skill_map_api() -> dict[str, Any]:
     运维、编码 Agent、Harness Engineering、自进化 Agent、企业级平台落地七项——
     十分钟读完的经验帖教不了这七件事，是词面碰瓷。充分性门的 ≥2 块要求会把这类挤掉。
     """
-    # ponytail: 整表 lru_cache（约 150 次检索，进程内算一次）。天花板：换库要重启服务刷新。
-    from backend.rag.retriever import get_retriever
-    from backend.schemas.resources import RetrievalResult
-
-    data = json.loads(JOB_SKILL_MAP_PATH.read_text(encoding="utf-8"))
-    retriever = get_retriever()
     jobs = []
-    for job in data.get("jobs", []):
+    for job in jobs_raw if isinstance(jobs_raw, list) else []:
+        # 外域岗位清单是管理者投的料，形不对就跳过——不让一条脏数据把整张图谱带崩
+        if not isinstance(job, dict):
+            continue
         skills = []
-        for text in job.get("skills", []):
+        for text in [s for s in (job.get("skills") or []) if isinstance(s, str)]:
             # 覆盖判定只认语义门（≥0.60），**不吃词法兜底**。兜底对生成是对的
             # （没素材总比空手强），对判定是后门：2026-08-21 实测两条语义 top1 只有
             # 0.153/0.276 的技能，落到词法 0.05 后各拿 6 块判成「已覆盖」，
@@ -1308,19 +1330,62 @@ def skill_map_api() -> dict[str, Any]:
             "skills": skills,
             "covered_count": sum(1 for s in skills if s["covered"]),
         })
-    return {
-        "provenance": data.get("_provenance", {}),
-        "market_stats": data.get("market_stats", {}),
-        "jobs": jobs,
+    return jobs
+
+
+@lru_cache(maxsize=8)
+def skill_map_api(domain: str = "ai") -> dict[str, Any]:
+    """某个域的岗位技能地图 + 岗位市场事实 + 各领域语料库状态（转岗培训入口页数据源）。
+
+    `domain` 决定这份图谱属于谁。主域（ai / default / 不传）走
+    `data/jobs/job_skill_map.json` 那 14 个 AI 岗位、用主库判覆盖，口径一字不改。
+    **其他域只认它自己登记的岗位要求**（域注册清单的 `job_requirements`），没登记就返回
+    空 jobs + reason —— 智能制造的学员看到 AI Agent 岗位是静默错配，比看到「暂无数据」
+    糟得多，而且返回体里以前连一格「这是哪个域」都没有，绕过页面直取接口就穿帮。
+    所以两条路都带 `domain`：调用方永远知道这份答案属于哪个域。
+    """
+    # ponytail: 按域整表 lru_cache（一个域约 150 次检索，进程内算一次）。
+    # 天花板：换库要 cache_clear（接入链 ⑧ 站的 _refresh_corpus_caches 已在调）。
+    from backend.rag.retriever import DEFAULT_CORPUS_ALIASES, get_corpus_retriever, get_retriever
+
+    name = (domain or "").strip().lower()
+    # corpora 两条路都带：外域没岗位数据时，这一格就是「为什么没有」的现场证据
+    base: dict[str, Any] = {
+        "domain": name or "ai",
+        "provenance": {},
+        "market_stats": {},
         "corpora": _corpus_status(),
-        "coverage_rule": (
-            "覆盖 = 该技能（按完整技能名检索）在受控知识库拿到 ≥2 块语义相关证据"
-            "（bge-m3 余弦 ≥0.60，正文 ≥80 字符）。**不接受词法兜底**：兜底供生成用"
-            "（没素材总比空手强），但弱词面重叠不足以证明教材覆盖了该技能。"
-            "复合技能名另按顶层并列词（、与及，不拆括号、不拆「及其」）拆项各查一遍，"
-            "结果只用于补齐证据集与列出无料子项（missing_parts），不改判覆盖。"
-        ),
+        "coverage_rule": SKILL_COVERAGE_RULE,
     }
+
+    if name in DEFAULT_CORPUS_ALIASES:
+        data = json.loads(JOB_SKILL_MAP_PATH.read_text(encoding="utf-8"))
+        return {
+            **base,
+            "domain": "ai",
+            "provenance": data.get("_provenance", {}),
+            "market_stats": data.get("market_stats", {}),
+            "jobs": _jobs_coverage(get_retriever(), data.get("jobs", [])),
+        }
+
+    declared = _domain_job_requirements(name)
+    jobs_raw = declared.get("jobs") if isinstance(declared, dict) else declared
+    if not isinstance(jobs_raw, list) or not jobs_raw:
+        return {
+            **base,
+            "jobs": [],
+            "reason": "该领域尚未登记岗位要求数据（接入时未提供岗位/技能清单）",
+        }
+    # 判哪个域的覆盖就用哪个域的库：未建库时 get_corpus_retriever 返回 None，
+    # 绝不回退主库——拿 AI 教材去证明制造岗位「已覆盖」正是这次要修的病。
+    retriever = get_corpus_retriever(name)
+    if retriever is None:
+        return {
+            **base,
+            "jobs": [],
+            "reason": f"领域语料库「{name}」尚未建成，岗位技能覆盖无从判定",
+        }
+    return {**base, "jobs": _jobs_coverage(retriever, jobs_raw)}
 
 
 # ---------------------------------------------------------------- 前测校准（自评当先验、前测校正档位）

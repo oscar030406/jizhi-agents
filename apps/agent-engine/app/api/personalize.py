@@ -395,11 +395,17 @@ def post_excerpt_relevance(
     dependencies=[Depends(verify_internal_token)],
 )
 def get_skill_map(
+    domain: str = "",
+    corpus: str = "",
     x_trace_id: str | None = Header(default=None),
 ) -> ApiResponse[dict[str, Any]]:
-    """岗位技能地图：岗位技能清单 + 知识库覆盖 + 市场事实 + 各领域语料库建设状态。"""
+    """岗位技能地图：岗位技能清单 + 知识库覆盖 + 市场事实 + 各领域语料库建设状态。
+
+    `domain`（`corpus` 是同义别名）指明问的是哪个域。不传 = 主域 ai。未登记岗位要求的域
+    返回空 jobs + reason——两个 main 各挂一份路由，漏一个就有一条路仍在给主域岗位。
+    """
     trace_id = _resolve_trace_id(x_trace_id)
-    data = _call_engine("岗位技能地图", trace_id, skill_map)
+    data = _call_engine("岗位技能地图", trace_id, lambda: skill_map(domain or corpus or "ai"))
     return ApiResponse(data=data, traceId=trace_id)
 
 
@@ -495,3 +501,25 @@ def _resolve_trace_id(trace_id: str | None) -> str:
     if trace_id and trace_id.strip():
         return trace_id.strip()
     return uuid.uuid4().hex
+
+
+@router.get(
+    "/domain-path/{corpus}",
+    response_model=ApiResponse[dict[str, Any]],
+    dependencies=[Depends(verify_internal_token)],
+)
+def get_domain_path(
+    corpus: str,
+    x_trace_id: str | None = Header(default=None),
+) -> ApiResponse[dict[str, Any]]:
+    """域级学习路径：该库的概念按前置图拓扑深度分阶。
+
+    直接吃 `backend.services.domain_path`，不走 engine_bridge——这条是纯读盘、
+    不碰模型也不碰 personalize_service 的编排，没有可降级的东西要桥接。
+    没跑过接入流水线的库返回 source="none" + reason，不回退到 AI 域那份手工路径。
+    """
+    from backend.services.domain_path import build_domain_path
+
+    trace_id = _resolve_trace_id(x_trace_id)
+    data = _call_engine("域级学习路径", trace_id, lambda: build_domain_path(corpus))
+    return ApiResponse(data=data, traceId=trace_id)

@@ -119,6 +119,63 @@ describe('引擎在线', () => {
   });
 });
 
+/**
+ * 快照的年龄要说出来。判据口径会随引擎变（覆盖判定 08-21 就换过一次），
+ * 引擎离线时访客看到的是部署时落盘的那一份，不提示就没人知道它有多旧。
+ */
+describe('快照过期提示', () => {
+  const aged = (days: number) => ({
+    ...snapshot,
+    snapshot_at: new Date(Date.now() - days * 24 * 3600 * 1000).toISOString(),
+  });
+
+  it('超过 14 天标注可能已过期', async () => {
+    stubFetch({ '/skill-map.json': ok(aged(20)), '/api/skills': dead });
+    const host = await render();
+    expect(host.textContent).toContain('快照可能已过期');
+  });
+
+  it('新鲜快照不加这句', async () => {
+    stubFetch({ '/skill-map.json': ok(aged(3)), '/api/skills': dead });
+    const host = await render();
+    expect(host.textContent).not.toContain('快照可能已过期');
+  });
+});
+
+/**
+ * 外域的诚实必须由服务端给出。
+ *
+ * 这页此前只有一个客户端 if（画像 corpus ≠ ai 就换空态），绕过页面直取 /api/skills
+ * 拿到的仍是整张 AI 岗位图谱。现在引擎按域作答：没登记岗位数据的域回 jobs: [] 加
+ * 一句 reason，页面照它换空态、原文显示那句话，且不许退回主域快照。
+ */
+describe('引擎说这个域没有岗位数据', () => {
+  const reason = '该领域尚未登记岗位要求数据（接入时未提供岗位/技能清单）';
+  const empty = { ...snapshot, snapshot_at: undefined, domain: 'manufacturing', jobs: [], reason };
+
+  beforeEach(() => {
+    stubFetch({
+      '/skill-map.json': ok(snapshot),
+      '/api/skills': ok(empty),
+      '/api/practice-scout': noContent,
+    });
+  });
+
+  it('按域问引擎，域跟着画像走', async () => {
+    await render();
+    const urls = (globalThis.fetch as unknown as { mock: { calls: [string][] } }).mock.calls.map(
+      ([u]) => String(u),
+    );
+    expect(urls.some((u) => u.startsWith('/api/skills?domain='))).toBe(true);
+  });
+
+  it('原文显示引擎给的理由，不摆主域岗位', async () => {
+    const host = await render();
+    expect(host.textContent).toContain(reason);
+    expect(host.textContent).not.toContain(snapshot.jobs[0].title);
+  });
+});
+
 describe('快照也没有', () => {
   it('两条路都空了才出空状态', async () => {
     stubFetch({ '/skill-map.json': noContent, '/api/skills': dead });

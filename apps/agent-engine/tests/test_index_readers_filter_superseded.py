@@ -31,6 +31,10 @@ ALLOWED = {
     # 追加路径要拿全部 source_id 判撞号，归档块的号也算撞
     #（撞了说明那个位置曾经存在过，不能再占）。
     "scripts/ingest_domain.py",
+    # 难度回填是**原地改写整份索引**：只动 difficulty 一格，其余逐行原样写回。
+    # 用 read_index_rows 会把归档行过滤掉，再整份写回就等于把它们删了——
+    # 那是数据丢失，不是过滤。它自己另有判断：归档行读得到但不参与分位、不改值。
+    "scripts/backfill_chunk_difficulty.py",
 }
 
 #: 裸读的特征：把索引文件按行 json.loads。

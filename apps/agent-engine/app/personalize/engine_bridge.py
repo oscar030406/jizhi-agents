@@ -201,10 +201,13 @@ def excerpt_relevance(
     return module.excerpt_relevance_api(contexts, source_ids, corpus)
 
 
-def skill_map() -> dict[str, Any]:
-    """调用 vendored 岗位技能地图（岗位/技能覆盖/市场事实/各领域语料库状态）。"""
+def skill_map(domain: str = "ai") -> dict[str, Any]:
+    """调用 vendored 岗位技能地图（岗位/技能覆盖/市场事实/各领域语料库状态）。
+
+    domain 指明问的是哪个域；未登记岗位要求的域返回空 jobs + reason，不回退主域岗位。
+    """
     module = _load_personalize_module()
-    return module.skill_map_api()
+    return module.skill_map_api(domain)
 
 
 def learner_blueprint(**kwargs: Any) -> dict[str, Any]:

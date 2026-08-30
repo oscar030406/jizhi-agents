@@ -53,7 +53,8 @@ from backend.rag.concepts import (  # noqa: E402
     to_vocabulary,
     vocabulary_report,
 )
-from backend.rag.difficulty import TIERS  # noqa: E402
+from backend.rag.difficulty import TIERS, extract_features, score  # noqa: E402
+from backend.rag.emit import _band_index, tier_bounds  # noqa: E402
 from backend.rag.intake import (  # noqa: E402
     apply_exclusions,
     detect_license,
@@ -255,8 +256,14 @@ def write_corpus_index(
 
     - `topic` 取**章级**（叶子父目录 / 作者的章），与前置图的概念面同一层——
       两级粒度是同一棵结构树，检索按节、选点按章。
-    - `difficulty` 取来源级区间的下界，**不逐 chunk 标**。逐 chunk 自动标难度实测
-      没过验收（重测 κ=0.292、收敛效度 0.282），这一格保留人工输入是实测结论。
+    - `difficulty` 走**与主库同一套**机械特征分位法（`backend.rag.emit.plan_sections`
+      用的那套：`extract_features` + `score` + 文件内分位切进声明区间）。
+      2026-08-31 修：这条链此前把每一块都写成区间下界，于是管理端填「分三档」建出来的库，
+      索引里 100% 是 L1——`excerptDifficultyCap` 给检索传的 `max_difficulty` 在这种库上
+      等于没有作用，所有档位的学习者拿到同一批证据块。主库（早期逐域脚本建的）有
+      L1/L2/L3/L4 的分布，新流水线建的库没有，同一个产品里两套行为。
+      **口径不变**：这套分位法只保证**语料内相对**难度，绝对准确度没过验收
+      （κ=0.292、收敛效度 0.282），所以它只用来分层、不作难度承诺——主库一直是这么用的。
     - `concept_tags` 用词表做机械子串匹配，不调模型。
 
     ## 重建不删旧块
@@ -282,6 +289,18 @@ def _build_chunks(name: str, sections: list, vocab: list[dict], tier_range: str)
 
     concepts = [v["concept"] for v in vocab]
     tier_floor = tier_range.split("-")[0].strip() or "L2"
+    band = TIERS[slice(*(lambda lo, hi: (lo - 1, hi))(*tier_bounds(tier_range)))] or [tier_floor]
+    # 难度按**文件内**相对排序切进声明区间——跨文件比绝对难度没有意义，这正是分位法
+    # 只保证相对分层的那条局限（口径与 emit.plan_sections 完全一致，主库就是这么标的）。
+    tier_of: dict[str, str] = {}
+    by_file: dict[str, list[tuple[str, str, list[str]]]] = {}
+    for key, text, heading_path in sections:
+        by_file.setdefault(key.partition("#")[0], []).append((key, text, heading_path))
+    for rows in by_file.values():
+        feats = [extract_features(text, heading_depth=len(hp)) for _, text, hp in rows]
+        idx = _band_index(score(feats), len(band)) if feats else []
+        for i, (key, _, _) in enumerate(rows):
+            tier_of[key] = band[idx[i]] if i < len(idx) else band[0]
     chunks: list[KnowledgeChunk] = []
 
     def strip_media(text: str) -> str:
@@ -320,7 +339,7 @@ def _build_chunks(name: str, sections: list, vocab: list[dict], tier_range: str)
                 source_id=f"{stem}#s{order}",
                 title=title,
                 topic=chapter,
-                difficulty=tier_floor,
+                difficulty=tier_of.get(key, tier_floor),
                 concept_tags=[c for c in concepts if c and c in text],
                 section=f"section-{order}",
                 url=None,

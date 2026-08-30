@@ -267,11 +267,19 @@ def evidence(
 
 
 @router.get("/skill-map", response_model=ApiResponse, dependencies=[Depends(verify_internal_token)])
-def skill_map(x_trace_id: str | None = Header(default=None)) -> ApiResponse:
-    """岗位技能地图：技能清单 + 知识库覆盖 + 市场事实 + 语料库建设状态。"""
+def skill_map(
+    domain: str = "",
+    corpus: str = "",
+    x_trace_id: str | None = Header(default=None),
+) -> ApiResponse:
+    """岗位技能地图：技能清单 + 知识库覆盖 + 市场事实 + 语料库建设状态。
+
+    `domain`（`corpus` 是同义别名，前端两种叫法都有）指明问的是哪个域。不传 = 主域 ai。
+    未登记岗位要求的域返回空 jobs + reason，不拿主域那 14 个 AI 岗位顶替。
+    """
     from backend.integration.personalize_service import skill_map_api
 
-    return ApiResponse(data=skill_map_api(), traceId=_trace_id(x_trace_id))
+    return ApiResponse(data=skill_map_api(domain or corpus or "ai"), traceId=_trace_id(x_trace_id))
 
 
 @router.get("/pretest", response_model=ApiResponse, dependencies=[Depends(verify_internal_token)])
@@ -294,3 +302,15 @@ def pretest_grade(payload: dict[str, Any], x_trace_id: str | None = Header(defau
     answers = {str(k): str(v) for k, v in (payload.get("answers") or {}).items()}
     self_levels = {str(k): int(v) for k, v in (payload.get("self_levels") or {}).items()}
     return ApiResponse(data=pretest_grade_api(answers, self_levels), traceId=_trace_id(x_trace_id))
+
+
+@router.get("/domain-path/{corpus}", response_model=ApiResponse, dependencies=[Depends(verify_internal_token)])
+def domain_path(corpus: str, x_trace_id: str | None = Header(default=None)) -> ApiResponse:
+    """域级学习路径：该库的概念按前置图拓扑深度分阶。
+
+    没跑过接入流水线的库返回 source="none" + reason，**不回退到 AI 域那份手工路径**——
+    拿别的域的顺序冒充本域，学习者照着学完才发现全错。
+    """
+    from backend.services.domain_path import build_domain_path
+
+    return ApiResponse(data=build_domain_path(corpus), traceId=_trace_id(x_trace_id))

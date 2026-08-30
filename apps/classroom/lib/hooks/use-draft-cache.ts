@@ -2,6 +2,13 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 
+/**
+ * 首页需求输入框的草稿键。首页用本 hook 读它，/skills 与 /path 的「拿这个去造课」
+ * 先写它再跳首页——同一个字面量散在四五处写过，改一次要满仓库找。键的读写归本模块管，
+ * 常量就落在这里。
+ */
+export const REQUIREMENT_DRAFT_KEY = 'requirementDraft';
+
 interface UseDraftCacheOptions {
   key: string;
   debounceMs?: number;

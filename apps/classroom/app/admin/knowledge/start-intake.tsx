@@ -151,6 +151,8 @@ export function StartIntake() {
     .split(/[\n,]/)
     .map((s) => s.trim())
     .filter(Boolean).length;
+  /** 填没填岗位/技能清单。只判空——形状归引擎判，前端不开第二个真源。 */
+  const hasJobs = String(pending?.get('job_requirements') ?? '').trim().length > 0;
 
   function edit(i: number, patch: Partial<{ label: string; audience: string }>) {
     setTiers((prev) => prev.map((t, j) => (j === i ? { ...t, ...patch } : t)));
@@ -371,6 +373,32 @@ export function StartIntake() {
           />
         </label>
 
+        {/* 岗位/技能清单：学习端「岗位技能地图」那一页的唯一数据源。字段直通引擎的
+            job_requirements Form 字段，形状也全归引擎判——前端再写一份校验规则，
+            两边迟早对不上，填错时还会蹦出两条打架的文案。
+            收 JSON 而不是「一行一个岗位」：技能项本身就带顿号（「PLC 编程、触摸屏组态」
+            是一项还是两项？），按分隔符猜只会猜错，而这份清单一般是从别处整理好的。 */}
+        <label className="block text-[11px] text-muted-foreground">
+          岗位/技能要求（选填）：这个域的学习者将来做什么岗、每个岗要会什么。
+          填了，学习端的「岗位技能地图」就按这份清单列岗位，并拿这个库逐条判有没有对应的教材；
+          <strong className="font-medium">不填也能建库</strong>
+          ，只是那一页会如实显示「该领域未登记岗位要求」。
+          格式是 JSON 数组，每项 <code>{'{title, skills, summary?}'}</code>
+          ；写坏了发起时当场退回并指出是第几个岗位，不会悄悄少收一条。
+          <span className="mt-1 block">
+            只在新建库时生效：勾了「追加到已有库」这次不重算注册清单，填了会被退回。
+          </span>
+          <textarea
+            name="job_requirements"
+            rows={5}
+            placeholder={
+              '[{"title":"液压设备维护技师","summary":"负责产线液压回路的日常维护",' +
+              '"skills":["液压系统日常点检","泵阀故障判读"]}]'
+            }
+            className={`${FIELD} mt-1 font-mono leading-relaxed`}
+          />
+        </label>
+
         <fieldset className="rounded-lg border border-border/70 bg-muted/30 px-3 py-3">
           <legend className="px-1 text-[11px] font-medium text-foreground">
             这批语料的学习者分几档？
@@ -548,6 +576,13 @@ export function StartIntake() {
               {excludeCount > 0
                 ? `剔除声明 ${excludeCount} 条：命中的文件在收料时按声明剔除。这份声明会整体取代这个库上一次的声明。`
                 : '没填剔除声明：沿用这个库上一次接入时声明过的那份（第一次接入则没有）。'}
+            </li>
+            {/* 岗位清单也在决定点回显。不在这里数有几个岗位：那要在前端再解析一遍
+                JSON，形状判断就变成两处真源；填没填这一格已经足够决定要不要回去改。 */}
+            <li className="text-muted-foreground">
+              {hasJobs
+                ? '岗位/技能要求：已填。建库后学习端的岗位技能地图按这份清单列岗位；格式不对会被引擎当场退回，那时这次接入不会发起。'
+                : '没填岗位/技能要求：这个库的岗位技能地图会显示「该领域未登记岗位要求」，学员照常按课程学。'}
             </li>
             {trial ? (
               <li className="rounded-lg border border-amber-300/70 bg-amber-50 px-3 py-2 text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-200">

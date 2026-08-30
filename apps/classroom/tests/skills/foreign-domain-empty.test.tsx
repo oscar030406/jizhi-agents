@@ -13,15 +13,30 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import { ForeignDomainEmpty } from '@/components/skills/foreign-domain-empty';
 
-const html = (label: string) => renderToStaticMarkup(createElement(ForeignDomainEmpty, { label }));
+const html = (label: string, reason?: string) =>
+  renderToStaticMarkup(createElement(ForeignDomainEmpty, { label, reason }));
 
 describe('非 AI 域的岗位技能页空态', () => {
-  it('说清这个领域没有岗位数据，并给出补的办法', () => {
+  it('说清这个领域没有岗位数据，只说现在能做什么', () => {
     const out = html('智能制造技能培训');
     expect(out).toContain('智能制造技能培训');
-    // 空态要回答两件事：现状是什么、怎么补
-    expect(out).toContain('管理员在接入知识库时可以补传');
-    expect(out).toContain('基于学情画像与语料结构');
+    expect(out).toContain('没有随附岗位／技能清单');
+    // 现在能做的两件事都指向真存在的东西：逐门学课、看已发布的实操项目
+    expect(out).toContain('回首页按课程逐门学');
+  });
+
+  it('不许许诺不存在的操作：管理端没有「补传岗位要求文件」这一格', () => {
+    // 写入侧 backend/services/domain_intake.py 的 job_requirements 恒为 None，
+    // 管理端也没有对应入口。指一个点不到的按钮，比直说没有更糟。
+    const out = html('智能制造');
+    expect(out).not.toContain('补传');
+    expect(out).not.toContain('岗位／技能要求文件');
+  });
+
+  it('引擎给了原因就用引擎的原话', () => {
+    const reason = '该领域尚未登记岗位要求数据（接入时未提供岗位/技能清单）';
+    const out = html('智能制造', reason);
+    expect(out).toContain(reason);
   });
 
   it('明说不展示其它领域的岗位图谱，并说明为什么', () => {

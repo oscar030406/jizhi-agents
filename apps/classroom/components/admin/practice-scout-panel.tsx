@@ -42,6 +42,19 @@ interface ScoutDraft {
   projects: ScoutProject[];
 }
 
+/**
+ * 从响应体里取出引擎给的失败原因。
+ *
+ * 全站错误信封（lib/server/api-response.ts）把详情放在 `error` **字符串**里，
+ * 这里原来读的是 `error.message`，于是「限流 / 模型未启用 / 搜不到候选」三种
+ * 不同的失败在界面上全塌成一句通用文案——整条链「失败显式不静默」的设计
+ * 在最后一跳被吃掉。对象形态（上游 API 直出的 `{error:{message}}`）也兼容。
+ */
+const errorText = (body: { error?: unknown } | null | undefined, fallback: string): string =>
+  (typeof body?.error === 'string'
+    ? body.error
+    : (body?.error as { message?: string } | undefined)?.message) || fallback;
+
 const LEVEL_LABEL: Record<ScoutProject['level'], string> = {
   starter: '第一个项目',
   advanced: '进阶',
@@ -72,7 +85,7 @@ export function PracticeScoutPanel({ corpus }: { readonly corpus: string }) {
         const body = await resp.json();
         if (!alive) return;
         if (resp.ok && body?.draft) applyDraft(body.draft as ScoutDraft);
-        else if (!resp.ok) setError(body?.error?.message ?? '读取失败');
+        else if (!resp.ok) setError(errorText(body, '读取失败'));
       } catch {
         if (alive) setError('读取初稿失败（引擎可能不在线）');
       } finally {
@@ -96,7 +109,7 @@ export function PracticeScoutPanel({ corpus }: { readonly corpus: string }) {
       });
       const body = await resp.json();
       if (!resp.ok) {
-        setError(body?.error?.message ?? `起草失败（HTTP ${resp.status}）`);
+        setError(errorText(body, `起草失败（HTTP ${resp.status}）`));
       } else {
         applyDraft(body.draft as ScoutDraft);
         setNotice('初稿已生成——逐条核对仓库链接后勾选发布。');
@@ -120,7 +133,7 @@ export function PracticeScoutPanel({ corpus }: { readonly corpus: string }) {
       });
       const body = await resp.json();
       if (!resp.ok) {
-        setError(body?.error?.message ?? '发布失败');
+        setError(errorText(body, '发布失败'));
       } else {
         applyDraft(body.draft as ScoutDraft);
         setNotice(

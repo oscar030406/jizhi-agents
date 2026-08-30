@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from backend.schemas.learner import DiagnosisResult, LearnerProfile
 from backend.schemas.resources import AuditResult, LearningPath, LearningPathStage, LearningResources
-from backend.services.concept_graph import concept_meta, load_graph, prerequisite_closure, topological_order
+from backend.services.concept_graph import (
+    concept_meta,
+    isolated_corpus,
+    load_graph,
+    prerequisite_closure,
+    topological_order,
+)
 
 _LEVELS = ["L1", "L2", "L3", "L4"]
 
@@ -23,6 +29,11 @@ class LearningPathPlannerAgent:
         audit: AuditResult,
     ) -> LearningPath:
         graph = load_graph()
+        # 独立建出来的库按自己的前置图排（`isolated_corpus` 只对有 <corpus>_intake 的库
+        # 返回域名）。此前这里拿的是全域并集：接入流水线给智能制造造了 51 条边，
+        # 却和 AI、具身的边拍在一张平表里，学习者学智能制造时闭包里能长出 AI 概念。
+        # 主库（ai/空）仍走并集——它的索引本来就含具身子域，硬过滤反而劈开了该在一起的两半。
+        domain = isolated_corpus(getattr(profile, "corpus", ""))
         # 学习者本次需要的概念 = 技能缺口 + 薄弱概念 + 目标概念；扩展到前置闭包。
         blueprint = diagnosis.personalization_blueprint
         gap_concepts = [
@@ -35,8 +46,8 @@ class LearningPathPlannerAgent:
             for gap in (blueprint.skill_gaps if blueprint else [])
         }
         needed = list(dict.fromkeys(gap_concepts + diagnosis.weak_concepts + resources.target_concepts))
-        closure = prerequisite_closure(needed) if graph else needed
-        ordered = topological_order(closure) if graph else needed
+        closure = prerequisite_closure(needed, domain) if graph else needed
+        ordered = topological_order(closure, domain) if graph else needed
 
         rec_rank = _rank(diagnosis.recommended_difficulty)
         weak_set = set(diagnosis.weak_concepts) | set(gap_concepts)
