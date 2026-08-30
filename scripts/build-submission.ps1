@@ -30,7 +30,8 @@ $mat = Join-Path $stage '01-材料文档'
 New-Item -ItemType Directory -Force -Path $mat | Out-Null
 # 方案文档真源 = 技术实现文档-终版.docx（2026-08-29 起，由用户手改版+当日口径修正合成；
 # design-implementation.md 是它的前身草稿，不再入包——两份技术文档等于口径分裂）。
-$techDoc = Join-Path $defense '技术实现文档-终版.docx'
+# 2026-08-30 起真源切换为产品叙事版（思路→实现→使用→效果→特色，创业赛揭榜挂帅口径）
+$techDoc = Join-Path $defense '技术实现文档-产品叙事版.docx'
 if (-not (Test-Path $techDoc)) {
     Write-Host "[阻断] 未找到技术实现文档（docs\06-defense\技术实现文档-终版.docx）" -ForegroundColor Red; exit 1
 }
