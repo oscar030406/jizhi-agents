@@ -142,8 +142,8 @@ export function MetricBand({
     <div className="space-y-4">
       {metrics.length === 0 ? (
         <p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-xs leading-relaxed text-muted-foreground">
-          读不到 metrics.json（引擎数据目录不可达），这里先空着，不拿旧值顶。
-          把 <code className="mx-1 font-mono">ENGINE_DATA_DIR</code> 指到引擎的 data 目录后这里出数。
+          读不到引擎数据。这一栏的数字来自服务器上的引擎产物，本站当前取不到，这里先空着，不拿旧值顶。
+          刷新页面重试；反复出现请联系本站运维检查引擎连接。
         </p>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2">

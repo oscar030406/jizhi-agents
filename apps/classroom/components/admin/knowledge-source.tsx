@@ -193,10 +193,8 @@ export function SourceFilesPanel({
         <h3 className="mb-2 text-xs font-medium">退回清单</h3>
         {view.rejected === null ? (
           <p className="text-[11px] leading-relaxed text-muted-foreground">
-            该库入库时未留退回记录。退回清单是 <code className="font-mono">scripts/ingest_domain.py</code>{' '}
-            这条接入链的产物（落在 <code className="font-mono">readiness.json</code> 的{' '}
-            <code className="font-mono">intake.rejected</code>）；没走这条链建的库，
-            「哪些文件没收、为什么」只写在建库脚本的常量里，磁盘上没有对应的清单文件。
+            这个库不是走当前接入链建的，没有留下退回记录。
+            「哪些文件没收、为什么」在当时的建库程序里写死了，没有可查的清单，这一栏出不了数。
           </p>
         ) : view.rejected.length === 0 ? (
           <p className="text-[11px] leading-relaxed text-muted-foreground">

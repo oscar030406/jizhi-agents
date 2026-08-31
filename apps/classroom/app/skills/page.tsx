@@ -551,7 +551,7 @@ export default function SkillsPage() {
             )}
             {asOfStale && (
               <p className="max-w-xs text-right text-xs leading-relaxed text-amber-700 dark:text-amber-300">
-                快照可能已过期，引擎在线时以实时数据为准。
+                这份数据可能不是最新的，系统恢复实时读取后会自动更新。
               </p>
             )}
           </div>

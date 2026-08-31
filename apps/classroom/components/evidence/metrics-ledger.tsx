@@ -3,6 +3,10 @@
 /**
  * 区 E「我们测出来的数」折叠台账（公共页规格区 E）。
  *
+ * 2026-08-31 起不再上 /evidence（撤下渲染调用）。文件保留不删：
+ * metrics.json 有 12 条 citations 指向本文件，其中 6 个指标只引这一处，
+ * 删文件会让 check_metrics.py 判「引用文件不存在」。
+ *
  * 每行三列：值 / 口径原文 / 复算命令。数字只用 apps/agent-engine/data/metrics.json
  * 里真有的条目，口径跟着数字走——脱离口径的数字禁止上页。
  * 改这里的任何数字必须先改 metrics.json 真源，再跑

@@ -13,7 +13,6 @@ import { useEffect, useState } from 'react';
 import { SiteHeader } from '@/components/site-header';
 import { EmptyState } from '@/components/ui/empty-state';
 import { AuditShowcaseSection, type CourseAuditEntry } from '@/components/evidence/audit-showcase';
-import { MetricsLedgerSection } from '@/components/evidence/metrics-ledger';
 import { TutorReplaySection } from '@/components/evidence/tutor-replay';
 
 export default function EvidencePage() {
@@ -60,8 +59,8 @@ export default function EvidencePage() {
         <div className="pt-8">
           <h1 className="text-2xl font-semibold">审核实录</h1>
           <p className="mt-2 max-w-3xl text-sm leading-[1.75] text-muted-foreground">
-            这里存放审核智能体批改的原句与修订、一轮导学的完整回放，
-            以及各项指标数字与统计口径，均取自生成过程的存档。
+            这里存放审核智能体批改的原句与修订，以及一轮导学的完整回放，
+            均取自生成过程的存档。
           </p>
         </div>
 
@@ -77,7 +76,7 @@ export default function EvidencePage() {
             {listState === 'failed' ? (
               <EmptyState
                 title="读不到课程清单"
-                hint="/api/classroom 没有正常返回。刷新页面重试；仍然读不到就是课程服务没起来。"
+                hint="课程清单这次没有正常返回。刷新页面重试；反复读不到就是本站的课程服务暂时不可用，稍后再来。"
               />
             ) : (
               <EmptyState
@@ -91,8 +90,6 @@ export default function EvidencePage() {
         <div className="mt-16">
           <TutorReplaySection />
         </div>
-
-        <MetricsLedgerSection />
       </main>
     </div>
   );

@@ -150,8 +150,8 @@ export default async function PathPage() {
           {pathData.nodes.length === 0 && (
             <div className="mt-8">
               <EmptyState
-                title="路径表里还没有课程节点"
-                hint="课程序列取自 data/learning-path.json 的 nodes 字段，当前为空。往里补节点后刷新本页即可。"
+                title="学习路径还没有课程节点"
+                hint="本站的学习路径还没有配置课程。管理者在管理端补齐后，这一页会自动出内容。想先学，可以从首页直接生成一门课。"
               />
             </div>
           )}

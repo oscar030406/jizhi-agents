@@ -90,7 +90,7 @@ const LOCAL_DATA: DataRow[] = [
     where:
       'IndexedDB：maic-runtime（sessions / records）；迁移期旧键 quizDraft: / quizAnswers: / quizResults: / quizAttemptId:',
     keep: '无过期，直到手动清除',
-    leaves: '仅正确率数值发往本机引擎做反馈决策',
+    leaves: '仅正确率数值发往本站服务器上的多智能体引擎做反馈决策',
   },
   {
     item: '课堂进度与运行标记',
@@ -317,7 +317,7 @@ export default function PrivacyPage() {
           description={
             persistenceOn
               ? '本部署已开启服务端持久化：登录后，课程与学习记录按账户存在服务器数据库里；未登录时数据只在你这台机器的浏览器中。'
-              : '本部署未开启服务端持久化（NEXT_PUBLIC_PERSISTENCE 未设置），所有学习数据只在你这台机器的浏览器里。'
+              : '本部署没有把学习数据存到服务器：课程、画像与答题记录只留在你这个浏览器里，换浏览器或清掉站点数据就没了。'
           }
         >
           <div className="overflow-x-auto">
@@ -328,7 +328,7 @@ export default function PrivacyPage() {
                   <th className="py-2 pr-3 font-medium">内容</th>
                   <th className="py-2 pr-3 font-medium">存在哪</th>
                   <th className="py-2 pr-3 font-medium">保留多久</th>
-                  <th className="py-2 font-medium">是否离开本机</th>
+                  <th className="py-2 font-medium">是否发给外部</th>
                 </tr>
               </thead>
               <tbody>
@@ -361,7 +361,8 @@ export default function PrivacyPage() {
           <ol className="space-y-3 list-decimal list-inside">
             <li>
               <span className="font-medium text-foreground">大模型服务商</span>
-              （由你在设置里选择，本机默认配置为硅基流动）：收到的是
+              （由本站服务端统一配置，当前接的是硅基流动；学习者端只读，不需要也不能填 API
+              Key）：收到的是
               <em className="not-italic font-mono text-xs"> 你输入的学习需求文本 </em>、
               由画像换算出的
               <em className="not-italic font-mono text-xs"> 讲法指令段 </em>
@@ -422,13 +423,9 @@ export default function PrivacyPage() {
             </div>
           </div>
           <p className="text-sm leading-relaxed text-muted-foreground">
-            我们另外写了一个脱敏函数
-            <span className="font-mono text-xs"> lib/privacy/redact.ts</span>
-            （手机号、邮箱、身份证、带标签的学号工号、API Key、绝对路径等 12 类， 自检命令{' '}
-            <span className="font-mono text-xs">node lib/privacy/redact.check.mjs</span>）。
-            它接在两处：一是统一日志出口
-            <span className="font-mono text-xs"> lib/logger.ts</span>
-            ——服务端与浏览器端经它写出的每一行日志，落到控制台之前先过一遍脱敏，
+            我们另外写了一个脱敏函数，覆盖手机号、邮箱、身份证、带标签的学号工号、API
+            Key、绝对路径等 12 类，配套自检用例随代码一起跑。
+            它接在两处：一是统一日志出口——服务端与浏览器端写出的每一行日志，落到控制台之前先过一遍脱敏，
             例如接口把你填的学习目标原样写进日志的那类语句；二是「导出实操指南」 下载的
             Markdown，里面的画像摘要行会脱敏。
           </p>
@@ -444,7 +441,7 @@ export default function PrivacyPage() {
         <Section
           icon={Eraser}
           title="四、你的控制权：查看与清除"
-          description="全部数据在你本机，随时可查可删。"
+          description="这些数据你自己就能查到，也能一键清掉浏览器里的那部分。"
         >
           <p>
             <span className="font-medium">查看：</span>

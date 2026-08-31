@@ -4,8 +4,8 @@
  * 公共首页「相关指标」三条（工单 WO-C1 §4 用户 08-15 点名）。
  *
  * 首页只列这三条，其余（外部数据集上的检测层 F1、仲裁挡下的比例、岗位技能证据覆盖、
- * 学习增益对照、领域泛化…）留在 /evidence 的完整台账里——不是撤数据，是首页不列。
- * 完整台账的组件是 components/evidence/metrics-ledger.tsx，本文件不重复它的口径长段。
+ * 学习增益对照、领域泛化…）不上首页。完整台账 components/evidence/metrics-ledger.tsx
+ * 2026-08-31 起也已从 /evidence 撤下（文件保留，见该文件头注），本文件不重复它的口径长段。
  *
  * 数字纪律（与台账同一条）：值只能来自 apps/agent-engine/data/metrics.json。
  * 本页**不再手抄那些数字**——三张卡的每个数都来自 public-metrics.json，那份文件由
@@ -67,7 +67,7 @@ export function KeyMetrics() {
           href="/evidence"
           className="rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring focus-visible:outline-none"
         >
-          每个数的完整口径与复算命令 →
+          审核与导学的原始记录 →
         </Link>
       </div>
       <dl className="mt-5 grid gap-4 sm:grid-cols-3">

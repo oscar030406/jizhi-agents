@@ -41,7 +41,8 @@ export default async function IntakeRunPage({
 
         {payload.truncated && (
           <p className="mt-6 text-[11px] text-amber-700 dark:text-amber-300">
-            这次 run 的事件超过 2000 条，本页只取了前 2000 条。完整事件在磁盘上的 events.jsonl 里。
+            这次接入的事件超过 2000 条，本页只显示前 2000
+            条；完整事件留在服务器上的这次接入记录里，需要全量导出请联系本站运维。
           </p>
         )}
 

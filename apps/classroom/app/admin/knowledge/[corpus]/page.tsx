@@ -25,8 +25,9 @@ export const dynamic = 'force-dynamic';
 
 const BACKEND_NOTE: Record<string, string> = {
   vector: '向量索引已建（bge-m3）。查询嵌入不可用时检索自动降级 TF-IDF，不会失败。',
-  tfidf: '只有 jsonl 索引，检索走 TF-IDF。建向量索引要跑 scripts/build_embedding_index.py。',
-  none: '索引文件不在盘上，引擎按这个名字取不到检索器，用它生成课程时没有素材可引。',
+  tfidf:
+    '目前只有关键词索引，检索走 TF-IDF；语义检索用的向量索引还没建。需要升级成语义检索，联系本站运维。',
+  none: '这个库还没建成索引，系统按这个名字取不到检索器；用它生成课程时没有素材可引。先在「接入新知识库」把这个库跑完。',
 };
 
 export default async function CorpusDetailPage({
@@ -79,7 +80,7 @@ export default async function CorpusDetailPage({
         <section className="mb-10">
           <h2 className="mb-1 text-sm font-medium">入库管线</h2>
           <p className="mb-4 text-[11px] leading-relaxed text-muted-foreground">
-            亮灯的判据只有一条：这一站的产物文件在盘上。路径与更新时间都摆出来，可以直接去磁盘核。
+            亮灯的判据只有一条：这一站在服务器上已经产出结果文件。每站下面标出它对应的文件名与最后更新时间，你我看到的是同一份。
             亮灯不代表质量——质量看下面的就绪度闸位。
           </p>
           <ol className="space-y-5 border-l border-border/70 pl-1">
@@ -255,22 +256,12 @@ export default async function CorpusDetailPage({
         </section>
 
         <details className="rounded-2xl border border-border bg-card p-5 text-xs shadow-card">
-          <summary className="cursor-pointer text-sm font-medium">怎么复算这一页的数字</summary>
+          <summary className="cursor-pointer text-sm font-medium">这些数字是怎么数出来的</summary>
           <p className="mt-3 leading-relaxed text-muted-foreground">
-            在 <code className="font-mono">apps/agent-engine</code> 下跑，路径就是上面每站标的那个：
+            证据块数 = 索引文件的行数；每一站的更新时间 =
+            该站产物文件的最后修改时间；素材量来自定期跑的语料体检。
+            原始产物在上面的「原件与处理过程」里可以逐个点开看原文。需要拿到复算脚本，向本站运维索取。
           </p>
-          <pre className="mt-2 overflow-x-auto rounded-lg bg-muted/60 px-3 py-2 font-mono text-[11px] leading-relaxed">
-            {[
-              '# 证据块数（= 索引文件的行数）',
-              `python -c "print(sum(1 for _ in open('${corpus.indexPath}',encoding='utf-8')))"`,
-              '',
-              '# 某一站产物的更新时间（换成那一站标的路径）',
-              `python -c "import os,datetime;print(datetime.datetime.utcfromtimestamp(os.path.getmtime('${corpus.indexPath}')))"`,
-              '',
-              '# 素材量那一格（全部库跑一遍，零成本；加 --score 才会调模型打分）',
-              'python scripts/corpus_fitness.py',
-            ].join('\n')}
-          </pre>
         </details>
       </main>
     </>

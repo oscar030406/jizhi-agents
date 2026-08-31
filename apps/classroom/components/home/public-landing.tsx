@@ -610,7 +610,7 @@ export function PublicLanding() {
             <div className="mt-5">
               <EmptyState
                 title="读不到课程清单"
-                hint="课程墙的数据来自本站的课程接口，这次没有正常返回。刷新页面重试；仍然读不到就是课程服务没起来。"
+                hint="课程墙的数据这次没有正常返回。刷新页面重试；反复读不到就是本站的课程服务暂时不可用，稍后再来。"
               />
             </div>
           )}
@@ -727,11 +727,6 @@ export function PublicLanding() {
                 <Link href="/evidence" className="hover:text-foreground">
                   审核实录
                 </Link>
-              </li>
-              <li>
-                <a href="/evidence#metrics-ledger" className="hover:text-foreground">
-                  每个数字的口径与复算命令
-                </a>
               </li>
               <li>
                 <Link href="/agents" className="hover:text-foreground">

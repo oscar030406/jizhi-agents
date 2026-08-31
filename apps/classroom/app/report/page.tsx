@@ -70,7 +70,7 @@ import { listStages, loadStageData, type StageListItem } from '@/lib/utils/stage
 import type { Scene, Stage } from '@/lib/types/stage';
 import type { SceneOutline, LearnerProfileFields } from '@/lib/types/generation';
 import type { LearnerBlueprint } from '@/lib/generation/learner-profile';
-import { conceptKeywords, conceptLabel } from '@/lib/knowledge/concept-labels';
+import { conceptLabel } from '@/lib/knowledge/concept-labels';
 import { domainLabel } from '@/lib/knowledge/domain-labels';
 import { DEFAULT_LEARNER_PROFILE } from '@/components/generation/learner-profile-popover';
 import {
@@ -242,16 +242,6 @@ function summarizeAudits(scenes: Scene[]): AuditSummary {
     else s.published += 1;
   }
   return s;
-}
-
-/** Course text used to answer "does this course touch that concept?" */
-function courseHaystack(course: CourseData): string {
-  const parts: string[] = [course.stage.name, course.stage.description ?? ''];
-  for (const o of course.outlines) {
-    parts.push(o.title, o.description, ...(o.keyPoints ?? []), o.teachingObjective ?? '');
-  }
-  for (const s of course.scenes) parts.push(s.title);
-  return parts.join(' \n ').toLowerCase();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1311,7 +1301,7 @@ export function NextStepPanel({ bp, gapConcepts }: { bp: LearnerBlueprint; gapCo
 // Chart 3 — 学习路径规划图
 // ─────────────────────────────────────────────────────────────────────────────
 
-function LearningPathChart({ bp, course }: { bp: LearnerBlueprint; course: CourseData | null }) {
+function LearningPathChart({ bp }: { bp: LearnerBlueprint }) {
   const byPriority = [...(bp.blueprint?.skill_gaps ?? [])].sort(
     (a, b) => (a.priority ?? 99) - (b.priority ?? 99) || b.gap - a.gap,
   );
@@ -1334,158 +1324,11 @@ function LearningPathChart({ bp, course }: { bp: LearnerBlueprint; course: Cours
     );
   }
 
-  const haystack = course ? courseHaystack(course) : '';
-  const covered = (concept: string) =>
-    !!course && conceptKeywords(concept).some((k) => haystack.includes(k));
-
-  const nodeW = 158;
-  const nodeH = 96;
-  const gapX = 44;
-  const padX = 8;
-  const width = padX * 2 + gaps.length * nodeW + (gaps.length - 1) * gapX;
-  const height = nodeH + 34;
-
   return (
     <div className="space-y-3">
       <NextStepPanel bp={bp} gapConcepts={gaps.map((g) => g.concept)} />
 
-      {/* 节点徽标只写得下「本课程」三个字，但全图必须有一处写明它指哪门课——
-          验收实测有学习者对着「未覆盖」问"为什么"，就是因为没标课名。 */}
-      {course && (
-        <p className="text-xs text-muted-foreground">
-          覆盖比对的「本课程」=「{course.stage.name}」；✗ 未覆盖表示该缺口这门课不讲，
-          需要在其他课程里补。
-        </p>
-      )}
-
-      <div className="overflow-x-auto pb-1">
-        <svg
-          viewBox={`0 0 ${width} ${height}`}
-          width={width}
-          height={height}
-          className="text-foreground"
-          role="img"
-          aria-label="学习路径规划图"
-        >
-          <defs>
-            <marker
-              id="report-arrow"
-              viewBox="0 0 10 10"
-              refX="9"
-              refY="5"
-              markerWidth="6"
-              markerHeight="6"
-              orient="auto-start-reverse"
-            >
-              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--primary)" />
-            </marker>
-          </defs>
-
-          {gaps.map((g, i) => {
-            const x = padX + i * (nodeW + gapX);
-            const isCovered = covered(g.concept);
-            const current = g.current_mastery;
-            const target = g.target_mastery;
-            return (
-              <g key={g.concept}>
-                {i > 0 && (
-                  <line
-                    x1={x - gapX + 6}
-                    y1={nodeH / 2 + 14}
-                    x2={x - 6}
-                    y2={nodeH / 2 + 14}
-                    stroke="var(--primary)"
-                    strokeWidth={2}
-                    markerEnd="url(#report-arrow)"
-                  />
-                )}
-                <rect
-                  x={x}
-                  y={14}
-                  width={nodeW}
-                  height={nodeH}
-                  rx={10}
-                  fill="currentColor"
-                  opacity={0.04}
-                />
-                <rect
-                  x={x}
-                  y={14}
-                  width={nodeW}
-                  height={nodeH}
-                  rx={10}
-                  fill="none"
-                  stroke={isCovered ? 'var(--green-deep)' : 'var(--yellow-deep)'}
-                  strokeWidth={1.5}
-                  opacity={0.7}
-                />
-                <text x={x + 12} y={10} fontSize={9} fill="currentColor" opacity={0.5}>
-                  第 {i + 1} 步
-                  {ordering.prereqOf[g.concept]?.length
-                    ? ` · 需先学 ${ordering.prereqOf[g.concept]
-                        .map((p) => conceptLabel(p))
-                        .join('、')
-                        .slice(0, 16)}`
-                    : ''}
-                </text>
-                <text x={x + 12} y={36} fontSize={12} fontWeight={600} fill="currentColor">
-                  {conceptLabel(g.concept).slice(0, 9)}
-                </text>
-                <text x={x + 12} y={54} fontSize={10} fill="currentColor" opacity={0.7}>
-                  {current !== undefined && target !== undefined
-                    ? `掌握度 ${current.toFixed(2)} → ${target.toFixed(2)}`
-                    : `缺口 ${g.gap.toFixed(2)}`}
-                </text>
-                {/* progress rail: current vs target */}
-                <rect
-                  x={x + 12}
-                  y={62}
-                  width={nodeW - 24}
-                  height={6}
-                  rx={3}
-                  fill="currentColor"
-                  opacity={0.1}
-                />
-                {target !== undefined && (
-                  <rect
-                    x={x + 12}
-                    y={62}
-                    width={(nodeW - 24) * Math.min(1, target)}
-                    height={6}
-                    rx={3}
-                    fill="var(--primary)"
-                    opacity={0.35}
-                  />
-                )}
-                {current !== undefined && (
-                  <rect
-                    x={x + 12}
-                    y={62}
-                    width={Math.max(1, (nodeW - 24) * Math.min(1, current))}
-                    height={6}
-                    rx={3}
-                    fill="var(--primary)"
-                  />
-                )}
-                <text
-                  x={x + 12}
-                  y={86}
-                  fontSize={10}
-                  fill={isCovered ? 'var(--green-deep)' : 'var(--yellow-deep)'}
-                  fontWeight={500}
-                >
-                  {isCovered ? '✓ 本课程已覆盖' : '✗ 本课程未覆盖'}
-                </text>
-                <text x={x + 12} y={102} fontSize={9} fill="currentColor" opacity={0.55}>
-                  缺口 {g.gap.toFixed(2)}
-                </text>
-              </g>
-            );
-          })}
-        </svg>
-      </div>
-
-      <Caliber summary="节点顺序与「已覆盖」的口径">
+      <Caliber summary="这份缺口清单的排序口径">
         {ordering.usedGraph ? (
           <>
             先按概念前置图排拓扑序（{ordering.matched}/{gaps.length} 个概念在前置图词表内），
@@ -1501,16 +1344,8 @@ function LearningPathChart({ bp, course }: { bp: LearnerBlueprint; course: Cours
             </span>
           </>
         )}
-        {course ? (
-          <>
-            「已覆盖 / 未覆盖」是把概念的关键词（与引擎选概念时用的同一套词表）在本课程 「
-            {course.stage.name}」的大纲标题、描述、要点和场景标题中做匹配得到的，属于文本匹配结论，
-            不代表学习者已经掌握。
-          </>
-        ) : (
-          <>当前没有可比对的课程，因此不显示覆盖情况。</>
-        )}
       </Caliber>
+
 
       <div className="grid gap-1.5">
         {gaps.map((g) => (
@@ -2017,15 +1852,24 @@ export default function ReportPage() {
             <SectionCard
               icon={GitBranch}
               title="学习路径规划"
-              description="按引擎给出的技能缺口优先级串成有向路径，并标出每个概念在本课程里是否被覆盖。"
+              description="按引擎给出的技能缺口优先级与概念前置关系排出补齐顺序，并给出下一步先学什么。"
             >
-              {bp ? <LearningPathChart bp={bp} course={course} /> : blueprintFallback()}
-              <p className="mt-3 text-xs text-muted-foreground">
-                概念级路径之上是课程级路径：
-                <a href="/path" className="text-blue-deep underline underline-offset-2">
-                  查看从高数/Python 到岗位方向的完整课程路径 →
-                </a>
-              </p>
+              {bp ? <LearningPathChart bp={bp} /> : blueprintFallback()}
+              <a
+                href="/path"
+                className="mt-5 flex items-center justify-between gap-4 rounded-xl border border-border bg-card px-5 py-4 shadow-card transition-colors hover:bg-accent"
+              >
+                <span>
+                  <span className="block text-sm font-medium">
+                    学习路径规划：查看完整课程路径全景 →
+                  </span>
+                  <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
+                    上面排的是概念级的补齐顺序。整条培养路线——从高数、Python
+                    到各岗位方向的课程怎么衔接——在路径全景页上有一张完整的图。
+                  </span>
+                </span>
+                <GitBranch className="size-5 shrink-0 text-muted-foreground" />
+              </a>
             </SectionCard>
           </div>
 

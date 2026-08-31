@@ -152,7 +152,7 @@ function CheckupBlock({
               产物读得到就换成能点开的按钮；读不到才退回印路径，让人去服务器上找。 */}
           {artifacts.length > 0
             ? '没讲到的是哪几个，逐条落在本轮产物里，点开看：'
-            : '没讲到的是哪几个，逐条落在本轮的 trial_courses/<档>_kc_misses.json（本机上读不到这一轮的产物目录）。'}
+            : '没讲到的是哪几个，这一轮的明细没有在本站留存，页面上展不开。'}
         </p>
         {artifacts.length > 0 ? (
           <div className="mt-2">
@@ -405,11 +405,11 @@ export default async function GeneralizationPage() {
               <li>盲评 x/n：判官读不到档位标签，只看正文猜这屏写给谁。</li>
               <li>成本读 classroom 的调用账本增量，账本没有单价字段，所以不折算成钱。</li>
             </ul>
-            <p className="text-foreground">在 apps/agent-engine 下重跑（会调用生成与审核接口，按 token 计费）：</p>
-            <pre className="overflow-x-auto rounded-lg bg-muted/60 px-3 py-2 font-mono text-[11px]">
-              python scripts/run_corpus_checkup.py iotdb
-            </pre>
-            <p>读这一页的原始产物（路径是服务器上的位置，点文件名就地看原文）：</p>
+            <p className="text-foreground">
+              重跑一次体检会调用生成与审核接口、按 token
+              计费，由本站运维在服务器上发起，页面不提供触发按钮。
+            </p>
+            <p>读这一页的原始产物（点文件名就地看原文）：</p>
             {checked.length === 0 ? (
               <p>（还没有跑完的体检）</p>
             ) : (
@@ -436,7 +436,10 @@ export default async function GeneralizationPage() {
             </p>
             {others.length > 0 ? (
               <div className="space-y-1.5">
-                <p>盘上还有这几个库。它们都在 AI 大类内部或还没成规模，不是跨大类泛化，本页三栏不列：</p>
+                <p>
+                  系统里还有这几个库。它们都在 AI
+                  大类内部或还没成规模，不是跨大类泛化，本页三栏不列：
+                </p>
                 <ul className="list-disc space-y-1 pl-4">
                   {others.map((o) => (
                     <li key={o.corpus}>

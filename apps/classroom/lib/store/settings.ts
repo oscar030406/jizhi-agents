@@ -2004,9 +2004,10 @@ export const useSettingsStore = create<SettingsState>()(
           (state as Record<string, unknown>).autoConfigApplied = true;
         }
 
-        if ((state as Record<string, unknown>).agentMode === undefined) {
-          (state as Record<string, unknown>).agentMode = 'preset';
-        }
+        // 造课卡里的「课堂角色」入口已下线（2026-08-31），agentMode 不再有任何 UI 能改它。
+        // 这里无条件写成 'auto'：老 state 原来会被迁成 'preset'，那批人删掉入口后会
+        // 永久跳过 agent-generation 那一步、且再也切不回来。
+        (state as Record<string, unknown>).agentMode = 'auto';
         if ((state as Record<string, unknown>).autoAgentCount === undefined) {
           (state as Record<string, unknown>).autoAgentCount = 3;
         }

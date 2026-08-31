@@ -16,10 +16,14 @@ import { API_ERROR_CODES, apiError, apiSuccess } from '@/lib/server/api-response
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('PracticeScoutDraft API');
-const DRAFT_TIMEOUT_MS = 240_000;
+// 引擎侧实测：主域一次起草 286 秒（未认证 GitHub 配额下每轮搜索要等 6.5 秒，
+// 三轮降词 + 十四次 README + 两次模型调用）。原来这里卡 240 秒，桥先放弃、
+// 管理员看到「超时」，而引擎四十多秒后照常把初稿写盘了——稿子在，人却以为失败。
+const DRAFT_TIMEOUT_MS = 480_000;
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+export const maxDuration = 500;
 
 async function managerGate() {
   if (!accountsEnabled()) {
@@ -101,6 +105,12 @@ export async function POST(
     return apiSuccess({ draft: body });
   } catch (error) {
     log.warn(`draft failed for ${corpus}: ${String(error)}`);
-    return apiError(API_ERROR_CODES.UPSTREAM_ERROR, 502, '起草超时或引擎不可达，可稍后重试。');
+    // 超时不等于失败：引擎是同步长任务，桥断开后它仍会把初稿写完。
+    // 说死「失败」会让管理员重复发起，白烧一轮 GitHub 配额。
+    return apiError(
+      API_ERROR_CODES.UPSTREAM_ERROR,
+      504,
+      '起草仍在进行中（要实时搜十几个仓库并逐个读说明，通常三到五分钟）。稍后刷新本页即可看到初稿，不必重复发起。',
+    );
   }
 }

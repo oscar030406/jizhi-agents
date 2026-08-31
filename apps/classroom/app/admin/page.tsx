@@ -259,7 +259,7 @@ export default async function AdminPage() {
             <Caliber summary="展开明细：每个库的就绪度报告（九栏 + 四道闸）">
               <p>
                 接入链的六站：分诊 → 切块 → 许可 → 概念词表 → 前置图 → 难度。
-                换新领域时命令行参数变，脚本不变。
+                换新领域时只有输入参数不同，接入链本身一个字不改——同一条链路可以直接用在别的领域上。
               </p>
               <p>
                 前置边的方向精度已经量过：跨两个陌生领域抽检 21 条，正确 10 条（47.6%），
@@ -330,11 +330,8 @@ export default async function AdminPage() {
         <Section icon={Route} title="学习路径规划图">
           {maps.length === 0 ? (
             <p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-xs leading-relaxed text-muted-foreground">
-              读不到前置图。这张图要引擎数据目录下的
-              <code className="mx-1 font-mono">knowledge_base/prereq_graph.json</code>
-              与 <code className="mx-1 font-mono">knowledge_base/concept_graph.json</code>：
-              先跑 <code className="font-mono">scripts/ingest_domain.py</code> 接入一个领域，
-              或把 <code className="mx-1 font-mono">ENGINE_DATA_DIR</code> 指到引擎的 data 目录。
+              读不到引擎数据。这张图来自服务器上的引擎产物，本站当前取不到。
+              刷新页面重试；反复出现请联系本站运维检查引擎连接。
             </p>
           ) : (
             <div className="space-y-8">

@@ -582,7 +582,7 @@ export function IntakeRunView({
             <p className="mt-1 text-muted-foreground">
               {cleaned.length > 0
                 ? `已清掉这次建的半成品：${cleaned.join('、')}`
-                : '没有需要清理的半成品——失败发生在动盘之前，磁盘上没留下这个库。'}
+                : '没有需要清理的半成品——失败发生在写入之前，系统里没有留下这个库。'}
             </p>
           </div>
         )}

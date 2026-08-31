@@ -72,16 +72,9 @@ export default async function KnowledgeCenterPage() {
               <StartIntake />
             </div>
 
-            <Caliber summary="展开：命令行接入、以及每次接入留下的记录">
+            <Caliber summary="展开：每次接入留下的记录">
               <p>
-                也可以在引擎目录下走命令行，产出的是同一套东西（这条路不留 run 记录）：
-              </p>
-              <pre className="overflow-x-auto rounded-lg bg-muted/60 px-3 py-2 font-mono text-[11px] leading-relaxed">
-                python scripts/ingest_domain.py --dir &lt;文档目录&gt; --name &lt;库名&gt; --scope
-                &quot;要培养什么人&quot;
-              </pre>
-              <p>
-                走流水线接入的每一次都留了记录——哪一站什么时候跑的、跑出什么数、
+                走这个表单接入的每一次都留了记录——哪一站什么时候跑的、跑出什么数、
                 哪几站是同时跑的、失败的那次卡在哪。档位定义也存在同一份记录里。
               </p>
             </Caliber>
@@ -113,10 +106,8 @@ export default async function KnowledgeCenterPage() {
             <div className="mt-7">
               {corpora.length === 0 ? (
                 <p className="rounded-xl border border-dashed border-border px-4 py-10 text-center text-xs leading-relaxed text-muted-foreground">
-                  读不到引擎数据目录。这一页读的是{' '}
-                  <code className="font-mono">ENGINE_DATA_DIR</code>（默认{' '}
-                  <code className="font-mono">../agent-engine/data</code>）下的产物文件，
-                  部署形态不同的话要把这个环境变量指对。
+                  读不到引擎数据。这一页的数字来自服务器上的引擎产物，本站当前取不到。
+                  刷新页面重试；反复出现请联系本站运维检查引擎连接。
                 </p>
               ) : (
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -144,17 +135,14 @@ export default async function KnowledgeCenterPage() {
                     <li key={note}>{note}</li>
                   ))}
                 </ul>
-                <Caliber summary="展开：为什么会落后、怎么重新生成">
+                <Caliber summary="展开：为什么会落后、什么时候更新">
                   <p>
-                    岗位技能地图页先渲染 <code className="font-mono">public/skill-map.json</code>，
-                    引擎在线时再换成实时数据；引擎离线时访客看到的是快照里的旧数字。
-                    重新生成（在 <code className="font-mono">apps/classroom</code>{' '}
-                    下，对着将来服务这个站点的那台引擎跑）：
+                    岗位技能地图页先渲染一份构建时落下的快照，引擎在线时再换成实时数据；
+                    引擎离线时访客看到的是快照里的旧数字。
                   </p>
-                  <pre className="overflow-x-auto rounded-lg bg-muted/60 px-3 py-2 font-mono text-[11px] leading-relaxed">
-                    node --env-file=.env.local scripts/generate-skill-map-snapshot.mjs
-                  </pre>
-                  <p>产物是构建期静态文件，随下一次部署一起发出去，页面上不做触发按钮。</p>
+                  <p>
+                    快照随下一次发布一起更新，页面上不提供触发按钮——需要立刻刷新，联系本站运维。
+                  </p>
                 </Caliber>
               </section>
             ) : null}

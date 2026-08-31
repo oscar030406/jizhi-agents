@@ -127,10 +127,8 @@ export function DifficultySupply({
       <div className="rounded-xl border border-border bg-card p-4">
         {tiers.length === 0 ? (
           <p className="text-center text-xs leading-relaxed text-muted-foreground">
-            读不到概念图谱（引擎数据目录下的
-            <code className="mx-1 font-mono">knowledge_base/concept_graph.json</code>）。
-            接入一个领域，或把 <code className="mx-1 font-mono">ENGINE_DATA_DIR</code>
-            指到引擎的 data 目录之后这里出数。
+            读不到引擎数据。这里的概念图谱来自服务器上的引擎产物，本站当前取不到。
+            刷新页面重试；反复出现请联系本站运维检查引擎连接。
           </p>
         ) : (
           <ul className="space-y-3.5">

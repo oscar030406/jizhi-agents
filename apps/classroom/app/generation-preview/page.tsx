@@ -1129,7 +1129,7 @@ function GenerationPreviewContent() {
       // 界面上却一切正常（2026-08-23 查了半宿才定位到这一行）。
       const saved = await store.saveToStorage();
       if (!saved) {
-        toast.error('这门课没能存到本机，现在可以正常学，但关掉页面后可能找不回来');
+        toast.error('这门课没能保存到当前浏览器，现在可以正常学，但关掉页面后可能找不回来');
       }
       router.push(`/classroom/${stage.id}`);
     } catch (err) {

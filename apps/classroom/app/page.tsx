@@ -31,7 +31,6 @@ import { InputGroup, InputGroupInput, InputGroupButton } from '@/components/ui/i
 import { Textarea as UITextarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { EngineBridgeBanner } from '@/components/generation/engine-bridge-banner';
-import { AgentBar } from '@/components/agent/agent-bar';
 import { useTheme } from '@/lib/hooks/use-theme';
 import { nanoid } from 'nanoid';
 import type { UserRequirements } from '@/lib/types/generation';
@@ -584,12 +583,9 @@ function HomePage() {
           <section className={cn('overflow-hidden lg:col-span-2', CARD_RECIPE_STATIC)}>
             <div className="h-1 w-full bg-primary/60" />
             <EngineBridgeBanner />
-            {/* ── Greeting + Profile + Agents ── */}
-            <div className="relative z-20 flex items-start justify-between">
+            {/* ── Greeting + Profile ── */}
+            <div className="relative z-20">
               <GreetingBar />
-              <div className="pr-3 pt-3.5 shrink-0">
-                <AgentBar />
-              </div>
             </div>
 
             {/* Textarea */}
