@@ -176,7 +176,7 @@ def main() -> int:
         print("    可能是被改写了，也可能这份文档本来就不谈它——人看一眼。")
 
     if args.pptx:
-        deck = ROOT / "docs/06-defense/集智答辩-v2.pptx"
+        deck = ROOT / "docs/06-defense/集智答辩-v3.pptx"
         if deck.is_file():
             pptx_hits = [h for h in scan_pptx(deck) if h[1] in STALE and not allowed(h[0], h[1])]
             print(f"\n=== PPT 作废读数命中：{len(pptx_hits)} 处 ===")

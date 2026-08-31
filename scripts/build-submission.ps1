@@ -51,9 +51,9 @@ if ($missing.Count) {
     Write-Host "  真源目录：docs\06-defense\（写完再打包）" -ForegroundColor Yellow
     exit 1
 }
-$ppt = Join-Path $defense '集智答辩-v2.pptx'
+$ppt = Join-Path $defense '集智答辩-v3.pptx'
 if (Test-Path $ppt) { Copy-Item $ppt $mat } else {
-    Write-Host "[阻断] 未找到答辩 PPT（docs\06-defense\集智答辩-v2.pptx）" -ForegroundColor Red; exit 1
+    Write-Host "[阻断] 未找到答辩 PPT（docs\06-defense\集智答辩-v3.pptx）" -ForegroundColor Red; exit 1
 }
 $video = Get-ChildItem $defense -Filter '*.mp4' -ErrorAction SilentlyContinue
 if ($video) { $video | ForEach-Object { Copy-Item $_.FullName $mat } }
