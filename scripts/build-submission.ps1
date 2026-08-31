@@ -15,6 +15,9 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
+# 2026-08-31 环境重整后 PATH 上的 python 是 WindowsApps 占位符（exit 49），显式指向 ml-env
+$py = 'D:\environment\tools\ml-env\python.exe'
+if (-not (Test-Path $py)) { $py = 'python' }
 $root = Split-Path $PSScriptRoot -Parent
 $stamp = Get-Date -Format 'yyyyMMdd'
 if (-not $OutDir) { $OutDir = Join-Path $root 'dist' }
@@ -30,8 +33,8 @@ $mat = Join-Path $stage '01-材料文档'
 New-Item -ItemType Directory -Force -Path $mat | Out-Null
 # 方案文档真源 = 技术实现文档-终版.docx（2026-08-29 起，由用户手改版+当日口径修正合成；
 # design-implementation.md 是它的前身草稿，不再入包——两份技术文档等于口径分裂）。
-# 2026-08-30 起真源切换为产品叙事版（思路→实现→使用→效果→特色，创业赛揭榜挂帅口径）
-$techDoc = Join-Path $defense '技术实现文档-产品叙事版.docx'
+# 2026-09-01 起真源切换为历程版（拿到题→被谁启发→做成什么→否掉踩过什么→现在什么水平；含封面目录论文格式）
+$techDoc = Join-Path $defense '技术实现文档-历程版.docx'
 if (-not (Test-Path $techDoc)) {
     Write-Host "[阻断] 未找到技术实现文档（docs\06-defense\技术实现文档-终版.docx）" -ForegroundColor Red; exit 1
 }
@@ -78,12 +81,12 @@ Copy-Item (Join-Path $defense 'unit-tests.md') (Join-Path $mod '单元测试用�
 # ---- ③ 测试数据（调用 python 装配器，从归档 run 抽真实 IO）--------------------
 Write-Host "导出测试数据..." -ForegroundColor Yellow
 $dataOut = Join-Path $stage '03-测试数据'
-python (Join-Path $root 'scripts\export-submission-data.py') --out $dataOut
+& $py (Join-Path $root 'scripts\export-submission-data.py') --out $dataOut
 if ($LASTEXITCODE -ne 0) { Write-Host "[阻断] 测试数据导出失败" -ForegroundColor Red; exit 1 }
 
 # ---- 数字对账（对外数字位 vs metrics.json 真源，作废读数零容忍）----------------
 Write-Host "数字对账..." -ForegroundColor Yellow
-python (Join-Path $root 'scripts\audit_outward_numbers.py') --pptx
+& $py (Join-Path $root 'scripts\audit_outward_numbers.py') --pptx
 if ($LASTEXITCODE -ne 0) { Write-Host "[阻断] 对外文档存在作废读数（见上方输出）" -ForegroundColor Red; exit 1 }
 
 # ---- 扫描（与 publish-repo 同口径：密钥零容忍 + 协作痕迹词表）------------------
