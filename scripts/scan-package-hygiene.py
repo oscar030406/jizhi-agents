@@ -73,7 +73,7 @@ PATH_RULES: list[tuple[str, str, str]] = [
     ("agent 入口文件", r"(^|/)(CLAUDE|AGENTS|codex)\.md$|(^|/)\.mcp\.json$", "给 agent 读的入口文件"),
     ("交接/工单文件", r"(^|/)(HANDOFF|AUTORUN|WO)-[^/]*\.md$|(^|/)接手指南\.md$", "agent 工作台账"),
     ("运行时业务数据", r"(^|/)\.next/standalone/data/|(^|/)(accounts|sessions)\.json$|"
-                       r"(^|/)(generated-classrooms|generation-jobs|render-job-owners|usage)/",
+                       r"(^|/)data/(generated-classrooms|generation-jobs|render-job-owners|usage)/",
      "账号、课程、任务或使用数据进入代码发布包"),
     ("运行时日志", r"(^|/)[^/]+\.(log|jsonl)$", "运行日志进入代码发布包"),
     ("环境文件", r"(^|/)\.env(?:\.[^/]*)?$", "环境配置进入代码发布包"),
@@ -197,6 +197,7 @@ SAMPLE = {
     "a/leak5.ts": "headers: { Authorization: 'Bearer abcdefghijklmnopqrstuvwxyz012345' }\n",
     "a/accounts.json": '{"sessionToken": "abcdefghijklmnopqrstuvwx"}\n',
     "a/.next/standalone/data/accounts.json": "{}\n",
+    "a/data/usage/day.json": "{}\n",
     "a/dev.log": "started\n",
     "a/.env": "EXAMPLE=value\n",
 }
@@ -208,6 +209,7 @@ CLEAN = {
     "b/ok4.md": "嵌入模型 BAAI/bge-m3，1024 维。\n",
     # 课程语料的角色设定题干，不是助手自述。这条是真包上扫出来的误伤，钉在这里防回退。
     "b/ok5.json": '{"scenario": "你作为一名AI工程师，需要构建一个简易的旅行规划原型系统。"}\n',
+    "b/.next/server/app/api/usage/route.js": "module.exports = {}\n",
 }
 
 

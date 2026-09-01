@@ -58,7 +58,8 @@ foreach ($path in @($webPackage, $enginePackage)) {
   if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
 }
 
-& tar.exe -czf $webPackage --exclude=.next/cache --exclude=.next/dev --exclude=.next/standalone -C $classroom .next
+& tar.exe -czf $webPackage --exclude=.next/cache --exclude=.next/dev --exclude=.next/standalone `
+  --exclude='*.map' -C $classroom .next
 if ($LASTEXITCODE -ne 0) { throw 'Web package creation failed.' }
 & tar.exe -czf $enginePackage --exclude='__pycache__' --exclude='*.pyc' -C $engine `
   app backend requirements.txt `
