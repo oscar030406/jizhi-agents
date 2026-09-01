@@ -18,6 +18,13 @@ import { parseJsonResponse } from './json-repair';
 import { uniquifyMediaElementIds } from './scene-builder';
 import type { AICallFn, GenerationResult } from './pipeline-types';
 import { createLogger } from '@/lib/logger';
+import {
+  groundingRefsForOutline,
+  validateAndRepairLearningContract,
+  validateVocationalOutline,
+  type LearningContract,
+  type OutlineEngine,
+} from './learning-contract';
 const log = createLogger('Generation');
 
 /**
@@ -45,9 +52,17 @@ export async function generateSceneOutlinesFromRequirements(
     videoGenerationEnabled?: boolean;
     researchContext?: string;
     teacherContext?: string;
+    outlineEngine?: OutlineEngine;
+    /** Production callers enable this to block structurally incomplete courses. */
+    enforceLearningContract?: boolean;
   },
 ): Promise<
-  GenerationResult<{ languageDirective: string; courseTitle?: string; outlines: SceneOutline[] }>
+  GenerationResult<{
+    languageDirective: string;
+    courseTitle?: string;
+    outlines: SceneOutline[];
+    learningContract?: LearningContract;
+  }>
 > {
   // Build available images description for the prompt
   let availableImagesText = 'No images available';
@@ -91,9 +106,26 @@ export async function generateSceneOutlinesFromRequirements(
   const videoEnabled = options?.videoGenerationEnabled ?? false;
   const mediaEnabled = imageEnabled || videoEnabled;
   const hasSourceImages = (pdfImages?.length ?? 0) > 0;
+  const outlineEngine =
+    options?.outlineEngine ??
+    (requirements.taskEngineMode
+      ? 'task-engine'
+      : requirements.interactiveMode
+        ? 'interactive'
+        : 'standard');
+  const promptId =
+    outlineEngine === 'task-engine'
+      ? PROMPT_IDS.TASK_ENGINE_OUTLINES
+      : outlineEngine === 'interactive'
+        ? PROMPT_IDS.INTERACTIVE_OUTLINES
+        : PROMPT_IDS.REQUIREMENTS_TO_OUTLINES;
+  const groundingRefs = groundingRefsForOutline(requirements, {
+    hasUploadedMaterials: Boolean(pdfText?.trim() || pdfImages?.length),
+    hasResearchContext: Boolean(options?.researchContext?.trim()),
+  });
 
   // Use simplified prompt variables
-  const prompts = buildPrompt(PROMPT_IDS.REQUIREMENTS_TO_OUTLINES, {
+  const prompts = buildPrompt(promptId, {
     // New simplified variables
     requirement: requirements.requirement,
     pdfContent: pdfText ? pdfText.substring(0, MAX_PDF_CONTENT_CHARS) : 'None',
@@ -106,6 +138,7 @@ export async function generateSceneOutlinesFromRequirements(
     researchContext: options?.researchContext || 'None',
     // Server-side generation populates this via options; client-side populates via formatTeacherPersonaForPrompt
     teacherContext: options?.teacherContext || '',
+    groundingRefs,
   });
 
   if (!prompts) {
@@ -115,12 +148,19 @@ export async function generateSceneOutlinesFromRequirements(
   try {
     const response = await aiCall(prompts.system, prompts.user, visionImages);
     const parsed = parseJsonResponse<
-      { languageDirective: string; courseTitle?: string; outlines: SceneOutline[] } | SceneOutline[]
+      | {
+          languageDirective: string;
+          courseTitle?: string;
+          learningContract?: unknown;
+          outlines: SceneOutline[];
+        }
+      | SceneOutline[]
     >(response);
 
     let languageDirective: string;
     let courseTitle: string | undefined;
     let rawOutlines: SceneOutline[];
+    let rawLearningContract: unknown;
 
     if (Array.isArray(parsed)) {
       // Fallback: LLM returned old flat array format
@@ -135,6 +175,7 @@ export async function generateSceneOutlinesFromRequirements(
       courseTitle =
         typeof rawTitle === 'string' && rawTitle.trim() ? rawTitle.trim().slice(0, 120) : undefined;
       rawOutlines = parsed.outlines;
+      rawLearningContract = parsed.learningContract;
     } else {
       return { success: false, error: 'Failed to parse scene outlines response' };
     }
@@ -151,7 +192,44 @@ export async function generateSceneOutlinesFromRequirements(
     }));
 
     // Replace sequential gen_img_N/gen_vid_N with globally unique IDs
-    const result = uniquifyMediaElementIds(enriched);
+    let result = uniquifyMediaElementIds(enriched);
+
+    if (options?.enforceLearningContract) {
+      // Ordinary generation must not accidentally publish a gated procedural
+      // widget merely because the model emitted one. Validate the effective
+      // outlines that downstream generation will actually receive.
+      if (outlineEngine !== 'task-engine') {
+        result = result.map((outline) =>
+          outline.widgetType === 'procedural-skill'
+            ? sanitizeProceduralSkillOutline(outline)
+            : outline,
+        );
+      }
+
+      const contractResult = validateAndRepairLearningContract(rawLearningContract, result, {
+        allowedGroundingRefs: groundingRefs,
+      });
+      const violations = [
+        ...contractResult.violations,
+        ...(outlineEngine === 'task-engine' ? validateVocationalOutline(result) : []),
+      ];
+      if (!contractResult.publishable || !contractResult.contract || violations.length > 0) {
+        return {
+          success: false,
+          error: `Teaching-quality contract rejected: ${violations.join('; ')}`,
+        };
+      }
+
+      return {
+        success: true,
+        data: {
+          languageDirective,
+          courseTitle,
+          outlines: result,
+          learningContract: contractResult.contract,
+        },
+      };
+    }
 
     return { success: true, data: { languageDirective, courseTitle, outlines: result } };
   } catch (error) {

@@ -75,7 +75,8 @@ describe('台账 value 一个字不删', () => {
     expect(html).toContain('精确二项检验');
     expect(html).toContain('证据量为零');
     // 折叠里，不在卡面
-    expect(html).toContain('展开口径原文与复算命令');
+    expect(html).toContain('展开口径与来源');
+    expect(html).not.toContain('复算命令');
   });
 
   it('覆盖率的六门逐门数字一门都不能少', () => {
@@ -90,6 +91,16 @@ describe('台账 value 一个字不删', () => {
   it('detail 已经当上卡面那句限定语时，折叠里不重复印一遍', () => {
     const html = band('88.9%——48/54，run 20260811-012228');
     expect(html.match(/48\/54/g)).toHaveLength(1);
+  });
+
+  it('口径保留分母与判据，但不把内部路径或测试记录印给管理者', () => {
+    const html = band(
+      '2.1%',
+      '真实生成端，576 条可核断言，12 条判无据。明细在 data/eval/fullprobe/run.json。',
+    );
+    expect(html).toContain('576 条可核断言');
+    expect(html).toContain('12 条判无据');
+    expect(html).not.toMatch(/data[\\/]|fullprobe|run\.json/i);
   });
 });
 

@@ -149,7 +149,8 @@ describe('管理端展示件渲染', () => {
     const intakes = await readDomainIntakes();
     const html = renderToStaticMarkup(<DomainIntakeTable intakes={intakes} />);
     if (intakes.length === 0) {
-      expect(html).toContain('ingest_domain.py');
+      expect(html).toContain('知识库页面');
+      expect(html).not.toContain('ingest_domain.py');
       return;
     }
     expect(html).toContain(intakes[0].domain);
@@ -219,7 +220,8 @@ describe('管理端展示件渲染', () => {
     const rows = await readCoverageRuns();
     const html = renderToStaticMarkup(<CoveragePanel rows={rows} />);
     if (rows.length === 0) {
-      expect(html).toContain('compute_kc_coverage.py');
+      expect(html).toContain('平台完成评测后');
+      expect(html).not.toContain('compute_kc_coverage.py');
       return;
     }
     for (const r of rows) expect(html).toContain(r.courseName || r.topic);

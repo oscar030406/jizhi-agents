@@ -10,9 +10,15 @@
 import { NextResponse } from 'next/server';
 
 import { readCourseDomains } from '@/lib/server/course-domains';
+import { requireCorpusVisible } from '@/lib/server/corpus-access';
 
 export const dynamic = 'force-dynamic'; // 新课随时生成，归属不许命中构建期缓存
 
 export async function GET() {
-  return NextResponse.json(await readCourseDomains());
+  const access = await requireCorpusVisible();
+  if (!access.ok) return access.response;
+  const domains = await readCourseDomains();
+  return NextResponse.json(
+    Object.fromEntries(Object.entries(domains).filter(([, row]) => access.visible(row.domain))),
+  );
 }

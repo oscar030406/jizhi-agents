@@ -20,6 +20,7 @@ import { ArrowLeft, ShieldAlert } from 'lucide-react';
 
 import { SiteHeader } from '@/components/site-header';
 import { CARD_RECIPE_STATIC } from '@/components/home/course-card';
+import { isScratchCorpus } from '@/lib/knowledge/domain-registry';
 import { readHeadlineMetrics } from '@/lib/server/admin-overview';
 
 import { managerAccount } from '../knowledge/guard';
@@ -135,7 +136,7 @@ function CheckupBlock({
         <p className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
           有 {er.total - er.ready} 屏在生成时没拿到教材摘录（检索桥失败或零命中），
           正文凭模型自身知识写成——这些屏的接地数字量到的是管道故障，不是内容质量。
-          逐屏原因在本轮 <code className="font-mono">trial_courses/REPORT.md</code>。
+          逐屏原因可通过下方本轮产物按钮查看。
         </p>
       ) : null}
       {/* 覆盖那一格已撤下，撤因见 data.ts 的 `goldTotal` 注释。说明就摆在原先印数字的位置：
@@ -152,11 +153,11 @@ function CheckupBlock({
               产物读得到就换成能点开的按钮；读不到才退回印路径，让人去服务器上找。 */}
           {artifacts.length > 0
             ? '没讲到的是哪几个，逐条落在本轮产物里，点开看：'
-            : '没讲到的是哪几个，这一轮的明细没有在本站留存，页面上展不开。'}
+            : '没讲到的是哪几个，这一轮暂时没有可查看的明细。'}
         </p>
         {artifacts.length > 0 ? (
           <div className="mt-2">
-            <RunArtifacts runId={checkup.runId} artifacts={artifacts} />
+            <RunArtifacts artifacts={artifacts} />
           </div>
         ) : null}
       </div>
@@ -230,7 +231,7 @@ function DomainColumn({
           </p>
         ) : (
           <p className="text-xs leading-relaxed text-muted-foreground">
-            还没对这个库跑过换库体检。跑法与复算命令在本页最下方的折叠块里。
+            还没对这个库跑过换库体检。体检方法与结果说明在本页最下方的折叠块里。
           </p>
         )}
       </div>
@@ -302,11 +303,16 @@ export default async function GeneralizationPage() {
     );
   }
 
-  const [panels, others, metrics] = await Promise.all([
+  const [panels, allOthers, metrics] = await Promise.all([
     readGeneralizationPanels(),
     readOtherCorpora(),
     readHeadlineMetrics(),
   ]);
+  const others = allOthers.filter(
+    (item) =>
+      !isScratchCorpus(item.corpus) &&
+      !/(?:fullprobe|fullpath[-_]?probe|(?:^|[-_])probe(?:[-_]|$))/i.test(item.corpus),
+  );
   const checked = panels.filter((p) => p.checkup);
   const external = metrics.filter((m) => m.id !== 'api_interception_v2');
   // 每轮体检的产物在服务端就读好（两类文件各 1–2 KB），弹层直接拿——
@@ -355,7 +361,7 @@ export default async function GeneralizationPage() {
           </p>
           <div className="mt-4 grid gap-4 sm:grid-cols-3">
             {external.length === 0 ? (
-              <p className="text-xs text-muted-foreground">读不到指标台账（metrics.json）。</p>
+              <p className="text-xs text-muted-foreground">暂时无法读取指标台账。</p>
             ) : (
               external.map((m) => (
                 <div key={m.id} className={`${CARD_RECIPE_STATIC} p-4`}>
@@ -371,13 +377,9 @@ export default async function GeneralizationPage() {
                   {/* 口径原文照搬，只把模型全串与本机项目目录名抹掉（redactCaliber）——
                       这一页要当测试样例交出去，那两样不该跟着交。 */}
                   <details className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-                    <summary className="cursor-pointer">口径原文与复算命令</summary>
+                    <summary className="cursor-pointer">口径与来源</summary>
                     <p className="mt-1.5">{redactCaliber(m.caliber)}</p>
-                    {m.source ? (
-                      <pre className="mt-1.5 overflow-x-auto rounded-lg bg-muted/60 px-2.5 py-2 font-mono text-[11px]">
-                        {redactCaliber(m.source)}
-                      </pre>
-                    ) : null}
+                    {m.source ? <p className="mt-1.5">来源：平台评测台账。</p> : null}
                   </details>
                 </div>
               ))
@@ -386,7 +388,7 @@ export default async function GeneralizationPage() {
         </section>
 
         <details className={`${CARD_RECIPE_STATIC} p-5 text-xs leading-relaxed`}>
-          <summary className="cursor-pointer font-medium">体检怎么做的、怎么复算</summary>
+          <summary className="cursor-pointer font-medium">体检方法与结果说明</summary>
           <div className="mt-3 space-y-3 text-muted-foreground">
             <p>
               一次体检 = 在指定的库上，用生成前就冻结的知识点清单当课题，
@@ -398,30 +400,26 @@ export default async function GeneralizationPage() {
               <li>
                 覆盖：不给比率。分母是冻结金标的全集，分子只来自 2 屏试跑课，
                 而试跑大纲机械点名的知识成分是固定条数、不随领域变——相除量到的是试跑规模，
-                不是覆盖能力。改成只列「没讲到的是哪几个」，落在每轮的{' '}
-                <code className="font-mono">trial_courses/&lt;档&gt;_kc_misses.json</code>。
-                2026-08-17 之前跑完的轮次，REPORT.md 里那一行还是旧口径的比率，按历史记录留档。
+                不是覆盖能力。页面改为只列“没讲到的是哪几个”，并通过本轮产物按钮提供明细。
+                2026-08-17 之前完成的轮次仍保留旧口径比率作为历史记录。
               </li>
               <li>盲评 x/n：判官读不到档位标签，只看正文猜这屏写给谁。</li>
               <li>成本读 classroom 的调用账本增量，账本没有单价字段，所以不折算成钱。</li>
             </ul>
             <p className="text-foreground">
               重跑一次体检会调用生成与审核接口、按 token
-              计费，由本站运维在服务器上发起，页面不提供触发按钮。
+              计费，由平台维护人员执行；页面不提供触发按钮。
             </p>
-            <p>读这一页的原始产物（点文件名就地看原文）：</p>
+            <p>查看本页原始产物（点文件名查看原文）：</p>
             {checked.length === 0 ? (
               <p>（还没有跑完的体检）</p>
             ) : (
               <ul className="space-y-2">
                 {checked.map((p) => (
                   <li key={p.corpus}>
-                    <p className="break-all font-mono text-[11px]">
-                      data/knowledge_base/intake_runs/{p.checkup?.runId ?? ''}/trial_courses/
-                    </p>
+                    <p>{p.label}</p>
                     <div className="mt-1">
                       <RunArtifacts
-                        runId={p.checkup?.runId ?? ''}
                         artifacts={artifacts.get(p.checkup?.runId ?? '') ?? []}
                       />
                     </div>
@@ -430,9 +428,11 @@ export default async function GeneralizationPage() {
               </ul>
             )}
             <p>
-              资料清单的字段来自 <code className="font-mono">knowledge_base/&lt;库&gt;_intake/readiness.json</code>
-              与 <code className="font-mono">knowledge_base/sources_manifest.csv</code>；
-              切片数是索引文件的行数。
+              资料清单、许可与切片统计来自系统接入记录；所属机构管理者可前往{' '}
+              <Link href="/admin/knowledge" className="underline underline-offset-2 hover:text-foreground">
+                知识库详情
+              </Link>{' '}
+              查看来源与原件。
             </p>
             {others.length > 0 ? (
               <div className="space-y-1.5">

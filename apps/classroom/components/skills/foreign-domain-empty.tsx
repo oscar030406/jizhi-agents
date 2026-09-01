@@ -31,7 +31,7 @@ export function ForeignDomainEmpty({ label, reason }: { label: string; reason?: 
     <section className="rounded-xl border border-border bg-surface px-6 py-10 text-center">
       <Briefcase className="mx-auto size-8 text-muted-foreground/60" />
       <h2 className="mt-4 text-base font-medium text-foreground">
-        「{label}」还没有岗位要求数据
+        所属机构尚未提供「{label}」的岗位画像
       </h2>
       <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-muted-foreground">
         {/* 引擎说得清楚就用引擎的原话，不改写、不润色——它知道这个域缺的到底是什么。 */}
@@ -49,8 +49,7 @@ export function ForeignDomainEmpty({ label, reason }: { label: string; reason?: 
         已经建好的库要补这份清单，得在整库重建时投——往库里追加文档不会重算它。
       </p>
       <p className="mx-auto mt-2 max-w-xl text-xs leading-relaxed text-muted-foreground/80">
-        这里不展示其它领域的岗位图谱——那些要求与你正在学的领域无关，
-        摆在这里只会误导学习方向。
+        这里不展示其它领域的岗位图谱——那些要求与你正在学的领域无关， 摆在这里只会误导学习方向。
       </p>
       <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
         <Link

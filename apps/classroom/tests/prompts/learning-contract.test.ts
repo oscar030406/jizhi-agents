@@ -1,0 +1,42 @@
+import { describe, expect, it } from 'vitest';
+
+import { buildPrompt, PROMPT_IDS } from '@/lib/prompts';
+
+const OUTLINE_PROMPTS = [
+  PROMPT_IDS.REQUIREMENTS_TO_OUTLINES,
+  PROMPT_IDS.INTERACTIVE_OUTLINES,
+  PROMPT_IDS.TASK_ENGINE_OUTLINES,
+] as const;
+
+describe('outline learning-contract prompt', () => {
+  for (const promptId of OUTLINE_PROMPTS) {
+    it(`${promptId} 要求同一次模型输出携带可机器校验的教学契约`, () => {
+      const prompt = buildPrompt(promptId, {
+        requirement: 'Teach a grounded course',
+        pdfContent: 'None',
+        availableImages: 'No images available',
+        researchContext: 'None',
+        teacherContext: '',
+        userProfile: '',
+        groundingRefs: ['corpus:ai'],
+        hasSourceImages: false,
+        imageEnabled: false,
+        videoEnabled: false,
+        mediaEnabled: false,
+      });
+
+      expect(prompt).not.toBeNull();
+      const text = `${prompt!.system}\n${prompt!.user}`;
+      expect(text).toContain('learningContract');
+      expect(text).toContain('prerequisiteActivation');
+      expect(text).toContain('demonstration');
+      expect(text).toContain('learnerPractice');
+      expect(text).toContain('feedbackRetry');
+      expect(text).toContain('transferApplication');
+      expect(text).toContain('assessmentMap');
+      expect(text).toContain('successCriterion');
+      expect(text).toContain('corpus:ai');
+      expect(text).not.toContain('{{groundingRefs}}');
+    });
+  }
+});

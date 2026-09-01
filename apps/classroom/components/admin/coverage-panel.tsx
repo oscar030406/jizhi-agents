@@ -14,6 +14,8 @@
  * 原来这两批混在一张表里，脚注却写着「分母是生成前冻结的金标」——那句话对一半的行是假的。
  */
 
+import Link from 'next/link';
+
 import type { CoverageRow } from '@/lib/server/knowledge-map';
 
 import { Caliber } from './caliber';
@@ -76,7 +78,7 @@ export function CoveragePanel({ rows }: { readonly rows: readonly CoverageRow[] 
   if (rows.length === 0) {
     return (
       <p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
-        还没有跑过知识点覆盖率。跑 <code className="font-mono">scripts/compute_kc_coverage.py</code> 之后这里出数。
+        还没有知识点覆盖率结果。平台完成评测后会在这里显示。
       </p>
     );
   }
@@ -106,9 +108,8 @@ export function CoveragePanel({ rows }: { readonly rows: readonly CoverageRow[] 
         <p>
           只列<strong className="font-medium">实测过</strong>的主题，共 {rows.length} 个（其中生成前冻结金标 {frozen.length} 个）。
           没跑过覆盖率的课不在这里，也不补 0 或估计值。竖线是 {TARGET}% 达标线，绿色 = 过线。
-          本表读的是 <code className="font-mono">eval/kc_coverage/runs/</code> 里归档的最近一次运行；
-          上面「全局指标」的汇总覆盖率是重生成后复测的口径，有的复测没归档成 run，两处对不上时以
-          <code className="mx-1 font-mono">metrics.json</code>的口径台账为准。
+          本表采用最近一次归档评测；上面“全局指标”的汇总覆盖率采用重生成后复测口径。
+          个别复测尚未归档时，两处可能暂时不一致，以平台全局指标台账为准。
         </p>
       </Caliber>
     </div>
@@ -127,8 +128,7 @@ export function DifficultySupply({
       <div className="rounded-xl border border-border bg-card p-4">
         {tiers.length === 0 ? (
           <p className="text-center text-xs leading-relaxed text-muted-foreground">
-            读不到引擎数据。这里的概念图谱来自服务器上的引擎产物，本站当前取不到。
-            刷新页面重试；反复出现请联系本站运维检查引擎连接。
+            系统暂时无法读取概念图谱，因此不展示旧数据。请刷新页面重试；反复出现请联系平台维护人员。
           </p>
         ) : (
           <ul className="space-y-3.5">
@@ -155,15 +155,17 @@ export function DifficultySupply({
         <p>
           这是<strong className="font-medium">资源供给按难度档的分布</strong>，不是「资源难度匹配曲线」。
           那条曲线要把<strong className="font-medium">学习者</strong>的能力分布与资源难度对起来，
-          属于个人维度，在 <code className="font-mono">/report</code>。
+          属于个人维度，可在{' '}
+          <Link href="/report" className="underline underline-offset-2 hover:text-foreground">
+            学习报告页面
+          </Link>{' '}
+          查看。
           机构维度画不出同一条曲线——我们没有跨学习者的数据，所以本页给的是供给侧分布。
         </p>
         {total > 0 && (
           <>
             <p>
-              难度档来自 <code className="font-mono">concept_graph.json</code>，
-              该文件 <code className="font-mono">_meta.source</code> 记的是
-              「hello-agents 章节顺序 + 领域判断人工策展」，
+              难度档来自系统概念图谱，来源说明为“教材章节顺序 + 领域判断人工策展”，
               <strong className="font-medium">共 {total} 个概念</strong>——
               这是概念级的人工标注，不能拿来推断整个知识库（1704 个片段）的深浅。
               路径图里标「未标」的概念没有难度档，不在分母里；条的深浅与路径图左侧同一套色阶。

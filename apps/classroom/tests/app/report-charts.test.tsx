@@ -20,6 +20,20 @@ vi.mock('@/components/site-header', () => ({ SiteHeader: () => null }));
 vi.mock('@/components/report/evidence-trajectory-chart', () => ({
   EvidenceTrajectoryChart: () => null,
 }));
+vi.mock('@/lib/knowledge/use-domain-context', () => ({
+  loadEffectiveDomainContext: async () => ({
+    kind: 'ready',
+    context: {
+      domain: 'ai',
+      label: '人工智能',
+      source: 'profile-domain',
+      status: 'ready',
+      isAi: true,
+      registered: true,
+    },
+    courseDomains: { s1: { domain: 'ai', corpus: 'ai' } },
+  }),
+}));
 
 const SCENES = [
   { id: 'a', order: 0, type: 'quiz', title: '测验一', outlineId: 'o1' },
@@ -34,7 +48,13 @@ vi.mock('@/lib/utils/stage-storage', () => ({
     scenes: SCENES,
     outline: {
       outlines: [
-        { id: 'o1', order: 0, title: '测验一', description: '', quizConfig: { difficulty: 'hard' } },
+        {
+          id: 'o1',
+          order: 0,
+          title: '测验一',
+          description: '',
+          quizConfig: { difficulty: 'hard' },
+        },
       ],
     },
   }),

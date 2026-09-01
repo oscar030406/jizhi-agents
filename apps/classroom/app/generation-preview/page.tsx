@@ -54,8 +54,12 @@ import { createLogger } from '@/lib/logger';
 import {
   type GenerationSessionState,
   ALL_STEPS,
+  LEARNING_CONTRACT_REQUIRED_MESSAGE,
   getActiveSteps,
   getGenerationStepText,
+  learningContractPlanFromDoneEvent,
+  rebuildLearningContractPlan,
+  validateLearningContractPlan,
 } from './types';
 import { StepVisualizer } from './components/visualizers';
 import { LiveLectureDraft } from '@/components/generation/live-lecture-draft';
@@ -606,12 +610,17 @@ function GenerationPreviewContent() {
         log.debug('=== Generating outlines (SSE) ===');
         setStreamingOutlines([]);
         setIsOutlineStreaming(true);
+        // A restarted stream must earn a fresh contract. Never let a failed attempt
+        // finish against a plan left in sessionStorage by an older outline set.
+        currentSession = { ...currentSession, learningContractPlan: undefined };
+        persistSession(currentSession);
 
         const outlineResult = await new Promise<{
           outlines: SceneOutline[];
           languageDirective: string;
           courseTitle?: string;
           taskEngineMode: boolean;
+          learningContractPlan: NonNullable<GenerationSessionState['learningContractPlan']>;
         }>((resolve, reject) => {
           const collected: SceneOutline[] = [];
           let directive: string | undefined;
@@ -673,18 +682,28 @@ function GenerationPreviewContent() {
                           // inherit the previous attempt's stale values.
                           directive = undefined;
                           title = undefined;
+                          currentSession = {
+                            ...currentSession,
+                            learningContractPlan: undefined,
+                          };
+                          persistSession(currentSession);
                           setStreamingOutlines([]);
                           setStatusMessage(t('generation.outlineRetrying'));
                         } else if (evt.type === 'done') {
                           directive = evt.languageDirective || directive;
-                          resolve({
-                            outlines: evt.outlines || collected,
-                            languageDirective:
-                              directive ||
-                              'Teach in the language that matches the user requirement.',
-                            courseTitle: evt.courseTitle || title,
-                            taskEngineMode: resolveTaskEngineModeFromOutlineDoneEvent(evt),
-                          });
+                          try {
+                            const completed = learningContractPlanFromDoneEvent(evt, collected);
+                            resolve({
+                              ...completed,
+                              languageDirective:
+                                directive ||
+                                'Teach in the language that matches the user requirement.',
+                              courseTitle: evt.courseTitle || title,
+                              taskEngineMode: resolveTaskEngineModeFromOutlineDoneEvent(evt),
+                            });
+                          } catch (error) {
+                            reject(error);
+                          }
                           return;
                         } else if (evt.type === 'error') {
                           reject(new Error(evt.error));
@@ -696,21 +715,7 @@ function GenerationPreviewContent() {
                     }
                   }
                   if (done) {
-                    if (collected.length > 0) {
-                      resolve({
-                        outlines: collected,
-                        languageDirective:
-                          directive || 'Teach in the language that matches the user requirement.',
-                        // Carry any title latched from a streaming `courseTitle`
-                        // event here too — symmetric with languageDirective — so
-                        // a stream that ends without an explicit `done` event
-                        // does not silently drop a valid inferred title.
-                        courseTitle: title,
-                        taskEngineMode: false,
-                      });
-                    } else {
-                      reject(new Error(t('generation.outlineEmptyResponse')));
-                    }
+                    reject(new Error(LEARNING_CONTRACT_REQUIRED_MESSAGE));
                     return;
                   }
                   return pump();
@@ -737,6 +742,7 @@ function GenerationPreviewContent() {
           languageDirective,
           courseTitle,
           taskEngineMode: effectiveTaskEngineMode,
+          learningContractPlan: outlineResult.learningContractPlan,
           previewPhase: shouldReviewOutlines ? 'review' : 'outline-ready',
         };
         persistSession(updatedSession);
@@ -771,7 +777,18 @@ function GenerationPreviewContent() {
       if (!outlines || outlines.length === 0) {
         throw new Error(t('generation.outlineEmptyResponse'));
       }
+      const learningContractPlan = validateLearningContractPlan(
+        currentSession.learningContractPlan,
+        outlines,
+      );
+      currentSession = {
+        ...currentSession,
+        sceneOutlines: outlines,
+        learningContractPlan,
+      };
+      persistSession(currentSession);
       stage.taskEngineMode = currentSession.taskEngineMode === true;
+      stage.learningContract = learningContractPlan;
 
       // Store languageDirective on the stage
       if (languageDirective) {
@@ -1087,6 +1104,7 @@ function GenerationPreviewContent() {
               : null;
           st.updateScene(firstScene.id, {
             audit: a,
+            ...(auditData.verification ? { verification: auditData.verification } : {}),
             ...(mergedContent ? { content: mergedContent } : {}),
           });
         })
@@ -1169,6 +1187,7 @@ function GenerationPreviewContent() {
     outlineReviewIntentRef.current = true;
     persistSession({
       ...session,
+      ...(isOutlineStreaming ? { learningContractPlan: undefined } : {}),
       previewPhase: 'review',
     });
   };
@@ -1187,16 +1206,31 @@ function GenerationPreviewContent() {
       // decide what happens next. There is no parked promise to settle yet —
       // the promise is created only after SSE completes (see line 583).
       outlineReviewIntentRef.current = false;
-      persistSession({ ...session, previewPhase: 'preparing' });
+      persistSession({
+        ...session,
+        learningContractPlan: undefined,
+        previewPhase: 'preparing',
+      });
       setStatusMessage('');
       return;
     }
     const collapsedOutlines = session.sceneOutlines ?? streamingOutlines;
     if (!collapsedOutlines || collapsedOutlines.length === 0) return;
+    let learningContractPlan: NonNullable<GenerationSessionState['learningContractPlan']>;
+    try {
+      learningContractPlan = validateLearningContractPlan(
+        session.learningContractPlan,
+        collapsedOutlines,
+      );
+    } catch (error) {
+      setError(error instanceof Error ? error.message : LEARNING_CONTRACT_REQUIRED_MESSAGE);
+      return;
+    }
     outlineReviewIntentRef.current = false;
     persistSession({
       ...session,
       sceneOutlines: collapsedOutlines,
+      learningContractPlan,
       previewPhase: 'outline-ready',
     });
     setStatusMessage(t('generation.reviewOutlineAutoContinue'));
@@ -1219,6 +1253,7 @@ function GenerationPreviewContent() {
       const confirmedSession: GenerationSessionState = {
         ...session,
         sceneOutlines: collapsedOutlines,
+        learningContractPlan,
         previewPhase: 'generating-content',
       };
       persistSession(confirmedSession);
@@ -1236,16 +1271,38 @@ function GenerationPreviewContent() {
     persistSession({
       ...session,
       sceneOutlines: outlines,
+      learningContractPlan: session.learningContractPlan
+        ? rebuildLearningContractPlan(session.learningContractPlan, outlines)
+        : undefined,
       previewPhase: 'review',
     });
   };
 
   const handleConfirmOutlines = () => {
     const finalOutlines = session?.sceneOutlines ?? streamingOutlines;
-    if (!finalOutlines || finalOutlines.length === 0) return;
+    if (!session || !finalOutlines || finalOutlines.length === 0) return;
     setIsConfirmingOutlines(true);
     clearOutlineReviewTimer();
     outlineReviewIntentRef.current = false;
+
+    let learningContractPlan: NonNullable<GenerationSessionState['learningContractPlan']>;
+    try {
+      learningContractPlan = validateLearningContractPlan(
+        session.learningContractPlan,
+        finalOutlines,
+      );
+    } catch (error) {
+      setIsConfirmingOutlines(false);
+      setError(error instanceof Error ? error.message : LEARNING_CONTRACT_REQUIRED_MESSAGE);
+      return;
+    }
+    const confirmedSession: GenerationSessionState = {
+      ...session,
+      sceneOutlines: finalOutlines,
+      learningContractPlan,
+      previewPhase: 'generating-content',
+    };
+    persistSession(confirmedSession);
 
     if (outlineReviewResolveRef.current) {
       const resolve = outlineReviewResolveRef.current;
@@ -1260,12 +1317,6 @@ function GenerationPreviewContent() {
     // Reset the flag so the state doesn't linger if `startGeneration` later
     // re-renders the editor for any reason.
     setIsConfirmingOutlines(false);
-    const confirmedSession: GenerationSessionState = {
-      ...(session as GenerationSessionState),
-      sceneOutlines: finalOutlines,
-      previewPhase: 'generating-content',
-    };
-    persistSession(confirmedSession);
     hasStartedRef.current = true;
     void startGeneration(confirmedSession);
   };

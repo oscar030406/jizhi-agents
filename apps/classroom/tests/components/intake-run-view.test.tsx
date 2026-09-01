@@ -33,7 +33,7 @@ function slot(order: number, label: string, deps: string[], detail: unknown) {
 function fixture(chunks: number, trialRun: boolean): [IntakeRunRecord, IntakeEvent[]] {
   const record: IntakeRunRecord = {
     run_id: '20260816T101010-abcdef',
-    corpus: 'tsdb-probe',
+    corpus: 'iotdb',
     scope: '时序数据库运维',
     status: 'done',
     created_at: '2026-08-16T10:10:10',
@@ -69,8 +69,10 @@ function fixture(chunks: number, trialRun: boolean): [IntakeRunRecord, IntakeEve
         },
       }),
     },
-    products: {},
-    warnings: [],
+    products: {
+      corpus_index: 'data/knowledge_base/corpora/fullprobe/knowledge_index.jsonl',
+    },
+    warnings: ['详情在 D:\\data\\knowledge_base\\fullprobe\\warning.log'],
     error: '',
   };
   const base = { run_id: record.run_id, iso: '', kind: 'stage_done' };
@@ -98,7 +100,7 @@ function fixture(chunks: number, trialRun: boolean): [IntakeRunRecord, IntakeEve
       seq: 2,
       ts: 300,
       stage: 'metrics',
-      message: '指标复测 完成',
+      message: '指标复测 完成，记录 data/eval/fullpath-probe/run.json',
       detail: record.stages.metrics.detail,
       status: 'done',
     },
@@ -151,5 +153,12 @@ describe('接入 run 观看端 · ⑥⑦', () => {
     // 值位：盲评那一行的 truth / guess
     expect(text).toContain('实际档位 入门档');
     expect(text).toContain('判官判的档位 进阶档');
+  });
+
+  it('路径型产物显示处理状态和页面入口，不渲染内部路径或测试产物名', () => {
+    const text = render(40, true);
+    expect(text).toContain('系统已生成');
+    expect(text).toContain('前往知识库详情查看');
+    expect(text).not.toMatch(/data[\\/]|trial_courses[\\/]|fullprobe|fullpath-probe/i);
   });
 });

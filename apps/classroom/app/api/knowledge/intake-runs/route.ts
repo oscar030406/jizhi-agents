@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
     return apiError(
       API_ERROR_CODES.PROVIDER_DISABLED,
       503,
-      '未配置引擎地址（GROUNDING_URL），发起接入要引擎在线。',
+      '知识库接入服务暂不可用，请稍后重试。',
     );
   }
 

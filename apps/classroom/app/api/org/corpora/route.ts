@@ -5,14 +5,12 @@
  * 无归属行 = 公共库 = 人人可见，存量三库因此零迁移。
  */
 
-import { cookies } from 'next/headers';
 import type { NextRequest } from 'next/server';
 
-import { accountForSession } from '@/lib/accounts/store';
-import { SESSION_COOKIE } from '@/lib/accounts/session';
 import { corpusOwnership, orgForAccount, setCorpusOrg } from '@/lib/accounts/org-store';
 import { isValidCorpusName } from '@/lib/server/knowledge-center';
 import { API_ERROR_CODES, apiError, apiSuccess } from '@/lib/server/api-response';
+import { requireCorpusVisible } from '@/lib/server/corpus-access';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('OrgCorpora API');
@@ -21,15 +19,29 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  // 归属总表对管理端只读展示用（谁家占了哪个库）；owner 之外也可读——无敏感数据。
-  const ownership = await corpusOwnership();
-  return apiSuccess({ ownership: Object.fromEntries(ownership) });
+  const access = await requireCorpusVisible();
+  if (!access.ok) return access.response;
+  if (!access.account) return apiError(API_ERROR_CODES.UNAUTHORIZED, 401, '未登录。');
+  const org = await orgForAccount(access.account.id).catch(() => null);
+  if (!org || org.memberRole !== 'owner') {
+    return apiError(API_ERROR_CODES.UNAUTHORIZED, 403, '只有机构所有者可以查看知识库归属。');
+  }
+  try {
+    const ownership = await corpusOwnership();
+    return apiSuccess({
+      ownership: Object.fromEntries([...ownership].filter(([corpus]) => access.visible(corpus))),
+    });
+  } catch (error) {
+    log.warn(`read corpus ownership failed: ${String(error)}`);
+    return apiError(API_ERROR_CODES.INTERNAL_ERROR, 503, '知识库归属暂时无法读取。');
+  }
 }
 
 export async function POST(req: NextRequest) {
-  const account = await accountForSession((await cookies()).get(SESSION_COOKIE)?.value);
-  if (!account) return apiError(API_ERROR_CODES.UNAUTHORIZED, 401, '未登录。');
-  const org = await orgForAccount(account.id);
+  const access = await requireCorpusVisible();
+  if (!access.ok) return access.response;
+  if (!access.account) return apiError(API_ERROR_CODES.UNAUTHORIZED, 401, '未登录。');
+  const org = await orgForAccount(access.account.id);
   if (!org || org.memberRole !== 'owner') {
     return apiError(API_ERROR_CODES.UNAUTHORIZED, 403, '只有机构所有者可以管理知识库归属。');
   }

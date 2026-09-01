@@ -17,13 +17,13 @@ import { getDefaultAgents } from '@/lib/orchestration/registry/store';
 import {
   isAuditGateEnabled,
   isCourseCoherenceEnabled,
+  isVocationalTaskEngineEnabled,
 } from '@/lib/config/feature-flags';
 import { createLogger } from '@/lib/logger';
 import { isProviderKeyRequired } from '@/lib/ai/providers';
 import { resolveClassroomWebSearchConfig } from '@/lib/server/web-search-config';
 import { resolveModel } from '@/lib/server/resolve-model';
 import { getStageModel } from '@/lib/server/model-routes';
-import { resolveVocationalActive } from '@/lib/config/feature-flags';
 import { buildSearchQuery } from '@/lib/server/search-query-builder';
 import { formatSearchResultsAsContext, searchWeb } from '@/lib/web-search';
 import type { BaiduSubSources, WebSearchProviderId } from '@/lib/web-search/types';
@@ -60,21 +60,25 @@ import {
 import { sceneConceptsFromChunks } from '@/lib/evidence/scene-concepts';
 import type { CourseGenerationMeta } from '@/lib/server/classroom-storage';
 import { auditSceneContent, extractTeachingText } from '@/lib/generation/hallucination-audit';
+import { extractContentVerifiables, verifyContent } from '@/lib/generation/content-verify';
 import { buildAuditPanel } from '@/lib/server/audit-panel';
 import {
   generateMediaForClassroom,
   replaceMediaPlaceholders,
   generateTTSForClassroom,
 } from '@/lib/server/classroom-media-generation';
-import {
-  isRetryableGenerationError,
-  withGenerationRetry,
-} from '@/lib/generation/generation-retry';
+import { isRetryableGenerationError, withGenerationRetry } from '@/lib/generation/generation-retry';
 import { buildVideoManifestFromOutlines } from '@/lib/media/video-manifest';
 import type { LearnerProfileFields, SceneOutline, UserRequirements } from '@/lib/types/generation';
 import type { Scene, ScenePatch, Stage } from '@/lib/types/stage';
 import { AGENT_COLOR_PALETTE, AGENT_DEFAULT_AVATARS } from '@/lib/constants/agent-defaults';
 import { usageAttribution } from '@/lib/ai/usage-context';
+import {
+  buildLearningContractPlan,
+  resolveOutlineEngine,
+  validateLearningContractFulfillment,
+} from '@/lib/generation/learning-contract';
+import { readDomainRegistry } from '@/lib/server/domain-registry';
 
 const log = createLogger('Classroom');
 
@@ -364,7 +368,13 @@ async function generateClassroomInner(
     requirement,
     ...(input.learnerProfile ? { learnerProfile: input.learnerProfile } : {}),
   };
-  const vocationalActive = resolveVocationalActive(requirements);
+  const domainRegistry = await readDomainRegistry();
+  const outlineRouting = resolveOutlineEngine(
+    requirements,
+    domainRegistry.entries[corpusOf(requirements.learnerProfile) ?? 'ai'],
+    { vocationalEnabled: isVocationalTaskEngineEnabled() },
+  );
+  const vocationalActive = outlineRouting.engine === 'task-engine';
   const pdfText = pdfContent?.text || undefined;
 
   await options.onProgress?.({
@@ -443,6 +453,8 @@ async function generateClassroomInner(
       videoGenerationEnabled: input.enableVideoGeneration,
       researchContext,
       // NO teacherContext — agents haven't been generated yet
+      outlineEngine: outlineRouting.engine,
+      enforceLearningContract: true,
     },
   );
 
@@ -451,7 +463,7 @@ async function generateClassroomInner(
     throw new Error(outlinesResult.error || 'Failed to generate scene outlines');
   }
 
-  const { languageDirective, courseTitle, outlines } = outlinesResult.data;
+  const { languageDirective, courseTitle, outlines, learningContract } = outlinesResult.data;
   log.info(
     `Generated ${outlines.length} scene outlines (languageDirective: ${languageDirective}, courseTitle: ${courseTitle ?? 'n/a'})`,
   );
@@ -487,6 +499,10 @@ async function generateClassroomInner(
     languageDirective,
     videoManifest: buildVideoManifestFromOutlines(outlines),
     style: 'interactive',
+    ...(vocationalActive ? { taskEngineMode: true } : {}),
+    ...(learningContract
+      ? { learningContract: buildLearningContractPlan(learningContract, outlines) }
+      : {}),
     createdAt: Date.now(),
     updatedAt: Date.now(),
     // 这门课出自哪个域/库，随课落盘。
@@ -674,25 +690,34 @@ async function generateClassroomInner(
     }
   });
 
-  
-async function auditAndBuildScene(p: PreparedScene) {
+  async function verifyFinalContent(content: unknown, title: string) {
+    const { codeBlocks, texts } = extractContentVerifiables(content);
+    return verifyContent(codeBlocks, texts, (message) =>
+      log.warn(`Final-content verification unavailable for "${title}": ${message}`),
+    );
+  }
+
+  async function auditAndBuildScene(p: PreparedScene) {
     // 消融开关：`AUDIT_GATE=0` 时整条审核门不跑——不调判官、不写 `scene.audit`。
     // **只有显式设成 '0' 才走这条**，默认与设错值一律照常审核
     // （实验开关拼错时该退回生产行为，不该悄悄把审核门关掉）。
     if (!isAuditGateEnabled()) {
       log.warn(`[消融] AUDIT_GATE=0，"${p.safeOutline.title}" 跳过事实审核，本屏不带判词`);
-      const actions = await withGenerationRetry(
-        () =>
-          generateSceneActions(p.safeOutline, p.content, sceneAiCall, {
-            agents,
-            languageDirective,
-          }),
-        {
-          label: `scene ${p.index + 1}/${outlines.length} actions`,
-          onRetry: (event) => reportSceneRetry(p.index, p.safeOutline.title, 'actions', event),
-        },
-      );
-      return { p, sceneAudit: undefined, gatedContent: p.content, actions };
+      const [actions, verification] = await Promise.all([
+        withGenerationRetry(
+          () =>
+            generateSceneActions(p.safeOutline, p.content, sceneAiCall, {
+              agents,
+              languageDirective,
+            }),
+          {
+            label: `scene ${p.index + 1}/${outlines.length} actions`,
+            onRetry: (event) => reportSceneRetry(p.index, p.safeOutline.title, 'actions', event),
+          },
+        ),
+        verifyFinalContent(p.content, p.safeOutline.title),
+      ]);
+      return { p, sceneAudit: undefined, gatedContent: p.content, actions, verification };
     }
     const { audit: sceneAudit, content: auditedContent } = await auditSceneContent({
       sceneTitle: p.safeOutline.title,
@@ -736,22 +761,23 @@ async function auditAndBuildScene(p: PreparedScene) {
     // same shape it was handed, so narrow it back to the generator's union.
     const gatedContent = auditedContent as typeof p.content;
 
-    const actions = await withGenerationRetry(
-      () =>
-        generateSceneActions(p.safeOutline, gatedContent, sceneAiCall, {
-          agents,
-          languageDirective,
-        }),
-      {
-        label: `scene ${p.index + 1}/${outlines.length} actions`,
-        onRetry: (event) => reportSceneRetry(p.index, p.safeOutline.title, 'actions', event),
-      },
-    );
+    const [actions, verification] = await Promise.all([
+      withGenerationRetry(
+        () =>
+          generateSceneActions(p.safeOutline, gatedContent, sceneAiCall, {
+            agents,
+            languageDirective,
+          }),
+        {
+          label: `scene ${p.index + 1}/${outlines.length} actions`,
+          onRetry: (event) => reportSceneRetry(p.index, p.safeOutline.title, 'actions', event),
+        },
+      ),
+      verifyFinalContent(gatedContent, p.safeOutline.title),
+    ]);
     log.info(`Scene "${p.safeOutline.title}": ${actions.length} actions`);
-    return { p, sceneAudit, gatedContent, actions };
+    return { p, sceneAudit, gatedContent, actions, verification };
   }
-
-
 
   // 重试进度上报：原来定义在循环体内闭包吃 index / safeOutline，审核搬出循环后
   // actions 那一路也要用它，所以提到外面显式收下标与屏题。
@@ -788,7 +814,7 @@ async function auditAndBuildScene(p: PreparedScene) {
     for (const slot of sceneSlots) {
       const item = await slot.promise;
       if (!item) continue;
-      const { p, sceneAudit, gatedContent, actions } = item;
+      const { p, sceneAudit, gatedContent, actions, verification } = item;
       const { safeOutline, sceneEvidence, grounding } = p;
       const sceneId = createSceneWithActions(safeOutline, gatedContent, actions, api);
       if (sceneId) {
@@ -807,6 +833,7 @@ async function auditAndBuildScene(p: PreparedScene) {
           // 审核门关掉时整个字段不写——写一个空 audit 会让读的人
           // 以为判官跑了且什么都没抓到（与 grounding/concepts 同一纪律）。
           ...(sceneAudit ? { audit: sceneAudit } : {}),
+          ...(verification ? { verification } : {}),
           ...(grounding ? { grounding } : {}),
           ...(concepts ? { concepts } : {}),
         } as ScenePatch);
@@ -834,10 +861,10 @@ async function auditAndBuildScene(p: PreparedScene) {
             stage,
             scenes: store.getState().scenes,
             generating: {
-            done: generatedScenes,
-            total: outlines.length,
-            plannedTitles: outlines.map((o) => o.title),
-          },
+              done: generatedScenes,
+              total: outlines.length,
+              plannedTitles: outlines.map((o) => o.title),
+            },
           },
           options.baseUrl,
         );
@@ -863,182 +890,186 @@ async function auditAndBuildScene(p: PreparedScene) {
   })();
 
   try {
-  for (const [index, outline] of outlines.entries()) {
-    const safeOutline = applyOutlineFallbacks(outline, true, {
-      allowProceduralSkill: vocationalActive,
-    });
-    const progressStart = 30 + Math.floor((index / Math.max(outlines.length, 1)) * 60);
+    for (const [index, outline] of outlines.entries()) {
+      const safeOutline = applyOutlineFallbacks(outline, true, {
+        allowProceduralSkill: vocationalActive,
+      });
+      const progressStart = 30 + Math.floor((index / Math.max(outlines.length, 1)) * 60);
 
-    await options.onProgress?.({
-      step: 'generating_scenes',
-      progress: Math.max(progressStart, 31),
-      message: `Generating scene ${index + 1}/${outlines.length}: ${safeOutline.title}`,
-      scenesGenerated: generatedScenes,
-      totalScenes: outlines.length,
-    });
+      await options.onProgress?.({
+        step: 'generating_scenes',
+        progress: Math.max(progressStart, 31),
+        message: `Generating scene ${index + 1}/${outlines.length}: ${safeOutline.title}`,
+        scenesGenerated: generatedScenes,
+        totalScenes: outlines.length,
+      });
 
-    // Same multi-agent graft as the client pipeline: the retrieval agent fences
-    // facts to the controlled KB and the diagnosis agent sets depth/analogy
-    // domain. Without this the server batch path silently produced ungrounded,
-    // one-size-fits-all scenes while the UI implied otherwise.
-    // 显式选的知识库优先，否则沿用培训领域；未建的库返回空而不是拿别的领域
-    // 语料顶上（见 fetchEvidence）。检索、审核标注共用这一个值。
-    const sceneCorpus = corpusOf(requirements.learnerProfile);
-    const [sceneEvidence, scenePlan] = await Promise.all([
-      fetchEvidence(
-        `${courseTitle ?? ''} ${safeOutline.title} ${safeOutline.description ?? ''}`.trim(),
-        sceneCorpus,
-        undefined,
-        undefined,
-        // 摘录难度跟姿态档走（2A 纯净测 beginner 44.4% 病根修复）
-        requirements.learnerProfile ? excerptDifficultyCap(requirements.learnerProfile) : undefined,
-        // 摘录代码形态也跟姿态档走：难度档管不住代码长度，零基础档限 5 行
-        requirements.learnerProfile ? excerptCodeLineCap(requirements.learnerProfile) : undefined,
-      ),
-      requirements.learnerProfile
-        ? fetchLearnerBlueprint(requirement, requirements.learnerProfile)
-        : Promise.resolve(null),
-    ]);
-    const assemblyMode = sceneEvidence != null && process.env.EXCERPT_ASSEMBLY !== '0';
-    // 四段指令**只给正文生成器**，攒在这里，不往 `safeOutline.description` 上原地累加。
-    //
-    // 原来是就地改写那一格，于是同一个 outline 后面又被喂给讲稿生成器
-    // （`generateSceneActions(p.safeOutline, …)`），讲稿把指令当正文写了进去，
-    // 审核再把它们逐条抽成断言判「存疑」。2026-08-24 实测（P4 走读 `_ZbcAPo3x8`）：
-    // 17 条存疑里有 **7 条**是这么来的——`- 【零基础硬要求】单个段落新术语不超过 2 个`、
-    // `- 每页最多 1-2 个摘录占位符`、`- （这里本应引用教材 […]，这一屏引用已达上限）`。
-    // 交付的讲稿是干净的（修订环清掉了），所以学习者听不到；
-    // **但存疑率被这些非断言顶高了四成，读数因此不可信**。
-    let directives = '';
-    if (sceneEvidence) {
-      directives +=
-        evidenceDirective(sceneEvidence) + (assemblyMode ? excerptDirective(sceneEvidence) : '');
-    }
-    if (scenePlan) {
-      // 这一屏正在讲什么，两张清单都要把它排除——既不算已讲过，也不算还没讲。
-      progress.teachingNow = safeOutline.title;
-      directives +=
-        blueprintDirective(scenePlan, requirements.learnerProfile!) +
-        (coherenceOn ? coherenceDirective(frame, progress) : '');
-      courseBlueprint ??= scenePlan;
-    }
-    // 正文生成用带指令的这一份；`safeOutline` 本身保持原样，讲稿与审核看到的是干净描述。
-    const outlineForContent = directives
-      ? { ...safeOutline, description: (safeOutline.description ?? '') + directives }
-      : safeOutline;
-
-    const content = await withGenerationRetry(
-      () =>
-        generateSceneContent(outlineForContent, sceneAiCall, {
-          agents,
-          languageDirective,
-          allowProceduralSkill: vocationalActive,
-          // 这门课前面几屏用过的教具形态。不传的话选模板时不知道用过什么，
-          // 同题材自然选到同一个——制造域一门课两个教具全是步进器，
-          // 这是其中一半原因（另一半是模板池 8 个里 5 个 AI 域专属）。
-          usedTemplateIds: [...usedTemplateIds],
-          // PBL 场景走的是 Vercel AI SDK 的 agentic loop（`lib/pbl/generate-pbl.ts`），
-          // 它要的是 LanguageModel 实例本身，不是这里的 `sceneAiCall` 闭包。
-          // 这三个字段批量路径此前一个都没传，于是**任何 pbl 大纲在这条路上必然失败**：
-          // `generatePBLSceneContent` 第一行就 `if (!languageModel) return null`，
-          // 重试 6 次全空，最后 `Skipping scene …` 把那一屏丢掉。
-          // 症状是课程墙 32 门课一个 pbl 场景都没有——不是大纲从不选它，
-          // 是选了也落不了地（2026-08-18 实测：一门课的大纲第 8 屏就是 pbl，
-          // 日志里 6 条 `LanguageModel required for PBL generation`，落盘只剩 8 屏）。
-          // 逐场景那条 HTTP 路径（`app/api/generate/scene-content/route.ts`）一直传得对，
-          // 所以这是批量路径独有的漏接。
-          languageModel,
-          thinkingConfig: classroomThinking,
-          userRequirements: requirements,
-        }),
-      {
-        label: `scene ${index + 1}/${outlines.length} content`,
-        shouldRetryResult: (result) => result === null,
-        onRetry: (event) => reportSceneRetry(index, safeOutline.title, 'content', event),
-      },
-    );
-    if (!content) {
-      log.warn(`Skipping scene "${safeOutline.title}" — content generation failed`);
-      continue;
-    }
-
-    // 全课类比：大纲里抠不出来（要点是三个短名词短语，装不下「就像……」），
-    // 所以等第一屏正文写出来再定调，后面各屏跟着它走。
-    // 不这么做的话 `frame.analogy` 恒为空，`coherenceDirective` 的招牌那一条
-    // 【全课统一类比】从来发不出去——2026-08-23 实测一门连贯层开着的课，
-    // 六屏六个不同喻体（人眼/上课分心/人工清点/发身份证/超速相机/超市计数器）。
-    // 抠不出来就保持空，那条指令照旧不发——**不硬造**：硬造的比喻会把后面
-    // 所有屏锚死在一个可能不合适的喻体上，比没有更糟。
-    if (coherenceOn && !frame.analogy) {
-      const found = analogyFromGeneratedText(extractTeachingText(content));
-      if (found) {
-        frame.analogy = found;
-        log.info(`[课程一致性] 全课类比定调（第 ${index + 1} 屏）：${found}`);
+      // Same multi-agent graft as the client pipeline: the retrieval agent fences
+      // facts to the controlled KB and the diagnosis agent sets depth/analogy
+      // domain. Without this the server batch path silently produced ungrounded,
+      // one-size-fits-all scenes while the UI implied otherwise.
+      // 显式选的知识库优先，否则沿用培训领域；未建的库返回空而不是拿别的领域
+      // 语料顶上（见 fetchEvidence）。检索、审核标注共用这一个值。
+      const sceneCorpus = corpusOf(requirements.learnerProfile);
+      const [sceneEvidence, scenePlan] = await Promise.all([
+        fetchEvidence(
+          `${courseTitle ?? ''} ${safeOutline.title} ${safeOutline.description ?? ''}`.trim(),
+          sceneCorpus,
+          undefined,
+          undefined,
+          // 摘录难度跟姿态档走（2A 纯净测 beginner 44.4% 病根修复）
+          requirements.learnerProfile
+            ? excerptDifficultyCap(requirements.learnerProfile)
+            : undefined,
+          // 摘录代码形态也跟姿态档走：难度档管不住代码长度，零基础档限 5 行
+          requirements.learnerProfile ? excerptCodeLineCap(requirements.learnerProfile) : undefined,
+        ),
+        requirements.learnerProfile
+          ? fetchLearnerBlueprint(requirement, requirements.learnerProfile)
+          : Promise.resolve(null),
+      ]);
+      const assemblyMode = sceneEvidence != null && process.env.EXCERPT_ASSEMBLY !== '0';
+      // 四段指令**只给正文生成器**，攒在这里，不往 `safeOutline.description` 上原地累加。
+      //
+      // 原来是就地改写那一格，于是同一个 outline 后面又被喂给讲稿生成器
+      // （`generateSceneActions(p.safeOutline, …)`），讲稿把指令当正文写了进去，
+      // 审核再把它们逐条抽成断言判「存疑」。2026-08-24 实测（P4 走读 `_ZbcAPo3x8`）：
+      // 17 条存疑里有 **7 条**是这么来的——`- 【零基础硬要求】单个段落新术语不超过 2 个`、
+      // `- 每页最多 1-2 个摘录占位符`、`- （这里本应引用教材 […]，这一屏引用已达上限）`。
+      // 交付的讲稿是干净的（修订环清掉了），所以学习者听不到；
+      // **但存疑率被这些非断言顶高了四成，读数因此不可信**。
+      let directives = '';
+      if (sceneEvidence) {
+        directives +=
+          evidenceDirective(sceneEvidence) + (assemblyMode ? excerptDirective(sceneEvidence) : '');
       }
-    }
-    // 记下这屏用了哪个模板，下一屏选的时候避开。`config.templateId` 只有
-    // 模板池那条路会写；上游自由 HTML 与讲义降级都没有，正好不必去重。
-    const usedId = (content as { config?: { templateId?: unknown } } | null)?.config?.templateId;
-    if (typeof usedId === 'string' && usedId) {
-      usedTemplateIds.add(usedId);
-      progress.widgets.push(usedId);
-    }
-    // 逐屏记一笔，传给下一屏。记的是**一句话标题不是全文**——
-    // 清单要塞得进提示词，还得留下写作空间。
-    // 类比不在这里捡了：它归课程级框架，开跑前就从整份大纲定死。
-    progress.concepts.push(safeOutline.title);
-    const worked = extractWorkedExample(safeOutline.title, safeOutline.keyPoints);
-    if (worked) progress.workedExamples.push(worked);
-
-    // 摘录占位符 → 教材原文，机械替换（位置模型排、内容机器贴——模型手抄必漂移）。
-    // 客户端主链在 scene-content 路由里做这一步；批量路径此前漏了，落盘的课正文里
-    // 直接露出 {{摘录:xxx}} 原样占位符。usedExcerpts 跨场景去重，同一段教材不重复贴。
-    let grounding: { placements: ExcerptPlacement[]; candidates?: number } | undefined;
-    if (assemblyMode && sceneEvidence) {
-      const stats = await injectExcerpts(content, sceneEvidence, usedExcerpts);
-      // 依据子盒落盘：贴了哪几条教材出处，跟着资源走。判官跑不跑都在。
-      grounding = {
-        placements: stats.placements,
-        candidates: sceneEvidence.chunks.length,
-      };
-      if (Object.values(stats).some((n) => typeof n === 'number' && n > 0)) {
-        log.info(
-          `Excerpt injection "${safeOutline.title}": ${stats.injected} injected` +
-            (stats.swapped ? `, ${stats.swapped} swapped(换更咬合的候选)` : '') +
-            (stats.deduped ? `, ${stats.deduped} deduped` : '') +
-            (stats.capped ? `, ${stats.capped} capped` : '') +
-            (stats.unknown ? `, ${stats.unknown} unknown dropped` : '') +
-            (stats.rejected ? `, ${stats.rejected} rejected(不自包含)` : '') +
-            (stats.irrelevant ? `, ${stats.irrelevant} irrelevant(与前文不咬合)` : '') +
-            (stats.noLead ? `, ${stats.noLead} noLead(无引导句)` : ''),
-        );
+      if (scenePlan) {
+        // 这一屏正在讲什么，两张清单都要把它排除——既不算已讲过，也不算还没讲。
+        progress.teachingNow = safeOutline.title;
+        directives +=
+          blueprintDirective(scenePlan, requirements.learnerProfile!) +
+          (coherenceOn ? coherenceDirective(frame, progress) : '');
+        courseBlueprint ??= scenePlan;
       }
+      // 正文生成用带指令的这一份；`safeOutline` 本身保持原样，讲稿与审核看到的是干净描述。
+      const outlineForContent = directives
+        ? { ...safeOutline, description: (safeOutline.description ?? '') + directives }
+        : safeOutline;
+
+      const content = await withGenerationRetry(
+        () =>
+          generateSceneContent(outlineForContent, sceneAiCall, {
+            agents,
+            languageDirective,
+            allowProceduralSkill: vocationalActive,
+            // 这门课前面几屏用过的教具形态。不传的话选模板时不知道用过什么，
+            // 同题材自然选到同一个——制造域一门课两个教具全是步进器，
+            // 这是其中一半原因（另一半是模板池 8 个里 5 个 AI 域专属）。
+            usedTemplateIds: [...usedTemplateIds],
+            // PBL 场景走的是 Vercel AI SDK 的 agentic loop（`lib/pbl/generate-pbl.ts`），
+            // 它要的是 LanguageModel 实例本身，不是这里的 `sceneAiCall` 闭包。
+            // 这三个字段批量路径此前一个都没传，于是**任何 pbl 大纲在这条路上必然失败**：
+            // `generatePBLSceneContent` 第一行就 `if (!languageModel) return null`，
+            // 重试 6 次全空，最后 `Skipping scene …` 把那一屏丢掉。
+            // 症状是课程墙 32 门课一个 pbl 场景都没有——不是大纲从不选它，
+            // 是选了也落不了地（2026-08-18 实测：一门课的大纲第 8 屏就是 pbl，
+            // 日志里 6 条 `LanguageModel required for PBL generation`，落盘只剩 8 屏）。
+            // 逐场景那条 HTTP 路径（`app/api/generate/scene-content/route.ts`）一直传得对，
+            // 所以这是批量路径独有的漏接。
+            languageModel,
+            thinkingConfig: classroomThinking,
+            userRequirements: requirements,
+          }),
+        {
+          label: `scene ${index + 1}/${outlines.length} content`,
+          shouldRetryResult: (result) => result === null,
+          onRetry: (event) => reportSceneRetry(index, safeOutline.title, 'content', event),
+        },
+      );
+      if (!content) {
+        log.warn(`Skipping scene "${safeOutline.title}" — content generation failed`);
+        continue;
+      }
+
+      // 全课类比：大纲里抠不出来（要点是三个短名词短语，装不下「就像……」），
+      // 所以等第一屏正文写出来再定调，后面各屏跟着它走。
+      // 不这么做的话 `frame.analogy` 恒为空，`coherenceDirective` 的招牌那一条
+      // 【全课统一类比】从来发不出去——2026-08-23 实测一门连贯层开着的课，
+      // 六屏六个不同喻体（人眼/上课分心/人工清点/发身份证/超速相机/超市计数器）。
+      // 抠不出来就保持空，那条指令照旧不发——**不硬造**：硬造的比喻会把后面
+      // 所有屏锚死在一个可能不合适的喻体上，比没有更糟。
+      if (coherenceOn && !frame.analogy) {
+        const found = analogyFromGeneratedText(extractTeachingText(content));
+        if (found) {
+          frame.analogy = found;
+          log.info(`[课程一致性] 全课类比定调（第 ${index + 1} 屏）：${found}`);
+        }
+      }
+      // 记下这屏用了哪个模板，下一屏选的时候避开。`config.templateId` 只有
+      // 模板池那条路会写；上游自由 HTML 与讲义降级都没有，正好不必去重。
+      const usedId = (content as { config?: { templateId?: unknown } } | null)?.config?.templateId;
+      if (typeof usedId === 'string' && usedId) {
+        usedTemplateIds.add(usedId);
+        progress.widgets.push(usedId);
+      }
+      // 逐屏记一笔，传给下一屏。记的是**一句话标题不是全文**——
+      // 清单要塞得进提示词，还得留下写作空间。
+      // 类比不在这里捡了：它归课程级框架，开跑前就从整份大纲定死。
+      progress.concepts.push(safeOutline.title);
+      const worked = extractWorkedExample(safeOutline.title, safeOutline.keyPoints);
+      if (worked) progress.workedExamples.push(worked);
+
+      // 摘录占位符 → 教材原文，机械替换（位置模型排、内容机器贴——模型手抄必漂移）。
+      // 客户端主链在 scene-content 路由里做这一步；批量路径此前漏了，落盘的课正文里
+      // 直接露出 {{摘录:xxx}} 原样占位符。usedExcerpts 跨场景去重，同一段教材不重复贴。
+      let grounding: { placements: ExcerptPlacement[]; candidates?: number } | undefined;
+      if (assemblyMode && sceneEvidence) {
+        const stats = await injectExcerpts(content, sceneEvidence, usedExcerpts);
+        // 依据子盒落盘：贴了哪几条教材出处，跟着资源走。判官跑不跑都在。
+        grounding = {
+          placements: stats.placements,
+          candidates: sceneEvidence.chunks.length,
+        };
+        if (Object.values(stats).some((n) => typeof n === 'number' && n > 0)) {
+          log.info(
+            `Excerpt injection "${safeOutline.title}": ${stats.injected} injected` +
+              (stats.swapped ? `, ${stats.swapped} swapped(换更咬合的候选)` : '') +
+              (stats.deduped ? `, ${stats.deduped} deduped` : '') +
+              (stats.capped ? `, ${stats.capped} capped` : '') +
+              (stats.unknown ? `, ${stats.unknown} unknown dropped` : '') +
+              (stats.rejected ? `, ${stats.rejected} rejected(不自包含)` : '') +
+              (stats.irrelevant ? `, ${stats.irrelevant} irrelevant(与前文不咬合)` : '') +
+              (stats.noLead ? `, ${stats.noLead} noLead(无引导句)` : ''),
+          );
+        }
+      }
+
+      // 到这里为止（检索 → 内容 → 摘录注入）必须留在串行段：`usedExcerpts` 是跨屏
+      // 去重的共享状态，顺序决定哪一屏拿到哪一段教材，并发会让课的内容变样。
+      // 审核与 actions 没有任何跨屏依赖，收集完统一并发跑（见循环后的第二段）。
+      // 内容一好就立刻交给审核，**不等其余屏**。
+      //
+      // 这一句是首屏时间的关键。原来这里是 `prepared.push(...)`，整个串行循环跑完才进
+      // 第二段——于是第 1 屏要等「全部 N 屏的内容生成 + 自己的审核」才落盘。
+      // 2026-08-21 实测 5 屏课：job 全程 `scenesGenerated=0`，直到最后一刻才跳 5，
+      // 增量落盘等于没生效，因为压根没有可落的东西。
+      //
+      // 改成边产边审之后，第 1 屏只等「内容₁ + 审核₁」。三个性质一个没丢：
+      //   · 摘录顺序——这个循环本身仍是串行的，`usedExcerpts` 的分配顺序一字不变；
+      //   · 审核并发——`runAudit` 内部走同一个信号量，在飞数仍受 auditConcurrency 钳制；
+      //   · 落盘有序——第三段照 `pendingScenes` 的下标顺序 await。
+      sceneSlots[index].fill(
+        runAudit({ index, safeOutline, content, sceneEvidence, sceneCorpus, grounding }),
+      );
     }
 
-    // 到这里为止（检索 → 内容 → 摘录注入）必须留在串行段：`usedExcerpts` 是跨屏
-    // 去重的共享状态，顺序决定哪一屏拿到哪一段教材，并发会让课的内容变样。
-    // 审核与 actions 没有任何跨屏依赖，收集完统一并发跑（见循环后的第二段）。
-    // 内容一好就立刻交给审核，**不等其余屏**。
+    // ── 第二段：审核 + actions 并发 ──────────────────────────────────────────
     //
-    // 这一句是首屏时间的关键。原来这里是 `prepared.push(...)`，整个串行循环跑完才进
-    // 第二段——于是第 1 屏要等「全部 N 屏的内容生成 + 自己的审核」才落盘。
-    // 2026-08-21 实测 5 屏课：job 全程 `scenesGenerated=0`，直到最后一刻才跳 5，
-    // 增量落盘等于没生效，因为压根没有可落的东西。
+    // 为什么这一段是大头：WO-L2 五轮体检的 20 屏实测，单屏生成中位 74s、**审核中位 191s**，
+    // 审核占单屏总耗时 73.6%。原来整个循环（生成+审核+actions）逐屏串行，
+    // 一门 9 屏的课 ≈ 45 分钟，实测吻合。审核每屏独立——`auditSceneContent` 只吃这一屏的
+    // content 与 evidence，没有跨屏状态——所以这一段可以直接并发。
     //
-    // 改成边产边审之后，第 1 屏只等「内容₁ + 审核₁」。三个性质一个没丢：
-    //   · 摘录顺序——这个循环本身仍是串行的，`usedExcerpts` 的分配顺序一字不变；
-    //   · 审核并发——`runAudit` 内部走同一个信号量，在飞数仍受 auditConcurrency 钳制；
-    //   · 落盘有序——第三段照 `pendingScenes` 的下标顺序 await。
-    sceneSlots[index].fill(runAudit({ index, safeOutline, content, sceneEvidence, sceneCorpus, grounding }));
-  }
-
-  // ── 第二段：审核 + actions 并发 ──────────────────────────────────────────
-  //
-  // 为什么这一段是大头：WO-L2 五轮体检的 20 屏实测，单屏生成中位 74s、**审核中位 191s**，
-  // 审核占单屏总耗时 73.6%。原来整个循环（生成+审核+actions）逐屏串行，
-  // 一门 9 屏的课 ≈ 45 分钟，实测吻合。审核每屏独立——`auditSceneContent` 只吃这一屏的
-  // content 与 evidence，没有跨屏状态——所以这一段可以直接并发。
-  //
   } finally {
     // 无论生产者是正常跑完还是中途抛出，都要做这两件事：
     //   ① 补齐没填的槽——不补的话消费者会永久挂在那一格上，整个任务假死；
@@ -1126,9 +1157,7 @@ async function auditAndBuildScene(p: PreparedScene) {
             ...(typeof profile.python_level === 'number'
               ? { pythonLevel: profile.python_level }
               : {}),
-            ...(typeof profile.agent_level === 'number'
-              ? { agentLevel: profile.agent_level }
-              : {}),
+            ...(typeof profile.agent_level === 'number' ? { agentLevel: profile.agent_level } : {}),
             ...(typeof profile.rag_level === 'number' ? { ragLevel: profile.rag_level } : {}),
             ...(typeof profile.engineering_level === 'number'
               ? { engineeringLevel: profile.engineering_level }
@@ -1136,6 +1165,15 @@ async function auditAndBuildScene(p: PreparedScene) {
           },
         }
       : undefined;
+
+  // Recheck the exact final scene payload immediately before persistence. A failed scene stays
+  // absent and therefore keeps the course as a draft; this gate never fabricates replacement work.
+  const contractFulfillment = validateLearningContractFulfillment(stage.learningContract, scenes);
+  if (!contractFulfillment.fulfilled) {
+    log.warn(
+      `Course kept as draft: teaching contract unfulfilled — ${contractFulfillment.violations.join('; ')}`,
+    );
+  }
 
   const persisted = await persistClassroom(
     {

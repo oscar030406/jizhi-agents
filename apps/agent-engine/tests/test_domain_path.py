@@ -32,6 +32,9 @@ def test_missing_corpus_says_why_instead_of_faking_it():
     assert path["reason"]
     assert path["stages"] == []
     assert path["concept_count"] == 0
+    assert "管理者" in path["reason"]
+    assert "盘上" not in path["reason"]
+    assert "readiness.json" not in path["reason"]
 
 
 def test_stage_order_respects_prerequisites():

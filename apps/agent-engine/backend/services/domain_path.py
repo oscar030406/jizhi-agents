@@ -87,8 +87,8 @@ def build_domain_path(corpus: str) -> dict[str, Any]:
 
     if not readiness:
         out["reason"] = (
-            f"盘上没有 {name}_intake/readiness.json："
-            "这个库没跑过接入流水线，或报告读不出来，前置图无从谈起"
+            "该领域尚未生成可用的学习路径：知识库未完成接入，"
+            "或接入报告当前不可用。请由所属机构的管理者完成知识库接入后重试"
         )
         return out
 

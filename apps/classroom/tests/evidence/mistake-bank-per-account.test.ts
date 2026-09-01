@@ -25,10 +25,14 @@ vi.stubGlobal('localStorage', {
 });
 
 const entry = (id: string) => ({
+  sceneId: `scene-${id}`,
+  sceneTitle: '测试场景',
   questionId: id,
-  question: `题 ${id}`,
-  chosen: 'A',
-  correct: 'B',
+  prompt: `题 ${id}`,
+  analysis: '测试解析',
+  userAnswer: 'A',
+  correctAnswer: 'B',
+  answered: true,
   at: '2026-08-24T00:00:00.000Z',
 });
 

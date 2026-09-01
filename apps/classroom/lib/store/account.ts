@@ -142,7 +142,7 @@ async function mergeAnonymousProgress(accountId: string, serverProfile: unknown)
     // 阻塞式提示：紧接着就是整页 reload，toast 活不到用户看见。
     window.alert(
       `本地进度没能并进你的账号（${why}）。\n` +
-        `这台电脑上的 ${adoptedConcepts.length} 项学习记录还留在本机，下次登录会自动重试。`,
+        `当前浏览器中的 ${adoptedConcepts.length} 项学习记录仍已保留，下次登录会自动重试。`,
     );
     return;
   }

@@ -26,6 +26,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 import { domainLabel } from '@/lib/knowledge/domain-labels';
+import { redactCaliber as redactProviderText } from '@/lib/metrics/redact-caliber';
 
 function engineDataDir(): string {
   return process.env.ENGINE_DATA_DIR || path.join(process.cwd(), '..', 'agent-engine', 'data');
@@ -409,9 +410,7 @@ function showableArtifact(name: string): boolean {
  * 这一页要当测试样例交出去，别人的桌面路径不该跟着交——只留 run 目录往下那一截。
  */
 function tidyArtifactText(raw: string): string {
-  return raw.replace(/[A-Za-z]:(?:\\\\|[\\/])[^"\s，；（）]*/g, (m) =>
-    m.replace(/\\+/g, '/').split('/').filter(Boolean).slice(-3).join('/'),
-  );
+  return redactProviderText(raw);
 }
 
 /** 一轮体检能上屏的产物。目录不在、读不到，就是空数组——页面照常渲染，不报错。 */

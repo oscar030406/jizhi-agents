@@ -55,7 +55,9 @@ export interface ScenePipelineMeta {
     codeUnverifiable: number;
     arithmeticChecked: number;
     arithmeticPassed: number;
+    arithmeticUnverifiable?: number;
     failures: string[];
+    warnings?: string[];
   } | null;
 }
 

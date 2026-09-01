@@ -43,6 +43,7 @@ describe('task-engine outlines prompt', () => {
     expect(text).toMatch(/5-7 .*procedural-skill|5-7 .*checklist/i);
     expect(text).toMatch(/2-4 .*explanation|2-4 .*slide/i);
     expect(text).toMatch(/2-4 .*challenge|2-4 .*game/i);
+    expect(text).toMatch(/at least 1 .*assessment.*quiz|at least 1 .*quiz/i);
     expect(text).toContain('procedural-skill');
     expect(text).toContain('slide');
     expect(text).toContain('game');

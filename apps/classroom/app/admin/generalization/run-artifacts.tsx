@@ -25,10 +25,8 @@ import {
 import type { RunArtifact } from './data';
 
 export function RunArtifacts({
-  runId,
   artifacts,
 }: {
-  readonly runId: string;
   readonly artifacts: readonly RunArtifact[];
 }) {
   const [open, setOpen] = useState<string | null>(null);
@@ -55,9 +53,7 @@ export function RunArtifacts({
         <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="break-all font-mono text-sm">{shown?.name}</DialogTitle>
-            <DialogDescription className="break-all font-mono text-[11px]">
-              data/knowledge_base/intake_runs/{runId}/trial_courses/{shown?.name}
-            </DialogDescription>
+            <DialogDescription>本次体检产物；可在此查看原文。</DialogDescription>
           </DialogHeader>
           <pre className="overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted/60 px-3 py-2 font-mono text-[10px] leading-relaxed">
             {shown?.text}

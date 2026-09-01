@@ -142,7 +142,7 @@ function Row({
   );
 }
 
-export function EvidenceTrajectoryChart() {
+export function EvidenceTrajectoryChart({ domain }: { domain?: string } = {}) {
   const [list, setList] = useState<Trajectory[] | null>(null);
   // 由同一段履历 fold 出来的画像。**同源**——图上的点和右边的数字来自一次读取，
   // 对不上就是 fold 有问题，不会是两份数据不同步。
@@ -154,7 +154,9 @@ export function EvidenceTrajectoryChart() {
       try {
         const ledger = await readLedger();
         if (cancelled) return;
-        const hist = history(ledger);
+        const hist = history(ledger).filter(
+          (e) => e.measured.kind !== 'concept' || !domain || e.measured.domain === domain,
+        );
         // 概念测项的 label 是引擎概念 id（`llm_basics`、`embodied_vlm` 这种），
         // 左侧行名和下面「逐条证据」两处都直接印它。在这里过一遍概念中文名的单一真源，
         // 两处一起换；退回场景标题的那些本来就是中文，`conceptLabel` 原样放行。
@@ -168,12 +170,14 @@ export function EvidenceTrajectoryChart() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [domain]);
 
   const stats = useMemo(() => (list ? summarize(list) : null), [list]);
   const bounds = useMemo(() => {
     if (!list?.length) return { minMs: 0, spanMs: 0 };
-    const times = list.flatMap((t) => t.points.map((p) => Date.parse(p.at))).filter(Number.isFinite);
+    const times = list
+      .flatMap((t) => t.points.map((p) => Date.parse(p.at)))
+      .filter(Number.isFinite);
     const min = Math.min(...times);
     return { minMs: min, spanMs: Math.max(...times) - min };
   }, [list]);
@@ -271,8 +275,8 @@ export function EvidenceTrajectoryChart() {
                 className="flex flex-col gap-0.5 px-3 py-2 text-xs md:flex-row md:items-start md:justify-between md:gap-3"
               >
                 <span className="min-w-0 flex-1">
-                  <span className="text-muted-foreground">{t.label} · </span>
-                  第 {p.encounter} 次 · {p.modality}
+                  <span className="text-muted-foreground">{t.label} · </span>第 {p.encounter} 次 ·{' '}
+                  {p.modality}
                   {p.because.missed.length > 0 ? ` · 漏掉 ${p.because.missed.join('、')}` : ''}
                 </span>
                 <span className="text-muted-foreground md:shrink-0 md:text-right">

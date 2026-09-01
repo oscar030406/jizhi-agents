@@ -62,9 +62,10 @@ describe('就绪度表不印内部档位码', () => {
     expect(html).not.toMatch(TIER_CODE);
   });
 
-  it('外部仓库来的语料印末两段，只印一个 Master 等于没说', () => {
+  it('外部资料只说明由平台管理，不展示接入机器路径', () => {
     const html = renderToStaticMarkup(<DomainIntakeTable intakes={[intake({})]} />);
-    expect(html).toContain('UserGuide/Master');
+    expect(html).toContain('平台管理的外部资料源');
+    expect(html).not.toMatch(/D:\\|UserGuide[\\/]Master/);
   });
 
   it('页面上传来的语料不印 run 编号，说清是这次上传的', () => {
@@ -77,6 +78,20 @@ describe('就绪度表不印内部档位码', () => {
     );
     expect(html).toContain('本次接入时上传的文档');
     expect(html).not.toContain('20260816T033452');
+  });
+
+  it('不把 probe/fullprobe 测试领域渲染到就绪度表', () => {
+    const html = renderToStaticMarkup(
+      <DomainIntakeTable
+        intakes={[
+          intake({ domain: 'fullprobe' }),
+          intake({ domain: 'probe_fixture' }),
+          intake({ domain: 'iotdb' }),
+        ]}
+      />,
+    );
+    expect(html).toContain('iotdb');
+    expect(html).not.toMatch(/fullprobe|probe_fixture/i);
   });
 
   it('没量到档位区间就显示「—」，不兜底成某一档', () => {

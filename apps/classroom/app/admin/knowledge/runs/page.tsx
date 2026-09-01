@@ -14,8 +14,10 @@
 import Link from 'next/link';
 
 import { SiteHeader } from '@/components/site-header';
-import { listRuns, RUNS_DIR_LABEL } from '@/lib/server/intake-runs';
+import { isScratchCorpus } from '@/lib/knowledge/domain-registry';
 import { domainLabel, hasDomainLabel } from '@/lib/knowledge/domain-labels';
+import { redactCaliber } from '@/lib/metrics/redact-caliber';
+import { listRuns } from '@/lib/server/intake-runs';
 
 import { Denied, managerAccount } from '../guard';
 
@@ -45,7 +47,11 @@ export default async function IntakeRunsPage() {
   // run 行的库名走 domainLabel，先灌域注册清单（同 admin 总览页的补法）
   const { readDomainRegistry } = await import('@/lib/server/domain-registry');
   await readDomainRegistry().catch(() => null);
-  const runs = await listRuns(30);
+  const runs = (await listRuns(30)).filter(
+    (run) =>
+      !isScratchCorpus(run.corpus) &&
+      !/(?:fullprobe|fullpath[-_]?probe|(?:^|[-_])probe(?:[-_]|$))/i.test(run.corpus),
+  );
 
   return (
     <>
@@ -56,21 +62,17 @@ export default async function IntakeRunsPage() {
       />
       <main className="mx-auto max-w-4xl px-4 py-10 sm:px-6">
         <header className="mb-8">
-          <h1 className="text-2xl font-semibold tracking-tight">接入 run</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">接入记录</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            一次 run = 把一批文档接成一个新的语料库：接收清洗、切块入库、建索引、整理知识、
-            派生金标。点进去看每一站什么时候跑的、跑出什么数、哪几站是同时跑的。
+            每次接入会把一批文档处理成新的语料库。点开记录可查看各站状态、耗时、处理结果与事件回放。
           </p>
         </header>
 
         {runs.length === 0 ? (
           <div className="rounded-xl border border-dashed border-border px-4 py-10 text-center text-xs leading-relaxed text-muted-foreground">
-            <p>还没有接入 run。</p>
+            <p>还没有接入记录。</p>
             <p className="mt-2">
-              每发起一次接入，引擎会在{' '}
-              <code className="font-mono">{RUNS_DIR_LABEL}&lt;run 编号&gt;/</code>{' '}
-              下落一个目录，里面是 <code className="font-mono">run.json</code> 与{' '}
-              <code className="font-mono">events.jsonl</code>；这一页读的就是它们。
+              请回到知识库页面使用“接入新知识库”；系统接收后会在这里显示各站状态、耗时和事件回放。
             </p>
           </div>
         ) : (
@@ -107,7 +109,7 @@ export default async function IntakeRunsPage() {
                     )}
                     <p className="mt-2 text-[11px] tabular-nums text-muted-foreground">
                       {when(run.createdAt)} · {run.files} 个文件
-                      {run.durationMs !== null && ` · 墙钟 ${run.durationMs} ms`}
+                      {run.durationMs !== null && ` · 总耗时 ${run.durationMs} ms`}
                       {` · 完成 ${run.stageCounts.done} 站`}
                       {run.stageCounts.failed > 0 && ` · 失败 ${run.stageCounts.failed} 站`}
                       {run.stageCounts.skipped > 0 && ` · 跳过 ${run.stageCounts.skipped} 站`}
@@ -115,7 +117,7 @@ export default async function IntakeRunsPage() {
                     </p>
                     {run.error && (
                       <p className="mt-1 text-[11px] leading-relaxed text-rose-700 dark:text-rose-300">
-                        {run.error}
+                        {redactCaliber(run.error)}
                       </p>
                     )}
                     <p className="mt-1 font-mono text-[10px] text-muted-foreground/70">

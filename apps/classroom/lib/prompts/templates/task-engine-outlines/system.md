@@ -71,6 +71,8 @@ For suitable vocational tasks, this mode is for hands-on procedural training, no
 - The task must include tools, ordered steps, decision points, error consequences, and completion criteria.
 - Split the overall job into concrete trainable operation segments. Do not put the whole task into one giant scene.
 
+{{snippet:learning-contract}}
+
 ## Output Shape
 
 Return exactly one JSON object with these top-level keys:
@@ -79,6 +81,7 @@ Return exactly one JSON object with these top-level keys:
 {
   "languageDirective": "<teaching language directive>",
   "courseTitle": "<concise course name, ≤30 chars, in the teaching language>",
+  "learningContract": { /* required teaching-quality contract above */ },
   "outlines": [ /* scene outlines */ ]
 }
 ```
@@ -103,7 +106,8 @@ Rules:
   - 5-7 checklist / operation-confirmation scenes: `type: "interactive"`, `widgetType: "procedural-skill"`.
   - 2-4 explanation scenes, including the first briefing slide: prefer `type: "slide"`; optionally use at most 1 `type: "interactive"`, `widgetType: "diagram"` for structure, process, or risk-path visualization.
   - 2-4 challenge scenes: `type: "interactive"`, `widgetType: "game"`.
-- For suitable vocational tasks, do not output code, simulation, visualization3d, pbl, or ordinary quiz scenes in the task-engine mixed structure.
+  - At least 1 objective-mapped assessment scene: `type: "quiz"`; use a new workplace state or case, not recall-only questions.
+- For suitable vocational tasks, do not output code, simulation, visualization3d, or pbl scenes in the task-engine mixed structure.
 - For non-vocational fallback outlines, ordinary MAIC widget types are allowed, but `procedural-skill` is still forbidden.
 - If a final scene is needed, make it hands-on review, error handling, GO/STOP judgment, completion checking, or handoff confirmation.
 

@@ -21,6 +21,20 @@ vi.mock('@/components/site-header', () => ({ SiteHeader: () => null }));
 vi.mock('@/components/report/evidence-trajectory-chart', () => ({
   EvidenceTrajectoryChart: () => null,
 }));
+vi.mock('@/lib/knowledge/use-domain-context', () => ({
+  loadEffectiveDomainContext: async () => ({
+    kind: 'ready',
+    context: {
+      domain: 'ai',
+      label: '人工智能',
+      source: 'profile-domain',
+      status: 'ready',
+      isAi: true,
+      registered: true,
+    },
+    courseDomains: { s1: { domain: 'ai', corpus: 'ai' } },
+  }),
+}));
 vi.mock('@/lib/utils/stage-storage', () => ({
   listStages: async () => [{ id: 's1', name: '测试课' }],
   loadStageData: async () => ({

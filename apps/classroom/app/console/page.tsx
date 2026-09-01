@@ -116,7 +116,7 @@ export default function ConsolePage() {
 
         {!enabled && (
           <p className="text-sm leading-relaxed text-muted-foreground">
-            想知道本机具体存了哪些键、什么时候清，看{' '}
+            想知道当前浏览器具体存了哪些键、什么时候清，看{' '}
             <Link
               href="/privacy"
               className={cn('rounded-sm text-blue-deep underline underline-offset-4', FOCUS_RING)}

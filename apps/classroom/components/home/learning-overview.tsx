@@ -164,7 +164,7 @@ export function MyPathCard({
 
         {!current ? (
           <p className="text-sm leading-relaxed text-muted-foreground">
-            路径表里还没有主线（data/learning-path.json 的 tracks 为空）。补上后这里会自动显示。
+            当前还没有可展示的学习主线；所属机构补齐课程规划后会自动显示。
           </p>
         ) : (
           <>

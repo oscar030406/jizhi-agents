@@ -15,7 +15,19 @@
 
 import { NextRequest } from 'next/server';
 import { streamLLM } from '@/lib/ai/llm';
-import { fetchLearnerBlueprint, blueprintDirective } from '@/lib/generation/learner-profile';
+import {
+  fetchLearnerBlueprint,
+  blueprintDirective,
+  corpusOf,
+} from '@/lib/generation/learner-profile';
+import {
+  groundingRefsForOutline,
+  resolveOutlineEngine,
+  validateAndRepairLearningContract,
+  validateVocationalOutline,
+  type LearningContract,
+} from '@/lib/generation/learning-contract';
+import { parseJsonResponse } from '@/lib/generation/json-repair';
 import { buildPrompt, PROMPT_IDS } from '@/lib/prompts';
 import {
   formatImageDescription,
@@ -39,7 +51,8 @@ import { corpusUnavailableReason } from '@/lib/server/knowledge-center';
 import { createLogger } from '@/lib/logger';
 import { resolveModelFromRequest } from '@/lib/server/resolve-model';
 import { sortDocumentImagesForVision } from '@/lib/document/bundle';
-import { resolveVocationalActive } from '@/lib/config/feature-flags';
+import { isVocationalTaskEngineEnabled } from '@/lib/config/feature-flags';
+import { readDomainRegistry } from '@/lib/server/domain-registry';
 const log = createLogger('Outlines Stream');
 
 export const maxDuration = 300;
@@ -120,6 +133,10 @@ function extractNewOutlines(
 ): { outlines: SceneOutline[]; scanFrom: number } {
   const results: SceneOutline[] = [];
 
+  // `-1` means the closing bracket of the outlines array was already seen.
+  // Do not scan later top-level objects such as learningContract as scenes.
+  if (scanFrom === -1) return { outlines: results, scanFrom };
+
   let i: number;
   if (scanFrom > 0) {
     // Resume just past the last fully-parsed object (between array elements,
@@ -171,6 +188,8 @@ function extractNewOutlines(
         objectStart = -1;
         consumed = i + 1;
       }
+    } else if (char === ']' && depth === 0) {
+      return { outlines: results, scanFrom: -1 };
     }
   }
 
@@ -227,6 +246,10 @@ const ORDINARY_WIDGET_TYPES = new Set(['simulation', 'diagram', 'code', 'game', 
 function normalizeTaskEngineOutline(outline: SceneOutline, requirement: string): SceneOutline {
   if (outline.type === 'slide') {
     return normalizeTaskEngineSlideOutline(outline);
+  }
+
+  if (outline.type === 'quiz') {
+    return outline;
   }
 
   if (outline.type === 'interactive' && outline.widgetType === 'procedural-skill') {
@@ -320,6 +343,11 @@ export async function POST(req: NextRequest) {
       return apiError('INVALID_REQUEST', 400, corpusBlock);
     }
 
+    // 域注册清单是自动路由的真源。只读接入时声明的结构元数据，绝不按域名
+    // 手写课程内容或拿关键词猜安全属性。清单缺失时仍可由明确的实训需求触发。
+    const domainRegistry = await readDomainRegistry();
+    const effectiveCorpus = corpusOf(requirements.learnerProfile) ?? 'ai';
+
     // Build user profile string for language inference context.
     // When a structured learner profile is present, the engine's diagnosis agent
     // computes the plan (difficulty tier, weak concepts, scaffold depth, analogy
@@ -390,14 +418,22 @@ export async function POST(req: NextRequest) {
     // Build teacher context from agents (if available)
     const teacherContext = formatTeacherPersonaForPrompt(agents);
 
-    // Check if Interactive Mode or server-enabled Task Engine mode is enabled.
-    const interactiveMode = requirements.interactiveMode ?? false;
-    const taskEngineMode = resolveVocationalActive(requirements);
-    const promptId = taskEngineMode
-      ? PROMPT_IDS.TASK_ENGINE_OUTLINES
-      : interactiveMode
-        ? PROMPT_IDS.INTERACTIVE_OUTLINES
-        : PROMPT_IDS.REQUIREMENTS_TO_OUTLINES;
+    // Strongest applicable engine wins. The request's legacy taskEngineMode remains
+    // a compatibility hint, but normal users no longer need to know or send it.
+    const routing = resolveOutlineEngine(requirements, domainRegistry.entries[effectiveCorpus], {
+      vocationalEnabled: isVocationalTaskEngineEnabled(),
+    });
+    const taskEngineMode = routing.engine === 'task-engine';
+    const promptId =
+      routing.engine === 'task-engine'
+        ? PROMPT_IDS.TASK_ENGINE_OUTLINES
+        : routing.engine === 'interactive'
+          ? PROMPT_IDS.INTERACTIVE_OUTLINES
+          : PROMPT_IDS.REQUIREMENTS_TO_OUTLINES;
+    const groundingRefs = groundingRefsForOutline(requirements, {
+      hasUploadedMaterials: Boolean(pdfText?.trim() || pdfImages?.length),
+      hasResearchContext: Boolean(researchContext?.trim()),
+    });
 
     const prompts = buildPrompt(promptId, {
       requirement: requirements.requirement,
@@ -410,6 +446,7 @@ export async function POST(req: NextRequest) {
       mediaEnabled: mediaGenerationEnabled,
       teacherContext,
       userProfile: userProfileText,
+      groundingRefs,
     });
 
     if (!prompts) {
@@ -479,6 +516,7 @@ export async function POST(req: NextRequest) {
           let parsedOutlines: SceneOutline[] = [];
           let languageDirective: string | null = null;
           let courseTitle: string | null = null;
+          let learningContract: LearningContract | null = null;
           let lastError: string | undefined;
 
           for (let attempt = 1; attempt <= MAX_STREAM_RETRIES + 1; attempt++) {
@@ -488,6 +526,7 @@ export async function POST(req: NextRequest) {
               parsedOutlines = [];
               languageDirective = null;
               courseTitle = null;
+              learningContract = null;
               const usedOutlineIds = new Set<string>();
               const textStream = streamLLM(
                 streamParams,
@@ -564,7 +603,9 @@ export async function POST(req: NextRequest) {
                 }
               }
 
-              // Validate: got outlines?
+              // Validate the complete one-call result before publishing. Streaming
+              // previews may already be visible, but without a valid final `done`
+              // event the client cannot persist/publish the course.
               if (parsedOutlines.length > 0) {
                 if (!courseTitle) {
                   // The head-bound streaming scan can miss a title the model
@@ -572,6 +613,35 @@ export async function POST(req: NextRequest) {
                   // recover it from the now-complete response before finalizing.
                   courseTitle = extractCourseTitleFromComplete(fullText);
                 }
+
+                const envelope = parseJsonResponse<{ learningContract?: unknown }>(fullText);
+                const contractResult = validateAndRepairLearningContract(
+                  envelope?.learningContract,
+                  parsedOutlines,
+                  { allowedGroundingRefs: groundingRefs },
+                );
+                const violations = [
+                  ...contractResult.violations,
+                  ...(taskEngineMode ? validateVocationalOutline(parsedOutlines) : []),
+                ];
+
+                if (
+                  contractResult.publishable &&
+                  contractResult.contract &&
+                  violations.length === 0
+                ) {
+                  learningContract = contractResult.contract;
+                  if (contractResult.repaired) {
+                    log.info('LearningContract normalized from request-grounded identifiers');
+                  }
+                  break;
+                }
+
+                lastError = `Teaching-quality contract rejected: ${violations.join('; ')}`;
+                log.warn(lastError);
+                // Do not spend another model call after a complete but structurally
+                // invalid course has already streamed. Rejecting the final publish is
+                // deterministic and leaves regeneration as an explicit next request.
                 break;
               }
 
@@ -623,7 +693,7 @@ export async function POST(req: NextRequest) {
             }
           }
 
-          if (parsedOutlines.length > 0) {
+          if (parsedOutlines.length > 0 && learningContract) {
             // Replace sequential gen_img_N/gen_vid_N with globally unique IDs
             const uniquifiedOutlines = uniquifyMediaElementIds(parsedOutlines);
             // Send done event with all outlines
@@ -633,13 +703,12 @@ export async function POST(req: NextRequest) {
               languageDirective: languageDirective || DEFAULT_LANGUAGE_DIRECTIVE,
               courseTitle: courseTitle || undefined,
               taskEngineMode,
+              learningContract,
             });
             controller.enqueue(encoder.encode(`data: ${doneEvent}\n\n`));
           } else {
             // All retries exhausted, no outlines produced
-            log.error(
-              `Outline generation failed after ${MAX_STREAM_RETRIES + 1} attempts: ${lastError}`,
-            );
+            log.error(`Outline generation blocked: ${lastError}`);
             const errorEvent = JSON.stringify({
               type: 'error',
               error: lastError || 'Failed to generate outlines',

@@ -539,8 +539,8 @@ export function StartIntake() {
             </DialogTitle>
             <DialogDescription className="text-xs">
               语料库 <code className="font-mono">{String(pending?.get('corpus') ?? '')}</code>，
-              {sourceSummary}，学习者分 {tiers.length} 档。发起后引擎按依赖图跑站，
-              过程在 run 页面上直播。
+              {sourceSummary}，学习者分 {tiers.length} 档。发起后系统按依赖关系逐站处理，
+              过程可在接入记录页面查看。
             </DialogDescription>
           </DialogHeader>
 
@@ -606,7 +606,7 @@ export function StartIntake() {
             )}
             {vector && (
               <li className="text-muted-foreground">
-                向量索引开：按块数调一次嵌入接口。这一站是旁路，失败只记告警、不判 run 失败。
+                向量索引开：按块数调用一次嵌入接口。这一站是旁路，失败只记录告警，不判定整次接入失败。
               </li>
             )}
             {pending?.get('extract_concepts') === 'true' && (

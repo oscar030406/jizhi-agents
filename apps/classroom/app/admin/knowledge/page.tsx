@@ -27,6 +27,9 @@ import { SiteHeader } from '@/components/site-header';
 import { Caliber } from '@/components/admin/caliber';
 import { CorpusCard } from '@/components/admin/knowledge-center';
 import { SectionAnchor } from '@/components/home/section-anchor';
+import { corpusVisibilityFor } from '@/lib/accounts/org-store';
+import { isScratchCorpus } from '@/lib/knowledge/domain-registry';
+import { redactCaliber } from '@/lib/metrics/redact-caliber';
 import { readCorporaWithDrift } from '@/lib/server/knowledge-center';
 import { cn } from '@/lib/utils';
 
@@ -40,8 +43,19 @@ const BAND_SOFT = 'bg-[rgb(228,238,253)] dark:bg-blue-soft';
 const CONTAINER = 'mx-auto w-full max-w-6xl px-4 sm:px-6';
 
 export default async function KnowledgeCenterPage() {
-  if (!(await managerAccount())) return <Denied />;
-  const { corpora, drift } = await readCorporaWithDrift();
+  const account = await managerAccount();
+  if (!account) return <Denied />;
+  const visible = await corpusVisibilityFor(account.id);
+  const { corpora: allCorpora, drift: allDrift } = await readCorporaWithDrift(visible);
+  const corpora = allCorpora.filter(
+    (corpus) =>
+      !isScratchCorpus(corpus.corpus) &&
+      !/(?:fullprobe|fullpath[-_]?probe|(?:^|[-_])probe(?:[-_]|$))/i.test(corpus.corpus),
+  );
+  const drift = allDrift.filter(
+    (note) =>
+      !/(?:fullprobe|fullpath[-_]?probe|(?:^|[-_\s])probe(?:[-_\s]|$))/i.test(note),
+  );
   const withIndex = corpora.filter((c) => c.available);
 
   return (
@@ -106,8 +120,7 @@ export default async function KnowledgeCenterPage() {
             <div className="mt-7">
               {corpora.length === 0 ? (
                 <p className="rounded-xl border border-dashed border-border px-4 py-10 text-center text-xs leading-relaxed text-muted-foreground">
-                  读不到引擎数据。这一页的数字来自服务器上的引擎产物，本站当前取不到。
-                  刷新页面重试；反复出现请联系本站运维检查引擎连接。
+                  系统暂时无法读取知识库状态，因此不展示旧数据。请刷新页面重试；反复出现请联系平台维护人员。
                 </p>
               ) : (
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -120,8 +133,7 @@ export default async function KnowledgeCenterPage() {
 
             <Caliber summary="展开口径：每张卡的数字是怎么数出来的">
               <p>
-                都是打开产物文件现数的：证据块数来自索引文件的行数，就绪度与许可来自入库链的
-                就绪度报告，更新时间是产物文件的 mtime。读不到的字段直接不显示。
+                证据块数、就绪度与许可均来自系统最近一次处理结果；页面显示最近处理时间，无法确认的字段不展示。
               </p>
             </Caliber>
 
@@ -129,19 +141,18 @@ export default async function KnowledgeCenterPage() {
                 引擎在线时那一页会自动换成实时数据，引擎离线时访客看到的就是这份快照。 */}
             {drift.length > 0 ? (
               <section className="mt-6 rounded-xl border border-amber-500/40 bg-amber-500/5 px-4 py-3">
-                <p className="text-xs font-medium">公开页的静态快照落后于当前库，建议重新生成</p>
+                <p className="text-xs font-medium">公开页数据待更新</p>
                 <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-[11px] leading-relaxed text-muted-foreground">
                   {drift.map((note) => (
-                    <li key={note}>{note}</li>
+                    <li key={note}>{redactCaliber(note)}</li>
                   ))}
                 </ul>
                 <Caliber summary="展开：为什么会落后、什么时候更新">
                   <p>
-                    岗位技能地图页先渲染一份构建时落下的快照，引擎在线时再换成实时数据；
-                    引擎离线时访客看到的是快照里的旧数字。
+                    岗位技能地图页会优先显示已发布数据，服务可用时再读取最新结果；暂时不可用时仍保留已发布内容。
                   </p>
                   <p>
-                    快照随下一次发布一起更新，页面上不提供触发按钮——需要立刻刷新，联系本站运维。
+                    已发布数据会随平台更新刷新；如需提前处理，请联系平台维护人员。
                   </p>
                 </Caliber>
               </section>

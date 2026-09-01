@@ -199,9 +199,9 @@ export function StationRow({ station }: { readonly station: PipelineStation }) {
         )}
       </div>
       <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{station.what}</p>
-      <p className="mt-1 break-all font-mono text-[10px] text-muted-foreground/80">
-        {station.path}
-        {updated && <span className="ml-2 tabular-nums">最后更新 {updated}</span>}
+      <p className="mt-1 text-[10px] text-muted-foreground/80">
+        {station.built ? '系统已接收' : '等待处理'}
+        {updated && <span className="ml-2 tabular-nums">最近处理时间 {updated}</span>}
       </p>
       {/* 扩展位：这一站的事件流（谁在什么时候跑了哪条命令、跑成什么样）挂在这里。
           现在没有任务系统，产物文件的 mtime 就是这一站唯一能拿到的「上次更新」。 */}

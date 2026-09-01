@@ -15,6 +15,12 @@ import type {
   ImageMapping,
   SessionDocumentSource,
 } from '@/lib/types/generation';
+import {
+  buildLearningContractPlan,
+  validateLearningContractFulfillment,
+  type LearningContract,
+  type LearningContractPlan,
+} from '@/lib/generation/learning-contract';
 
 // Session state stored in sessionStorage
 export interface GenerationSessionState {
@@ -48,6 +54,59 @@ export interface GenerationSessionState {
   courseTitle?: string;
   // Server-effective vocational mode from the outline generation done event.
   taskEngineMode?: boolean;
+  // Minimal approved outline/phase plan. Raw objectives and source text stay out of sessionStorage.
+  learningContractPlan?: LearningContractPlan;
+}
+
+export const LEARNING_CONTRACT_REQUIRED_MESSAGE =
+  '教学契约缺失或与当前大纲不一致，已停止生成，请重新生成大纲。';
+
+/** Keep the approved phase references, but make planned scenes match the user's current outline. */
+export function rebuildLearningContractPlan(
+  plan: LearningContractPlan,
+  outlines: readonly SceneOutline[],
+): LearningContractPlan {
+  return {
+    version: 1,
+    plannedScenes: outlines.map((outline) => ({
+      sceneId: outline.id,
+      type: outline.type,
+      ...(outline.widgetType ? { widgetType: outline.widgetType } : {}),
+    })),
+    required: plan.required,
+  };
+}
+
+/** Editing may change titles freely, but deleting/downgrading required teaching work must re-gate. */
+export function validateLearningContractPlan(
+  plan: LearningContractPlan | null | undefined,
+  outlines: readonly SceneOutline[],
+): LearningContractPlan {
+  if (!plan) throw new Error(LEARNING_CONTRACT_REQUIRED_MESSAGE);
+  const rebuilt = rebuildLearningContractPlan(plan, outlines);
+  const result = validateLearningContractFulfillment(
+    rebuilt,
+    outlines.map((outline) => ({
+      outlineId: outline.id,
+      type: outline.type,
+      content: { widgetType: outline.widgetType },
+    })),
+  );
+  if (!result.fulfilled) {
+    throw new Error(`${LEARNING_CONTRACT_REQUIRED_MESSAGE} ${result.violations.join('; ')}`);
+  }
+  return rebuilt;
+}
+
+export function learningContractPlanFromDoneEvent(
+  event: { outlines?: SceneOutline[]; learningContract?: LearningContract },
+  collected: readonly SceneOutline[],
+): { outlines: SceneOutline[]; learningContractPlan: LearningContractPlan } {
+  if (!event.learningContract) throw new Error(LEARNING_CONTRACT_REQUIRED_MESSAGE);
+  const outlines = event.outlines?.length ? event.outlines : [...collected];
+  if (outlines.length === 0) throw new Error(LEARNING_CONTRACT_REQUIRED_MESSAGE);
+  const plan = buildLearningContractPlan(event.learningContract, outlines);
+  return { outlines, learningContractPlan: validateLearningContractPlan(plan, outlines) };
 }
 
 export type GenerationStep = {

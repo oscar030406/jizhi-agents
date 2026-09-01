@@ -18,6 +18,7 @@
 
 import { createLogger } from '@/lib/logger';
 import { apiSuccess } from '@/lib/server/api-response';
+import { requireCorpusVisible } from '@/lib/server/corpus-access';
 
 const log = createLogger('Skill Map');
 
@@ -48,7 +49,8 @@ export interface CorpusStatus {
   corpus: string;
   available: boolean;
   chunk_count: number;
-  index_path: string;
+  /** 引擎内部字段；对外响应会移除，避免把服务端目录暴露给浏览器。 */
+  index_path?: string;
 }
 
 export interface SkillMapPayload {
@@ -72,45 +74,51 @@ const lastGood = new Map<string, { data: SkillMapPayload; fetchedAt: string }>()
 // 个位数，超过就整桶丢——重建的代价只是那一批域下一次请求拿不到兜底数据。
 const LAST_GOOD_MAX = 16;
 
-async function filterCorpora(data: SkillMapPayload): Promise<SkillMapPayload> {
-  // 机构可见性（2026-08-30）：画像下拉的库名单从这里出，归属库只给本机构成员。
-  try {
-    const { cookies } = await import('next/headers');
-    const { accountForSession } = await import('@/lib/accounts/store');
-    const { SESSION_COOKIE } = await import('@/lib/accounts/session');
-    const { corpusVisibilityFor } = await import('@/lib/accounts/org-store');
-    const account = await accountForSession((await cookies()).get(SESSION_COOKIE)?.value);
-    const visible = await corpusVisibilityFor(account?.id ?? null);
-    return { ...data, corpora: data.corpora.filter((c) => visible(c.corpus)) };
-  } catch {
-    return data; // 会话层异常时按公共视图放行——公共库本就人人可见
-  }
+function filterCorpora(
+  data: SkillMapPayload,
+  visible: (corpus: string) => boolean,
+): SkillMapPayload {
+  return {
+    ...data,
+    corpora: data.corpora
+      .filter((c) => visible(c.corpus))
+      .map(({ index_path: _internalPath, ...corpus }) => corpus),
+  };
 }
 
 export async function GET(request: Request) {
-  const base = process.env.GROUNDING_URL;
-  if (!base) return new Response(null, { status: 204 });
   // 问的是哪个域，就原样带给引擎。不带 = 永远拿主域岗位回来，学习端再怎么判也只能
   // 在浏览器里"假装"外域为空——诚实必须由数据源给出，不能由页面事后遮。
   const params = new URL(request.url).searchParams;
   const domain = (params.get('domain') ?? params.get('corpus') ?? '').trim();
+  const access = await requireCorpusVisible(domain || 'ai');
+  if (!access.ok) return access.response;
+  const base = process.env.GROUNDING_URL;
+  if (!base) return new Response(null, { status: 204 });
   const query = domain ? `?domain=${encodeURIComponent(domain)}` : '';
   const cached = lastGood.get(domain);
   try {
-    const resp = await fetch(`${base.replace(/\/$/, '')}/internal/v1/personalize/skill-map${query}`, {
-      headers: { 'x-internal-token': process.env.GROUNDING_TOKEN ?? '' },
-      // 引擎那侧整表算一次要 ~38 秒（14 岗 150 项技能逐条检索，带嵌入调用），
-      // 之后有 lru_cache、后续请求 3 毫秒。15 秒的旧超时刚好卡在中间：客户端放弃了，
-      // 引擎却仍把这一轮算完并填了缓存——白等一次还拿不到数。抬过冷启动耗时，
-      // 首次请求就能拿到实时数据。页面本来就先渲染静态快照再替换，等的这段不挡人。
-      signal: AbortSignal.timeout(60000),
-      cache: 'no-store',
-    });
+    const resp = await fetch(
+      `${base.replace(/\/$/, '')}/internal/v1/personalize/skill-map${query}`,
+      {
+        headers: { 'x-internal-token': process.env.GROUNDING_TOKEN ?? '' },
+        // 引擎那侧整表算一次要 ~38 秒（14 岗 150 项技能逐条检索，带嵌入调用），
+        // 之后有 lru_cache、后续请求 3 毫秒。15 秒的旧超时刚好卡在中间：客户端放弃了，
+        // 引擎却仍把这一轮算完并填了缓存——白等一次还拿不到数。抬过冷启动耗时，
+        // 首次请求就能拿到实时数据。页面本来就先渲染静态快照再替换，等的这段不挡人。
+        signal: AbortSignal.timeout(60000),
+        cache: 'no-store',
+      },
+    );
     if (!resp.ok) {
-      if (cached) return apiSuccess({ ...(await filterCorpora(cached.data)), stale_from: cached.fetchedAt } as unknown as Record<string, unknown>);
+      if (cached)
+        return apiSuccess({
+          ...filterCorpora(cached.data, access.visible),
+          stale_from: cached.fetchedAt,
+        } as unknown as Record<string, unknown>);
       return new Response(null, { status: 204 });
     }
-    const data = (await resp.json() as { data?: SkillMapPayload }).data;
+    const data = ((await resp.json()) as { data?: SkillMapPayload }).data;
     // jobs 为空但带 reason 的，是引擎在明说"这个域没登记岗位数据"——那是答案。
     // 当 204 吞掉，页面就退回主域快照，等于拿 AI 岗位冒充别的领域。
     if (!data || (!data.jobs?.length && !data.reason)) return new Response(null, { status: 204 });
@@ -122,10 +130,14 @@ export async function GET(request: Request) {
         `${data.corpora.filter((c) => c.available).length}/${data.corpora.length} corpora built` +
         `${data.reason ? ` — ${data.reason}` : ''}`,
     );
-    return apiSuccess((await filterCorpora(data)) as unknown as Record<string, unknown>);
+    return apiSuccess(filterCorpora(data, access.visible) as unknown as Record<string, unknown>);
   } catch (err) {
     log.warn(`Skill map unavailable: ${String(err)}`);
-    if (cached) return apiSuccess({ ...(await filterCorpora(cached.data)), stale_from: cached.fetchedAt } as unknown as Record<string, unknown>);
+    if (cached)
+      return apiSuccess({
+        ...filterCorpora(cached.data, access.visible),
+        stale_from: cached.fetchedAt,
+      } as unknown as Record<string, unknown>);
     return new Response(null, { status: 204 });
   }
 }

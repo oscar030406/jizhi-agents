@@ -12,6 +12,7 @@
 
 import { NextRequest } from 'next/server';
 import { auditSceneContent } from '@/lib/generation/hallucination-audit';
+import { extractContentVerifiables, verifyContent } from '@/lib/generation/content-verify';
 import { fetchEvidence, evidenceForJudge } from '@/lib/generation/evidence-grounding';
 import { corpusOf } from '@/lib/generation/learner-profile';
 import { isAuditGateEnabled } from '@/lib/config/feature-flags';
@@ -108,7 +109,14 @@ export async function POST(req: NextRequest) {
       `Audit done "${outline.title}": verdict=${audit.verdict} claims=${audit.totalClaims} flagged=${audit.flaggedCount} rounds=${audit.rounds} disputes=${audit.debate?.length ?? '-'} in ${audit.durationMs}ms`,
     );
 
-    return apiSuccess({ audit, content: auditedContent });
+    // 审核可能修订正文，因此验算必须针对修订后的最终版本，而不是 scene-content
+    // 路由里的中间稿。桥不可达时返回 null，发布门禁会把有算式的场景保留为草稿。
+    const { codeBlocks, texts } = extractContentVerifiables(auditedContent);
+    const verification = await verifyContent(codeBlocks, texts, (message) =>
+      log.warn(`Final-content verification unavailable for "${outline.title}": ${message}`),
+    );
+
+    return apiSuccess({ audit, content: auditedContent, verification });
   } catch (error) {
     log.error(`Scene audit failed [scene="${outlineTitle ?? 'unknown'}"]:`, error);
     return llmApiError(error);

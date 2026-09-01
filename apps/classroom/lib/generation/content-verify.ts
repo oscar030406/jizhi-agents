@@ -20,7 +20,10 @@ export interface VerificationMeta {
   codeUnverifiable: number;
   arithmeticChecked: number;
   arithmeticPassed: number;
+  /** 已识别但无法在白名单解释器中安全求值；只告警，不冒充通过。 */
+  arithmeticUnverifiable?: number;
   failures: string[];
+  warnings?: string[];
 }
 
 // ── KR2 抽取伪影三修（2026-08-09，评测链同口径移植，task_00c0763d）──────
@@ -76,7 +79,10 @@ function flattenKatexHtml(block: string): string {
     }
     parts.push(block.slice(i, j).replace(/<[^>]+>/g, ''));
     const k = spanTreeEnd(block, j);
-    const exponent = block.slice(j, k).replace(/<[^>]+>/g, '').trim();
+    const exponent = block
+      .slice(j, k)
+      .replace(/<[^>]+>/g, '')
+      .trim();
     parts.push(exponent ? `^${exponent}` : '');
     i = k;
   }
@@ -118,12 +124,145 @@ const stripHtml = (html: string): string =>
       .replace(/<[^>]+>/g, ''),
   ).replace(/ /g, ' ');
 
-/** 从幻灯片元素抽出（代码块, 可验文本）。代码判定=等宽字体标记。 */
+type VerificationCollector = {
+  codeBlocks: string[];
+  texts: string[];
+  codeSeen: Set<string>;
+  textSeen: Set<string>;
+};
+
+function collector(): VerificationCollector {
+  return { codeBlocks: [], texts: [], codeSeen: new Set(), textSeen: new Set() };
+}
+
+function pushUnique(list: string[], seen: Set<string>, value: string): void {
+  const normalized = value.trim();
+  if (!normalized || seen.has(normalized)) return;
+  seen.add(normalized);
+  list.push(normalized);
+}
+
+function pushCode(out: VerificationCollector, value: string): void {
+  pushUnique(out.codeBlocks, out.codeSeen, unescapeEntities(value));
+}
+
+/** 把 Markdown fenced code 从教学文字中分出来，避免同一段同时按代码和算式验两次。 */
+function pushText(out: VerificationCollector, value: string): void {
+  const withoutCode = value.replace(/```[^\r\n`]*\r?\n([\s\S]*?)```/g, (_match, code: string) => {
+    pushCode(out, code);
+    return ' ';
+  });
+  const text = /<[^>]+>/.test(withoutCode) ? stripHtml(withoutCode) : withoutCode.trim();
+  pushUnique(out.texts, out.textSeen, text);
+}
+
+/** HTML 教具：可见正文走数值验算；pre/code 与可执行 script 单独归为代码。 */
+function pushHtml(out: VerificationCollector, html: string): void {
+  let visible = html
+    .replace(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi, (_match, attrs: string, body: string) => {
+      if (!/type\s*=\s*["']?(?:application\/json|application\/ld\+json|importmap)/i.test(attrs)) {
+        pushCode(out, body);
+      }
+      return ' ';
+    })
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<pre\b[^>]*>([\s\S]*?)<\/pre>/gi, (_match, body: string) => {
+      pushCode(out, body.replace(/<\/?code\b[^>]*>/gi, ''));
+      return ' ';
+    });
+  visible = visible.replace(/<!--([\s\S]*?)-->/g, ' ');
+  pushText(out, visible);
+}
+
+const NON_CONTENT_KEYS = new Set([
+  'id',
+  'type',
+  'url',
+  'language',
+  'widgetType',
+  'mimeType',
+  'fileUrl',
+  'createdAt',
+  'updatedAt',
+]);
+
+function isCodeField(key: string, parentType: unknown): boolean {
+  return (
+    /(?:^|_)(?:code|script|sourceCode|starterCode|solutionCode)$/i.test(key) ||
+    (parentType === 'code' && key === 'solution')
+  );
+}
+
+/** Quiz / Interactive / PBL 都是嵌套 JSON；只收字符串叶，数值对象本身不是断言。 */
+function collectStructured(node: unknown, out: VerificationCollector, key = ''): void {
+  if (typeof node === 'string') {
+    if (/^(?:https?:|data:)/i.test(node.trim())) return;
+    if (key === 'html') pushHtml(out, node);
+    else pushText(out, node);
+    return;
+  }
+  if (!node || typeof node !== 'object') return;
+  if (Array.isArray(node)) {
+    node.forEach((value) => collectStructured(value, out, key));
+    return;
+  }
+  const record = node as Record<string, unknown>;
+  for (const [childKey, value] of Object.entries(record)) {
+    if (NON_CONTENT_KEYS.has(childKey)) continue;
+    if (typeof value === 'string' && isCodeField(childKey, record.type)) {
+      pushCode(out, value);
+    } else {
+      collectStructured(value, out, childKey);
+    }
+  }
+}
+
+/** 从幻灯片元素抽出（代码块, 可验文本）。复用原有 HTML/KaTeX 归一化。 */
 export function extractVerifiables(elements: unknown[]): { codeBlocks: string[]; texts: string[] } {
-  const codeBlocks: string[] = [];
-  const texts: string[] = [];
+  const out = collector();
   for (const el of elements) {
-    const obj = el as { type?: string; content?: unknown; defaultFontName?: string };
+    const obj = el as {
+      type?: string;
+      content?: unknown;
+      defaultFontName?: string;
+      text?: { content?: unknown; defaultFontName?: string };
+      data?: unknown;
+      lines?: unknown;
+      latex?: unknown;
+    };
+    if (obj.type === 'code') {
+      const lines = Array.isArray(obj.lines) ? obj.lines : [];
+      pushCode(
+        out,
+        lines
+          .map((line) =>
+            typeof (line as { content?: unknown }).content === 'string'
+              ? String((line as { content: string }).content)
+              : '',
+          )
+          .join('\n'),
+      );
+      continue;
+    }
+    if (obj.type === 'shape' && typeof obj.text?.content === 'string') {
+      pushText(out, obj.text.content);
+      continue;
+    }
+    if (obj.type === 'table' && Array.isArray(obj.data)) {
+      obj.data
+        .flatMap((row) => (Array.isArray(row) ? row : []))
+        .forEach((cell) => {
+          const value =
+            (cell as { text?: unknown; content?: unknown }).text ??
+            (cell as { content?: unknown }).content;
+          if (typeof value === 'string') pushText(out, value);
+        });
+      continue;
+    }
+    if (obj.type === 'latex' && typeof obj.latex === 'string') {
+      pushText(out, detex(obj.latex));
+      continue;
+    }
     if (obj.type !== 'text' || typeof obj.content !== 'string') continue;
     let mono =
       /consolas|monospace|courier/i.test(obj.defaultFontName ?? '') ||
@@ -136,10 +275,36 @@ export function extractVerifiables(elements: unknown[]): { codeBlocks: string[];
       const cjk = (text.match(/[一-鿿]/g) ?? []).length;
       if (cjk / Math.max(1, text.length) > 0.3) mono = false;
     }
-    if (mono) codeBlocks.push(text);
-    else texts.push(text);
+    if (mono) pushCode(out, text);
+    else pushText(out, obj.content);
   }
-  return { codeBlocks, texts };
+  return { codeBlocks: out.codeBlocks, texts: out.texts };
+}
+
+/**
+ * 同时兼容生成层内容（`{ elements }`）与落盘场景内容
+ * （`{ type: 'slide', canvas: { elements } }`）。发布门禁必须复核学习者最终读到的
+ * 那份场景，不能只认 scene-content 路由中的中间态。
+ */
+export function extractContentVerifiables(content: unknown): {
+  codeBlocks: string[];
+  texts: string[];
+} {
+  if (!content || typeof content !== 'object') return { codeBlocks: [], texts: [] };
+  const obj = content as {
+    elements?: unknown[];
+    canvas?: { elements?: unknown[] };
+  };
+  const elements = Array.isArray(obj.elements)
+    ? obj.elements
+    : Array.isArray(obj.canvas?.elements)
+      ? obj.canvas.elements
+      : null;
+  if (elements) return extractVerifiables(elements);
+
+  const out = collector();
+  collectStructured(content, out);
+  return { codeBlocks: out.codeBlocks, texts: out.texts };
 }
 
 /** 是否有值得送验的内容（有代码块，或文本含数值等式候选）。
@@ -148,7 +313,23 @@ export function extractVerifiables(elements: unknown[]): { codeBlocks: string[];
 export function hasVerifiableContent(codeBlocks: string[], texts: string[]): boolean {
   if (codeBlocks.length > 0) return true;
   return texts.some(
-    (t) => /[=≈]/.test(t) && /\d/.test(t) && /[+\-*/×÷^]|sqrt|exp|log/.test(t),
+    (t) =>
+      (/[=≈]/.test(t) && /\d/.test(t) && /[+\-*/×÷^]|sqrt|exp|log/.test(t)) ||
+      // 常见教学写法没有等号："softmax 后约为 [0.71, 0.29]"。只在同一段里
+      // 同时出现 softmax、两个数值向量时送验，避免把概念性叙述误当算式。
+      (/softmax/i.test(t) && (t.match(/\[[^\]]*\d[^\]]*\]/g) ?? []).length >= 2),
+  );
+}
+
+/** 发布门禁与生成日志共用的失败口径：failed / unverifiable / warning 均不算通过。 */
+export function verificationHasFailures(meta: VerificationMeta): boolean {
+  return (
+    meta.codeFailed > 0 ||
+    meta.codeUnverifiable > 0 ||
+    meta.arithmeticPassed < meta.arithmeticChecked ||
+    (meta.arithmeticUnverifiable ?? 0) > 0 ||
+    meta.failures.length > 0 ||
+    (meta.warnings?.length ?? 0) > 0
   );
 }
 
@@ -180,7 +361,13 @@ export async function verifyContent(
         code_passed: number;
         code_failed: number;
         code_unverifiable: number;
-        arithmetic: { checked: number; passed: number; failures: string[] };
+        arithmetic: {
+          checked: number;
+          passed: number;
+          failures: string[];
+          unverifiable?: number;
+          warnings?: string[];
+        };
         code: Array<{ verdict: string; detail: string }>;
       };
     };
@@ -194,15 +381,21 @@ export async function verifyContent(
         : c,
     );
     const failed = code.filter((c) => c.verdict === 'failed');
+    const unverifiable = code.filter((c) => c.verdict === 'unverifiable');
     return {
       codePassed: code.filter((c) => c.verdict === 'passed').length,
       codeFailed: failed.length,
-      codeUnverifiable: code.filter((c) => c.verdict === 'unverifiable').length,
+      codeUnverifiable: unverifiable.length,
       arithmeticChecked: d.arithmetic.checked,
       arithmeticPassed: d.arithmetic.passed,
+      arithmeticUnverifiable: d.arithmetic.unverifiable ?? 0,
       failures: [
         ...failed.map((c) => `代码：${c.detail}`),
         ...d.arithmetic.failures.map((f) => `数值：${f}`),
+      ].slice(0, 5),
+      warnings: [
+        ...unverifiable.map((c) => `代码：${c.detail || '无法安全执行'}`),
+        ...(d.arithmetic.warnings ?? []).map((w) => `数值：${w}`),
       ].slice(0, 5),
     };
   } catch (err) {

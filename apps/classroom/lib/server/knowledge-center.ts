@@ -526,8 +526,10 @@ export function snapshotDrift(
   return notes;
 }
 
-/** 页面用：现算一次总览，顺手比一次快照。 */
-export async function readCorporaWithDrift(): Promise<{
+/** 页面用：现算一次总览，顺手比一次快照；可见性同时约束实时行与漂移提示。 */
+export async function readCorporaWithDrift(
+  visible: (corpus: string) => boolean = () => true,
+): Promise<{
   corpora: CorpusOverview[];
   drift: string[];
 }> {
@@ -538,8 +540,12 @@ export async function readCorporaWithDrift(): Promise<{
   // enginePath，静态引会成环。
   const { readDomainRegistry } = await import('@/lib/server/domain-registry');
   await readDomainRegistry().catch(() => null);
-  const [corpora, snapshot] = await Promise.all([readCorpora(), readSnapshotCorpora()]);
-  return { corpora, drift: snapshotDrift(corpora, snapshot) };
+  const [allCorpora, snapshot] = await Promise.all([readCorpora(), readSnapshotCorpora()]);
+  const corpora = allCorpora.filter((corpus) => visible(corpus.corpus));
+  const visibleSnapshot =
+    snapshot?.filter((corpus) => typeof corpus.corpus !== 'string' || visible(corpus.corpus)) ??
+    null;
+  return { corpora, drift: snapshotDrift(corpora, visibleSnapshot) };
 }
 
 /** 总览：建好的排前面，同组按名字排。名单取不到时返回空数组，页面出空态。 */

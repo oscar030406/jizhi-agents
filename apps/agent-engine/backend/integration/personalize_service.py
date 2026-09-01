@@ -720,9 +720,9 @@ def evidence_retrieve_api(
             "chunks": [],
             "evidence_summary": "",
             "missing_evidence_warning": (
-                f"领域语料库「{corpus}」尚未建设：请把该领域文档放入 "
-                f"data/knowledge_base/corpora/{corpus}/docs/ 并重建索引。"
-                "本次不回退到其他领域语料，生成将退回无证据模式。"
+                f"领域语料库「{corpus}」尚未建设或尚未完成接入，系统当前无法检索相关材料。"
+                "请由所属机构的管理者在知识库管理页完成接入后重试。"
+                "本次不会回退到其他领域语料。"
             ),
         }
     # goal_concepts 的关键词表是 AI 领域的，其他领域只认真实命中，不用它的兜底概念
@@ -800,7 +800,7 @@ def evidence_retrieve_api(
         )
         chunks = within
     if mastery_map:
-        from backend.services.concept_graph import load_graph, prerequisites, topological_order
+        from backend.services.concept_graph import load_graph, topological_order
 
         selection_mode = "fringe"
         known = load_graph()
@@ -1071,7 +1071,7 @@ def _corpus_gate(name: str, chunks: int, retrievable: bool) -> dict[str, Any]:
     if is_scratch_corpus(name):
         reasons.append("一次性验证库（按命名约定识别），不对学习者露面")
     if not retrievable:
-        reasons.append("索引不在盘上或加载不出检索器")
+        reasons.append("知识库索引尚未完成，或检索服务当前不可用")
     if chunks < MIN_CORPUS_CHUNKS:
         reasons.append(f"证据块 {chunks} 不足 {MIN_CORPUS_CHUNKS}（撑不满一门课）")
 

@@ -79,7 +79,7 @@ const LOCAL_DATA: DataRow[] = [
   },
   {
     item: '匿名学习者标识',
-    content: 'anon:<随机 UUID>，仅用于把本机答题记录分区，不与任何账号绑定',
+    content: 'anon:<随机 UUID>，仅用于把当前浏览器的答题记录分区，不与任何账号绑定',
     where: 'localStorage：maic:device:runtime.learnerKey',
     keep: '无过期，直到手动清除',
     leaves: '开启服务端持久化时随请求上行，用于把未登录访客的数据分区；不与任何账号绑定',
@@ -90,7 +90,7 @@ const LOCAL_DATA: DataRow[] = [
     where:
       'IndexedDB：maic-runtime（sessions / records）；迁移期旧键 quizDraft: / quizAnswers: / quizResults: / quizAttemptId:',
     keep: '无过期，直到手动清除',
-    leaves: '仅正确率数值发往本站服务器上的多智能体引擎做反馈决策',
+    leaves: '仅正确率数值发往平台多智能体引擎做反馈决策',
   },
   {
     item: '课堂进度与运行标记',
@@ -115,8 +115,8 @@ const LOCAL_DATA: DataRow[] = [
     leaves: '提交时作为提示词发往模型服务商',
   },
   {
-    item: '模型与服务商配置',
-    content: '服务端下发的可用模型与端点（学习者端只读，不再填写 API Key）',
+    item: '平台模型连接信息',
+    content: '平台下发的可用模型与端点（学习者端不提供服务商或模型选择，也不接收 API Key）',
     where: 'localStorage：settings-storage（及旧键 providersConfig / llmModel / ttsModel）',
     keep: '无过期，清除浏览器站点数据即可清掉',
     leaves: '调用时随请求发往本应用服务端，再转发给对应服务商',
@@ -316,8 +316,8 @@ export default function PrivacyPage() {
           title="一、收集了什么、存在哪、留多久"
           description={
             persistenceOn
-              ? '本部署已开启服务端持久化：登录后，课程与学习记录按账户存在服务器数据库里；未登录时数据只在你这台机器的浏览器中。'
-              : '本部署没有把学习数据存到服务器：课程、画像与答题记录只留在你这个浏览器里，换浏览器或清掉站点数据就没了。'
+              ? '本部署已开启账户持久化：登录后，课程与学习记录由平台按账户保存；未登录时数据只留在当前浏览器。'
+              : '本部署不保存学习数据：课程、画像与答题记录只留在当前浏览器，换浏览器或清除站点数据后不会保留。'
           }
         >
           <div className="overflow-x-auto">
@@ -347,22 +347,22 @@ export default function PrivacyPage() {
             </table>
           </div>
           <p className="text-sm leading-relaxed text-muted-foreground">
-            服务端（Next.js 进程）不落任何学习数据库，只有控制台日志：记录场景标题、生成计数、
-            审核裁决理由与错误信息，未发现打印画像字段或输入原文的调用。
+            {persistenceOn
+              ? '除上表列出的账户数据外，平台运行日志只记录场景标题、生成计数、审核裁决理由与错误类型，不记录画像字段或输入原文。'
+              : '平台不建立学习数据库；运行日志只记录场景标题、生成计数、审核裁决理由与错误类型，不记录画像字段或输入原文。'}
           </p>
         </Section>
 
         {/* 2. 出本机的数据 */}
         <Section
           icon={Network}
-          title="二、哪些数据会离开本机、发给谁"
+          title="二、哪些数据会离开当前浏览器、发给谁"
           description="只有两个外发方向，都不含身份信息。"
         >
           <ol className="space-y-3 list-decimal list-inside">
             <li>
-              <span className="font-medium text-foreground">大模型服务商</span>
-              （由本站服务端统一配置，当前接的是硅基流动；学习者端只读，不需要也不能填 API
-              Key）：收到的是
+              <span className="font-medium text-foreground">大模型服务</span>
+              （由平台统一管理；学习者端不提供服务商或模型选择，也不接收 API Key）：收到的是
               <em className="not-italic font-mono text-xs"> 你输入的学习需求文本 </em>、
               由画像换算出的
               <em className="not-italic font-mono text-xs"> 讲法指令段 </em>
@@ -372,14 +372,14 @@ export default function PrivacyPage() {
               后端开发转 Agent 应用 · 推荐难度 L3」，不含任何身份标识。
             </li>
             <li>
-              <span className="font-medium text-foreground">我方多智能体引擎（ai-service）</span>
-              ：仅监听内网回环地址、由课堂服务经内部令牌代理访问，不对公网开放，
-              数据不出本部署。{/* 具体地址来自 GROUNDING_URL，不在文案里写死——
+              <span className="font-medium text-foreground">平台多智能体引擎</span>
+              ：由课堂服务在平台内部调用，不对公网提供直接入口，数据不出本部署。
+              {/* 具体地址来自 GROUNDING_URL，不在文案里写死——
               写死过 127.0.0.1:8001，引擎一换机这页就成假话（2026-08-28 清查 M5）。 */}三个端点各自只收必要字段—— 学情诊断收 9
               个画像字段（目标、背景描述、5 个档位、偏好、时长）；
               证据检索收检索词、返回条数与语料库名；反馈决策收正确率与难度档
               （接口另可接逐概念得分，当前测验场景只发正确率）。 引擎按白名单过滤入参、算完即返，
-              <strong>不落盘</strong>， 日志只记 traceId 与异常类型。
+              <strong>不保存请求内容</strong>，日志只记 traceId 与异常类型。
             </li>
             <li>
               <span className="font-medium text-foreground">无第三方统计</span>
@@ -418,7 +418,7 @@ export default function PrivacyPage() {
                 <li>位置、设备指纹、生物特征</li>
               </ul>
               <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                本机唯一的标识是随机 UUID（anon:…），仅用于把答题记录分区，重装浏览器即失效。
+                当前浏览器唯一的标识是随机 UUID（anon:…），仅用于把答题记录分区，重装浏览器即失效。
               </p>
             </div>
           </div>
@@ -458,7 +458,7 @@ export default function PrivacyPage() {
             <span className="font-mono text-xs"> maic-runtime</span>）、课堂进度指针（
             <span className="font-mono text-xs">maic:device:*</span>
             ，含当前场景、播放游标与迁移标记）、输入草稿与会话指针。
-            <strong className="text-foreground">不会动本机缓存的模型配置与界面偏好</strong>
+            <strong className="text-foreground">不会动当前浏览器保存的平台连接信息与界面偏好</strong>
             （清除浏览器站点数据可一并清掉），
             <strong className="text-foreground">也不会删已生成的课程内容</strong>
             （在课堂列表里逐门删除，避免误删作品）。
@@ -478,7 +478,7 @@ export default function PrivacyPage() {
               ) : (
                 <Eraser className="size-4" />
               )}
-              清除本机学习数据
+              清除当前浏览器的学习数据
             </Button>
             {result ? (
               <span className="text-sm text-muted-foreground">操作已执行，结果如下。</span>
@@ -496,7 +496,7 @@ export default function PrivacyPage() {
             >
               <p className="font-medium text-foreground">
                 已删除 {result.keys.length} 个 localStorage 键
-                {result.keys.length === 0 ? '（本机本来就没有这些数据）' : '：'}
+                {result.keys.length === 0 ? '（当前浏览器原本没有这些数据）' : '：'}
               </p>
               {result.keys.length > 0 ? (
                 <ul className="space-y-0.5 font-mono text-xs break-all text-foreground">
@@ -517,14 +517,16 @@ export default function PrivacyPage() {
         <Section
           icon={FileText}
           title="五、受控知识库的语料来源与版权口径"
-          description="与 docs/05-evidence/data_compliance.md 同一口径。"
+          description="来源、许可与使用边界均按知识库接入记录展示。"
         >
           <ul className="space-y-2 list-disc list-inside">
             <li>
-              入库切片全部来自开源许可来源（CC BY-NC-SA / MIT / Apache-2.0），
-              逐条许可记录在引擎仓库的
-              <span className="font-mono text-xs"> data/knowledge_base/ATTRIBUTION.md </span>与
-              <span className="font-mono text-xs"> sources_manifest.csv</span>。
+              入库切片全部来自开源许可来源（CC BY-NC-SA / MIT / Apache-2.0）。逐条来源、许可与原文由平台随接入记录保存；
+              所属机构管理者可在{' '}
+              <Link href="/admin/knowledge" className={INLINE_LINK}>
+                知识库页面
+              </Link>{' '}
+              查看。
             </li>
             <li>
               在售版权教材<strong>只做书目背书与人工策展参照，不切片入库</strong>
@@ -545,9 +547,7 @@ export default function PrivacyPage() {
         {/* 原来是 gray-400/gray-500，实测亮色 2.49:1、暗色 4.16:1，两边都不过 4.5:1 */}
         {/* break-words 是必需的：这条路径在 375 下不加就撑出 32px 横向滚动 */}
         <p className="pb-4 text-sm leading-relaxed break-words text-muted-foreground">
-          核查对象为本仓库当前代码。完整核查记录见 docs/05-evidence/openmaic_compliance.md；
-          接入真实学员数据的操作清单与已知风险清单见
-          docs/05-evidence/privacy-onboarding-and-risks-20260815.md。
+          核查对象为平台当前运行版本。如需完整核查记录、真实学员数据接入清单或风险清单，请联系平台维护人员。
         </p>
       </div>
     </div>

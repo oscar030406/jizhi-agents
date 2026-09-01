@@ -7,11 +7,13 @@
  * 数据全部来自引擎数据目录里的产物文件，不经引擎进程，所以引擎停机时这条路由照常返回。
  * 只读：不写盘、不触发任何任务。
  *
- * 权限与 `/admin` 同一道：管理者账号才给。语料路径、许可状态、就绪度是机构内部信息。
+ * 权限与 `/admin` 同一道：管理者账号才给；通过后仍只返回公共库与本机构私有库。
+ * 语料路径、许可状态、就绪度是机构内部信息。
  */
 
 import { cookies } from 'next/headers';
 
+import { corpusVisibilityFor } from '@/lib/accounts/org-store';
 import { accountForSession, accountsEnabled } from '@/lib/accounts/store';
 import { SESSION_COOKIE } from '@/lib/accounts/session';
 import { API_ERROR_CODES, apiError, apiSuccess } from '@/lib/server/api-response';
@@ -27,5 +29,7 @@ export async function GET() {
   if (!account || account.role !== 'manager') {
     return apiError(API_ERROR_CODES.UNAUTHORIZED, 403, '知识库接口只对管理者账号开放。');
   }
-  return apiSuccess({ corpora: await readCorpora() });
+  const visible = await corpusVisibilityFor(account.id);
+  const corpora = (await readCorpora()).filter((corpus) => visible(corpus.corpus));
+  return apiSuccess({ corpora });
 }

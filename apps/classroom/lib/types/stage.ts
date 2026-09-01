@@ -60,6 +60,8 @@ export interface CourseOrigin {
 export type AppStage = DslStage & {
   /** 这门课出自哪个域/库。生成时写入，落盘时随课带走。 */
   origin?: CourseOrigin;
+  /** 大纲阶段批准的最小教学契约；发布前用它核对实际生成场景。 */
+  learningContract?: import('@/lib/generation/learning-contract').LearningContractPlan;
 };
 
 export type Stage = AppStage;
@@ -151,6 +153,11 @@ export type AppScene = DslScene<Action, SceneContent> & {
    * annotation; absent on pre-existing data). See lib/generation/hallucination-audit.
    */
   audit?: import('@/lib/generation/hallucination-audit').SceneAudit;
+  /**
+   * 对最终正文执行的代码/数值机械验算。没有可验内容时不写；存在可验内容却缺失
+   * 该字段时，学习者发布门禁会按“尚未验算”拦截。
+   */
+  verification?: import('@/lib/generation/content-verify').VerificationMeta;
   /**
    * 检索侧的**依据**（设计稿 §4.3 的依据子盒）：这一页真的贴进正文的教材出处。
    *

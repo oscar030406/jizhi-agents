@@ -13,10 +13,17 @@
  * 08-16 就是因为泛化对比页做了脱敏、`/admin` 的指标带没做，同一批字符串漏在另一个页面上。
  */
 const MASK = '〈型号略〉';
+const PATH_MASK = '〈内部记录略〉';
 
 export function redactCaliber(text: string): string {
   return text
     .replace(/(?:[A-Za-z][\w.-]*\/)+(?:MiniMax|Qwen|Kimi|DeepSeek|GLM|moonshot)[\w.-]*/gi, MASK)
     .replace(/\b(?:MiniMax|Qwen|Kimi|DeepSeek|GLM|GPT|Claude)[\w.-]*(?:\(v?[\d.]+\))?/gi, MASK)
+    .replace(/\b[A-Za-z]:[\\/][^\s，。；;）)\]"'`]+/g, PATH_MASK)
+    .replace(
+      /\b(?:data|docs|scripts|apps|knowledge_base|trial_courses|intake_runs)[\\/][^\s，。；;）)\]"'`]+/gi,
+      PATH_MASK,
+    )
+    .replace(/\b(?:fullpath-probe|fullprobe)\b/gi, '〈测试记录略〉')
     .replace(/挑战杯/g, '<项目根>');
 }

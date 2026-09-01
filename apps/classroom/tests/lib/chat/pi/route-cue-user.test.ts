@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NextRequest } from 'next/server';
+import '@/app/api/chat/pi/route';
 
 const PI_CHAT_FLAG = 'NEXT_PUBLIC_PI_CHAT_ENABLED';
 let originalPiChatFlag: string | undefined;
@@ -355,7 +356,6 @@ describe('POST /api/chat/pi cue_user', () => {
   beforeEach(() => {
     originalPiChatFlag = process.env[PI_CHAT_FLAG];
     process.env[PI_CHAT_FLAG] = 'true';
-    vi.resetModules();
     mocks.resolveModel.mockReset();
     mocks.buildAgent.mockReset();
     mocks.createCallLlmStreamFn.mockReset();

@@ -11,14 +11,35 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+const access = vi.hoisted(() => ({
+  requireCorpusVisible: vi.fn(
+    async (): Promise<
+      { ok: true; visible: (corpus: string) => boolean } | { ok: false; response: Response }
+    > => ({ ok: true, visible: () => true }),
+  ),
+}));
+
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+}));
+
+vi.mock('@/lib/server/corpus-access', () => ({
+  requireCorpusVisible: access.requireCorpusVisible,
 }));
 
 const MAIN = {
   provenance: {},
   market_stats: {},
-  jobs: [{ job_id: 'j1', title: '大模型应用工程师', summary: '', core_concepts: [], skills: [], covered_count: 0 }],
+  jobs: [
+    {
+      job_id: 'j1',
+      title: '大模型应用工程师',
+      summary: '',
+      core_concepts: [],
+      skills: [],
+      covered_count: 0,
+    },
+  ],
   corpora: [{ corpus: 'ai', available: true, chunk_count: 1, index_path: 'x' }],
   coverage_rule: '',
 };
@@ -54,6 +75,7 @@ async function get(query: string) {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.resetModules(); // 路由的兜底表是模块级的，用例之间不共享
+  access.requireCorpusVisible.mockResolvedValue({ ok: true, visible: () => true });
 });
 
 describe('/api/skills 分域', () => {
@@ -89,5 +111,24 @@ describe('/api/skills 分域', () => {
     expect((await get('?domain=ai')).status).toBe(200);
     // 引擎这时对 manufacturing 挂了，没有该域的历史成功数据 → 如实空手，不冒充 ai
     expect((await get('?domain=manufacturing')).status).toBe(204);
+  });
+
+  it('无权访问请求域时拒绝且不调用引擎', async () => {
+    access.requireCorpusVisible.mockResolvedValue({
+      ok: false,
+      response: new Response(JSON.stringify({ success: false }), { status: 403 }),
+    });
+    const seen = stubEngine(() => ({ ok: true, body: MAIN }));
+
+    expect((await get('?domain=private-domain')).status).toBe(403);
+    expect(seen).toEqual([]);
+    expect(access.requireCorpusVisible).toHaveBeenCalledWith('private-domain');
+  });
+
+  it('未指定域时按引擎默认 ai 域鉴权', async () => {
+    const seen = stubEngine(() => ({ ok: true, body: MAIN }));
+    await get('');
+    expect(access.requireCorpusVisible).toHaveBeenCalledWith('ai');
+    expect(seen).toHaveLength(1);
   });
 });

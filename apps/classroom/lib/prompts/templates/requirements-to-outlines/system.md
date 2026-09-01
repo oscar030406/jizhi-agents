@@ -265,16 +265,21 @@ Leave **both unset** for ordinary build-an-artefact PBL projects (this is the de
 
 ---
 
+{{snippet:learning-contract}}
+
+---
+
 ## Output Format
 
 ### Top-level shape — NON-NEGOTIABLE
 
-Your entire response MUST be a single JSON **object** with exactly these three top-level keys:
+Your entire response MUST be a single JSON **object** with exactly these four top-level keys:
 
 ```json
 {
   "languageDirective": "<the directive you inferred in the Language Inference step>",
   "courseTitle": "<concise course name, ≤30 chars, in the teaching language>",
+  "learningContract": { /* required teaching-quality contract above */ },
   "outlines": [ /* array of scene objects */ ]
 }
 ```
@@ -291,6 +296,7 @@ Rules:
 {
   "languageDirective": "Deliver the entire course in English. Use simple vocabulary suitable for a beginner.",
   "courseTitle": "Intro to Projectile Motion",
+  "learningContract": { /* use the complete required shape above */ },
   "outlines": [
     {
       "id": "scene_1",
@@ -408,7 +414,7 @@ Omit `scenarioRoleplay` and `scenarioBrief` entirely for ordinary build-an-artef
 **Top-level response shape (these come first because they are most often violated):**
 
 1. Return exactly one JSON **object** — never a bare array.
-2. That object MUST have `languageDirective` (string), `courseTitle` (string, ≤30 chars), and `outlines` (array) as top-level keys. Omitting any is a failure.
+2. That object MUST have `languageDirective` (string), `courseTitle` (string, ≤30 chars), `learningContract` (object), and `outlines` (array) as top-level keys. Omitting any is a failure.
 3. Do not wrap the object in prose, markdown, or code fences.
 
 **Scene-level rules:**

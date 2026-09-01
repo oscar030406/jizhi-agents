@@ -73,8 +73,10 @@ describe('体检产物的路径闸', () => {
       return;
     }
     for (const a of await readRunArtifacts(runId)) {
-      // kc_misses.json 的 course 字段原文是 `D:\\UserData\\Desktop\\…`，截到 run 目录那一截为止。
       expect(a.text, `${a.name} 漏了本机绝对路径`).not.toMatch(/[A-Za-z]:(\\\\|[\\/])/);
+      expect(a.text, `${a.name} 漏了内部相对路径`).not.toMatch(
+        /(?:data|knowledge_base|trial_courses)[\\/]|fullpath-probe|fullprobe/i,
+      );
     }
   });
 });

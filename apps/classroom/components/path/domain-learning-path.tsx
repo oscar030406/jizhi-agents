@@ -21,12 +21,12 @@ import Link from 'next/link';
 import { AlertTriangle, ArrowRight, Sparkles } from 'lucide-react';
 
 import { loadLearnerProfile } from '@/components/generation/learner-profile-popover';
-import { corpusOf } from '@/lib/generation/learner-profile';
-import { JOB_MAP_CORPUS } from '@/components/skills/practice-projects';
 import { DomainPathNotice } from '@/components/path/domain-path-notice';
 import { EmptyState } from '@/components/ui/empty-state';
 import { domainLabel } from '@/lib/knowledge/domain-labels';
 import { truncateLabel } from '@/lib/knowledge/domain-registry';
+import { useEffectiveDomainContext } from '@/lib/knowledge/use-domain-context';
+import type { DomainContextProfile } from '@/lib/knowledge/domain-context';
 import { REQUIREMENT_DRAFT_KEY } from '@/lib/hooks/use-draft-cache';
 import { cn } from '@/lib/utils';
 
@@ -79,22 +79,37 @@ const FOCUS_RING =
 const norm = (s: string) => s.toLowerCase().replace(/\s+/g, '');
 
 export function DomainLearningPath({ children }: { children: React.ReactNode }) {
-  // null = 还没读到画像（首帧）。这时先渲染 children：AI 库是多数情形，先出内容不闪空屏。
-  const [corpus, setCorpus] = useState<string | null>(null);
+  // 指派解析前不能先画 AI children：残留 AI 画像 + 智能制造指派时，那会造成一次可见的错域闪屏。
+  const [profile, setProfile] = useState<DomainContextProfile | null>(null);
+  const [profileReady, setProfileReady] = useState(false);
   /* eslint-disable react-hooks/set-state-in-effect -- 画像在 localStorage，SSR 拿不到，只能落地后读（同 lib/hooks/use-draft-cache.ts） */
   useEffect(() => {
-    // 取域走 corpusOf（检索/判官/诊断/技能图谱共用的口径）：画像只选了培训领域、
-    // 没单独选库时 `.corpus` 是空串，直接读它会把智能制造的学员判成 AI 域，
-    // 照样看到那棵 AI 策展树——本轮在 /skills 修掉的正是同一个空值语义错。
-    setCorpus(corpusOf(loadLearnerProfile()) ?? '');
+    setProfile(loadLearnerProfile());
+    setProfileReady(true);
   }, []);
   /* eslint-enable react-hooks/set-state-in-effect */
+  const contextState = useEffectiveDomainContext(profile, profileReady);
 
-  if (corpus === null || !corpus || corpus === JOB_MAP_CORPUS) return <>{children}</>;
-  return <DomainPathBody corpus={corpus} />;
+  if (contextState.kind === 'loading') {
+    return <p className="mt-8 text-sm text-muted-foreground">正在确认当前学习领域…</p>;
+  }
+  if (contextState.kind === 'error') {
+    return <EmptyState title="当前学习领域暂时无法确认" hint={contextState.reason} />;
+  }
+  const { context } = contextState;
+  if (!context.domain) {
+    return (
+      <EmptyState
+        title="机构指派课程的领域尚未确认"
+        hint={context.reason ?? '课程归属由引擎生成；归属产物补齐前不会展示其它领域的路径。'}
+      />
+    );
+  }
+  if (context.isAi) return <>{children}</>;
+  return <DomainPathBody corpus={context.domain} contextLabel={context.label} />;
 }
 
-function DomainPathBody({ corpus }: { corpus: string }) {
+function DomainPathBody({ corpus, contextLabel }: { corpus: string; contextLabel?: string }) {
   const router = useRouter();
   const [state, setState] = useState<State>({ kind: 'loading' });
   // 概念 → 课程的映射用运行时归属（/api/course-domains 现读磁盘），不用构建期快照：
@@ -156,7 +171,8 @@ function DomainPathBody({ corpus }: { corpus: string }) {
 
   // 域名优先用引擎给的 label（域注册清单里的中文名），它没给就走前端那张兜底表。
   // `|| ` 不是 `?? `：老库的 label 会退化成目录名同名的空串/占位，那不是名字。
-  const label = (state.kind === 'ok' ? state.path.label?.trim() : '') || domainLabel(corpus);
+  const label =
+    (state.kind === 'ok' ? state.path.label?.trim() : '') || contextLabel || domainLabel(corpus);
 
   /** 把概念交给首页生成入口：写需求草稿再跳转（形制同 /skills 的 pickSkill）。 */
   const draftCourse = useCallback(
@@ -225,7 +241,7 @@ function DomainPathBody({ corpus }: { corpus: string }) {
             title={`「${label}」还没有可排的学习路径`}
             hint={
               state.path.reason ??
-              '引擎没有说明原因。路径要靠接入流水线抽出的概念与前置关系排，这个库大概还没跑过。'
+              '所属机构尚未提供该领域的学习路径产物。学习路径必须由引擎基于本领域概念与前置关系生成；当前没有可展示结果。'
             }
           />
         </div>

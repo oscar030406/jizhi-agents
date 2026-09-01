@@ -4,7 +4,7 @@
  *    对话轮次这类学习者输入写进日志，见 app/api/compare/route.ts:119）
  * 2. lib/export/practice-guide.ts —— 用户点「导出实操指南」下载的 Markdown 里的画像行
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createLogger } from '@/lib/logger';
 import { summarizeLearnerProfile } from '@/lib/export/practice-guide';
 import type { LearnerProfileFields } from '@/lib/types/generation';
@@ -17,8 +17,30 @@ function captureLog(fn: () => void): string {
   return lines.join('\n');
 }
 
+type StructuredLogLine = {
+  timestamp: string;
+  level: string;
+  tag: string;
+  message: string;
+};
+
+function parseStructuredLog(out: string): StructuredLogLine {
+  return JSON.parse(out) as StructuredLogLine;
+}
+
+const originalLogFormat = process.env.LOG_FORMAT;
+
+beforeEach(() => {
+  process.env.LOG_FORMAT = 'json';
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
+  if (originalLogFormat === undefined) {
+    delete process.env.LOG_FORMAT;
+  } else {
+    process.env.LOG_FORMAT = originalLogFormat;
+  }
 });
 
 describe('logger 接 redact', () => {
@@ -34,25 +56,32 @@ describe('logger 接 redact', () => {
     const out = captureLog(() =>
       log.info('profile:', { apiKey: 'whatever', contact: 'zhang.san@example.com', level: 2 }),
     );
+    const record = parseStructuredLog(out);
+    const profile = JSON.parse(record.message.slice('profile: '.length)) as Record<string, unknown>;
     expect(out).toContain('[密钥]');
     expect(out).toContain('[邮箱]');
     expect(out).not.toContain('zhang.san@example.com');
-    // 数字类型不能被改坏
-    expect(out).toContain('"level":2');
+    expect(profile).toEqual({ apiKey: '[密钥]', contact: '[邮箱]', level: 2 });
+    // 外层结构化日志转义不影响内层对象解析，数字类型不能被改坏。
+    expect(typeof profile.level).toBe('number');
   });
 
   it('对象里的 Date 仍然序列化成时间，不塌成 {}', () => {
     const out = captureLog(() => log.info('job:', { at: new Date('2026-08-15T00:00:00.000Z') }));
-    expect(out).toContain('2026-08-15T00:00:00.000Z');
+    const record = parseStructuredLog(out);
+    expect(JSON.parse(record.message.slice('job: '.length))).toEqual({
+      at: '2026-08-15T00:00:00.000Z',
+    });
   });
 
   it('Error 只脱敏 message 行，堆栈帧保留', () => {
     const err = new Error('解析失败：13812345678');
     const out = captureLog(() => log.error('boom:', err));
+    const record = parseStructuredLog(out);
     expect(out).toContain('[手机号]');
     expect(out).not.toContain('13812345678');
-    // 堆栈帧还在（帧里是代码位置，抹了就没法排障）
-    expect(out).toMatch(/\n\s+at /);
+    // JSON 传输层会转义换行；解析后堆栈帧仍是可直接排障的多行文本。
+    expect(record.message).toMatch(/\n\s+at /);
   });
 
   it('正常技术文本一字不改', () => {

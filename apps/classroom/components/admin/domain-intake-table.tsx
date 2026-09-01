@@ -9,6 +9,9 @@
  * 前置关系存在于章之间，同一章里的节多半是兄弟。
  */
 
+import Link from 'next/link';
+
+import { isScratchCorpus } from '@/lib/knowledge/domain-registry';
 import type { DomainIntake } from '@/lib/server/admin-overview';
 import { tierLabel } from './difficulty-scale';
 
@@ -29,7 +32,7 @@ import { tierLabel } from './difficulty-scale';
 function sourceLabel(dir: string): string {
   const parts = dir.split(/[\\/]/).filter(Boolean);
   if (parts.includes('intake_runs')) return '本次接入时上传的文档';
-  return parts.slice(-2).join('/') || '—';
+  return parts.length ? '平台管理的外部资料源' : '—';
 }
 
 function tierRangeLabel(range: string): string {
@@ -53,17 +56,26 @@ function Gate({ ok, label }: { readonly ok: boolean; readonly label: string }) {
 }
 
 export function DomainIntakeTable({ intakes }: { readonly intakes: readonly DomainIntake[] }) {
-  if (intakes.length === 0) {
+  const visibleIntakes = intakes.filter(
+    (intake) =>
+      !isScratchCorpus(intake.domain) &&
+      !/(?:fullprobe|fullpath[-_]?probe|(?:^|[-_])probe(?:[-_]|$))/i.test(intake.domain),
+  );
+  if (visibleIntakes.length === 0) {
     return (
       <p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
-        还没有接入过领域。跑 <code className="font-mono">scripts/ingest_domain.py --dir &lt;目录&gt; --name &lt;域名&gt;</code> 之后这里会出现就绪度报告。
+        还没有接入过领域。请由所属机构管理者在{' '}
+        <Link href="/admin/knowledge" className="underline underline-offset-2 hover:text-foreground">
+          知识库页面
+        </Link>{' '}
+        使用“接入新知识库”；系统处理后会显示就绪度报告。
       </p>
     );
   }
 
   return (
     <div className="space-y-3">
-      {intakes.map((d) => (
+      {visibleIntakes.map((d) => (
         <div key={d.domain} className="rounded-xl border border-border bg-card p-4 shadow-card">
           <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-2">
             <div>

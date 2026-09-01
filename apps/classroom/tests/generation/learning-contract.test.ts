@@ -1,0 +1,299 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  buildLearningContractPlan,
+  resolveOutlineEngine,
+  validateAndRepairLearningContract,
+  validateLearningContractFulfillment,
+  validateVocationalOutline,
+  type LearningContract,
+} from '@/lib/generation/learning-contract';
+import type { SceneOutline, UserRequirements } from '@/lib/types/generation';
+
+const genericAiOutlines: SceneOutline[] = [
+  {
+    id: 'scene_1',
+    type: 'slide',
+    title: '先判断现有检索链',
+    description: '用一个短案例激活学习者对检索、生成与引用的已有认识。',
+    keyPoints: ['已有经验', '常见误区', '本课目标'],
+    order: 1,
+  },
+  {
+    id: 'scene_2',
+    type: 'slide',
+    title: '完整示范一次 RAG 回答',
+    description: '教师演示从问题、检索结果到带引用回答的完整过程。',
+    keyPoints: ['查询改写', '证据选择', '引用回答'],
+    order: 2,
+  },
+  {
+    id: 'scene_3',
+    type: 'interactive',
+    title: '自己接通最小检索器',
+    description: '学习者修改并运行最小代码，观察不同查询的召回结果。',
+    keyPoints: ['运行代码', '比较召回', '记录偏差'],
+    order: 3,
+    widgetType: 'code',
+    widgetOutline: { language: 'python', challengeType: 'implementation' },
+  },
+  {
+    id: 'scene_4',
+    type: 'interactive',
+    title: '根据反馈重试查询',
+    description: '错误选择会给出证据缺口，学习者据此修改查询后重试。',
+    keyPoints: ['可见反馈', '修改查询', '再次验证'],
+    order: 4,
+    widgetType: 'game',
+    widgetOutline: { gameType: 'strategy', challenge: '让三个测试问题都命中证据' },
+  },
+  {
+    id: 'scene_5',
+    type: 'pbl',
+    title: '迁移到一份陌生手册',
+    description: '把同一方法应用到未在示范中出现的新资料。',
+    keyPoints: ['新资料', '独立取证', '交付引用回答'],
+    order: 5,
+    pblConfig: {
+      projectTopic: '陌生手册问答',
+      projectDescription: '为一份新手册建立可核验问答。',
+      targetSkills: ['检索', '引用', '验证'],
+    },
+  },
+  {
+    id: 'scene_6',
+    type: 'quiz',
+    title: '按目标验收',
+    description: '用三个新问题验收检索与引用是否达到标准。',
+    keyPoints: ['三题均有证据', '引用可追溯', '不支持时明确拒答'],
+    order: 6,
+    quizConfig: { questionCount: 3, difficulty: 'medium', questionTypes: ['text'] },
+  },
+];
+
+const genericAiContract: LearningContract = {
+  objectives: [
+    {
+      id: 'O1',
+      action: '构建并运行一个最小 RAG 检索链',
+      condition: '给定一份陌生资料和三个测试问题',
+      successCriterion: '三个回答均引用可追溯证据，缺证据时明确拒答',
+    },
+  ],
+  prerequisiteActivation: ['scene_1'],
+  demonstration: ['scene_2'],
+  learnerPractice: ['scene_3'],
+  feedbackRetry: ['scene_4'],
+  transferApplication: ['scene_5'],
+  assessmentMap: [{ sceneId: 'scene_6', objectiveIds: ['O1'] }],
+  grounding: {
+    sourceRefs: ['corpus:ai'],
+    claimPolicy: 'cite-or-mark-uncertain',
+  },
+};
+
+describe('LearningContract', () => {
+  it('放行具备完整教学闭环且评估映射到目标的通用 AI 课程', () => {
+    const result = validateAndRepairLearningContract(genericAiContract, genericAiOutlines, {
+      allowedGroundingRefs: ['corpus:ai'],
+    });
+
+    expect(result.publishable).toBe(true);
+    expect(result.repaired).toBe(false);
+    expect(result.violations).toEqual([]);
+    expect(result.contract?.assessmentMap[0]).toEqual({
+      sceneId: 'scene_6',
+      objectiveIds: ['O1'],
+    });
+  });
+
+  it('只修复可由真实请求上下文机械确定的 grounding，不编造来源或教学环节', () => {
+    const result = validateAndRepairLearningContract(
+      {
+        ...genericAiContract,
+        grounding: {
+          sourceRefs: ['不存在的来源'],
+          claimPolicy: 'cite-or-mark-uncertain',
+        },
+      },
+      genericAiOutlines,
+      { allowedGroundingRefs: ['corpus:ai', 'uploaded-materials'] },
+    );
+
+    expect(result.publishable).toBe(true);
+    expect(result.repaired).toBe(true);
+    expect(result.contract?.grounding.sourceRefs).toEqual(['corpus:ai', 'uploaded-materials']);
+  });
+
+  it('纯幻灯片且没有契约时阻断发布，不把缺失环节伪装修好', () => {
+    const result = validateAndRepairLearningContract(null, genericAiOutlines.slice(0, 2), {
+      allowedGroundingRefs: ['corpus:ai'],
+    });
+
+    expect(result.publishable).toBe(false);
+    expect(result.contract).toBeNull();
+    expect(result.violations).toContain('learningContract is missing');
+  });
+
+  it('拒绝不可观察的目标，以及拿讲解页冒充反馈重试或迁移任务', () => {
+    const result = validateAndRepairLearningContract(
+      {
+        ...genericAiContract,
+        objectives: [{ ...genericAiContract.objectives[0], action: '理解 RAG' }],
+        feedbackRetry: ['scene_1'],
+        transferApplication: ['scene_2'],
+      },
+      genericAiOutlines,
+      { allowedGroundingRefs: ['corpus:ai'] },
+    );
+
+    expect(result.publishable).toBe(false);
+    expect(result.violations).toEqual(
+      expect.arrayContaining([
+        'objective O1 action must be observable and measurable',
+        'feedbackRetry must reference an interactive, pbl, or quiz scene',
+        'transferApplication must reference an interactive, pbl, or quiz scene',
+      ]),
+    );
+  });
+
+  it('按计划 sceneId 和教学类别重验最终场景，不补造缺失环节', () => {
+    const plan = buildLearningContractPlan(genericAiContract, genericAiOutlines);
+    const actualScenes = genericAiOutlines.map((outline) => ({
+      outlineId: outline.id,
+      type: outline.type,
+      content: { widgetType: outline.widgetType },
+    }));
+
+    expect(validateLearningContractFulfillment(plan, actualScenes)).toEqual({
+      fulfilled: true,
+      violations: [],
+    });
+
+    const withoutTransferAndQuiz = actualScenes.filter(
+      (scene) => scene.outlineId !== 'scene_5' && scene.outlineId !== 'scene_6',
+    );
+    const result = validateLearningContractFulfillment(plan, withoutTransferAndQuiz);
+    expect(result.fulfilled).toBe(false);
+    expect(result.violations).toEqual(
+      expect.arrayContaining([
+        'planned scene is missing: scene_5',
+        'planned scene is missing: scene_6',
+        'transferApplication scene is missing: scene_5',
+        'assessment scene is missing: scene_6',
+      ]),
+    );
+  });
+
+  it('sceneId 虽在但测验或反馈被降级成讲解页时仍判定未履约', () => {
+    const plan = buildLearningContractPlan(genericAiContract, genericAiOutlines);
+    const actualScenes = genericAiOutlines.map((outline) => ({
+      outlineId: outline.id,
+      type: outline.id === 'scene_4' || outline.id === 'scene_6' ? 'slide' : outline.type,
+      content: { widgetType: outline.widgetType },
+    }));
+
+    const result = validateLearningContractFulfillment(plan, actualScenes);
+    expect(result.fulfilled).toBe(false);
+    expect(result.violations).toEqual(
+      expect.arrayContaining([
+        'feedbackRetry scene has the wrong teaching category: scene_4',
+        'assessment scene has the wrong teaching category: scene_6',
+      ]),
+    );
+  });
+});
+
+describe('automatic outline engine routing', () => {
+  it('通用 AI 课程保持标准引擎，不因“构建”一词误入职教任务引擎', () => {
+    const requirements: UserRequirements = {
+      requirement: '从零讲清楚如何构建一个 RAG 检索增强生成系统',
+      learnerProfile: { corpus: 'ai', domain: 'ai' },
+    };
+
+    expect(
+      resolveOutlineEngine(requirements, { hands_on_safety: false }, { vocationalEnabled: true }),
+    ).toEqual({ engine: 'standard', reason: 'standard' });
+  });
+
+  it('智能制造实训按域元数据与操作型需求自动选任务引擎，无需 taskEngineMode', () => {
+    const requirements: UserRequirements = {
+      requirement: '按照工单完成控制柜上电前点检，并依据测量结果做 GO/STOP 判定',
+      learnerProfile: { corpus: 'smart-manufacturing', domain: 'manufacturing' },
+    };
+
+    expect(requirements.taskEngineMode).toBeUndefined();
+    expect(
+      resolveOutlineEngine(requirements, { hands_on_safety: true }, { vocationalEnabled: true }),
+    ).toEqual({ engine: 'task-engine', reason: 'domain-metadata' });
+  });
+
+  it('需求明确要求岗位实训时，即使域元数据缺失也自动选任务引擎', () => {
+    expect(
+      resolveOutlineEngine(
+        { requirement: '设计一门岗位实训：按 SOP 完成设备巡检、异常复查和交接' },
+        undefined,
+        { vocationalEnabled: true },
+      ),
+    ).toEqual({ engine: 'task-engine', reason: 'requirement' });
+  });
+});
+
+describe('vocational structural contract', () => {
+  it('复用上游可机械检查的首屏、类型配比和 procedural-skill 字段约束', () => {
+    const outlines: SceneOutline[] = [
+      {
+        id: 'v1',
+        type: 'slide',
+        title: '任务简报',
+        description: '说明任务边界与完成标准。',
+        keyPoints: ['目标', '风险', 'GO/STOP'],
+        order: 1,
+      },
+      ...[2, 3, 4].map(
+        (order): SceneOutline => ({
+          id: `v${order}`,
+          type: 'interactive',
+          title: `操作阶段 ${order - 1}`,
+          description: '完成操作并根据后果反馈重试。',
+          keyPoints: ['工具', '步骤', '验收'],
+          order,
+          widgetType: 'procedural-skill',
+          widgetOutline: {
+            task: `阶段 ${order - 1}`,
+            steps: ['确认条件', '执行操作'],
+            successCriteria: ['状态达到工单要求'],
+            errorConsequences: ['停止并复查'],
+          },
+        }),
+      ),
+      {
+        id: 'v5',
+        type: 'interactive',
+        title: '异常判定',
+        description: '根据新读数选择继续、复查或停止。',
+        keyPoints: ['异常读数', '错误反馈', '重新判定'],
+        order: 5,
+        widgetType: 'game',
+        widgetOutline: { gameType: 'strategy', challenge: '完成 GO/STOP 判定' },
+      },
+      {
+        id: 'v6',
+        type: 'quiz',
+        title: '按工单标准验收',
+        description: '用新的设备状态判断是否达到交接标准。',
+        keyPoints: ['新状态', '验收证据', 'GO/STOP'],
+        order: 6,
+        quizConfig: { questionCount: 2, difficulty: 'medium', questionTypes: ['text'] },
+      },
+    ];
+
+    expect(validateVocationalOutline(outlines)).toEqual([]);
+  });
+
+  it('缺少上游约束要求的测验型验收场景时阻断发布', () => {
+    expect(validateVocationalOutline(genericAiOutlines.slice(0, 5))).toContain(
+      'vocational outline needs at least 1 quiz scene; got 0',
+    );
+  });
+});

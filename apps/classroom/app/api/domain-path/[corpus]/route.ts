@@ -16,11 +16,8 @@
 
 import type { NextRequest } from 'next/server';
 
-import { cookies } from 'next/headers';
-
-import { accountForSession } from '@/lib/accounts/store';
-import { SESSION_COOKIE } from '@/lib/accounts/session';
 import { API_ERROR_CODES, apiError, apiSuccess } from '@/lib/server/api-response';
+import { requireCorpusVisible } from '@/lib/server/corpus-access';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('DomainPath API');
@@ -34,32 +31,12 @@ export const dynamic = 'force-dynamic';
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ corpus: string }> }) {
   const { corpus } = await params;
 
-  // 归属别的机构的库直接 403：不是「没有路径」，是「你不该看见这个库」——
-  // 两件事的文案不同，压成一句会让学员以为库空着。
-  try {
-    const { corpusVisibilityFor } = await import('@/lib/accounts/org-store');
-    const account = await accountForSession((await cookies()).get(SESSION_COOKIE)?.value);
-    const visible = await corpusVisibilityFor(account?.id ?? null);
-    if (!visible(corpus)) {
-      return apiError(
-        API_ERROR_CODES.UNAUTHORIZED,
-        403,
-        '这个知识库归属别的机构，你的账户看不到它的学习路径。',
-      );
-    }
-  } catch (error) {
-    // 账户系统没启用（本地/无库部署）时这里必然抛：那种部署本来就没有机构隔离，
-    // 放行是原有行为，不因为闸装不上就把整条路径挡死。
-    log.warn(`visibility gate skipped for ${corpus}: ${String(error)}`);
-  }
+  const access = await requireCorpusVisible(corpus);
+  if (!access.ok) return access.response;
 
   const base = process.env.GROUNDING_URL;
   if (!base) {
-    return apiError(
-      API_ERROR_CODES.PROVIDER_DISABLED,
-      503,
-      '未配置引擎地址（GROUNDING_URL），域级学习路径要引擎在线。',
-    );
+    return apiError(API_ERROR_CODES.PROVIDER_DISABLED, 503, '学习路径服务尚未启用。');
   }
   try {
     const resp = await fetch(
@@ -77,7 +54,6 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ cor
         API_ERROR_CODES.UPSTREAM_ERROR,
         502,
         '学习路径服务返回错误，暂时取不到该领域的路径。',
-        `引擎返回 HTTP ${resp.status}`,
       );
     }
     // 引擎那侧的路由用 `ApiResponse` 信封包了一层（`{code, message, data, traceId}`），
@@ -88,16 +64,11 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ cor
       payload && typeof payload === 'object' && 'data' in payload ? payload.data : payload;
     if (!path || typeof path !== 'object') {
       log.warn(`domain path empty envelope for ${corpus}`);
-      return apiError(
-        API_ERROR_CODES.UPSTREAM_ERROR,
-        502,
-        '学习路径服务没有给出路径数据。',
-        '引擎返回 200，但信封里没有 data',
-      );
+      return apiError(API_ERROR_CODES.UPSTREAM_ERROR, 502, '学习路径服务没有给出路径数据。');
     }
     return apiSuccess({ path });
   } catch (error) {
     log.warn(`domain path failed for ${corpus}: ${String(error)}`);
-    return apiError(API_ERROR_CODES.UPSTREAM_ERROR, 502, '学习路径服务暂时不可用。', String(error));
+    return apiError(API_ERROR_CODES.UPSTREAM_ERROR, 502, '学习路径服务暂时不可用。');
   }
 }

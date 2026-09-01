@@ -1,16 +1,14 @@
-"""可执行验证课件（KR2）——交付前机械验算生成内容里的代码与数值。
+"""课件内容机械验算（KR2）——交付前复核生成内容里的数值。
 
 幻觉治理的第三层：文本 claim 审核（已有双判官）管「说得对不对」，
-这里管「算得对不对、跑得起来跑不起来」：
-- 代码块丢进隔离子进程真跑（10s 超时）。三态判定：passed / failed /
-  unverifiable（缺第三方依赖不算生成错误，如实分开——把「装不了 torch」
-  记成「代码错」是最坏的误报）。
+这里管「能否在不执行不可信代码的前提下机械复核」：
+- 当前未接入系统级隔离沙箱，所有一般 Python 代码块均标记为 unverifiable，
+  绝不在服务进程或子进程中执行。
 - 正文/板书里的数值等式（「2.7183 + 1 = 3.7183」「(1×1)+(0×0)=1」）用
-  AST 白名单安全求值复核，不用 eval。解析不了的式子跳过不计（宁可少验，
-  不能误判自然语言）。
+  AST 白名单解释器复核，不用 eval/compile；softmax 微例也只用确定性数学函数计算。
 
-安全边界：代码来自我们自己的生成链（不是用户输入），威胁模型是「模型写错」
-不是「恶意注入」，隔离子进程+超时与之相称；不做网络/文件系统封锁。
+安全边界：模型生成代码按不可信输入处理。没有非 root、禁网、只读文件系统和
+系统调用限制等外部隔离时，本模块不提供 Python 执行能力，也不声称具备沙箱。
 查新（2026-08-03，Exa）：现有产品只有「学习者自己跑代码」的 playground，
 「系统交付前验算课件」没有先例——本服务是接地拼装的自然延伸。
 """
@@ -19,14 +17,9 @@ from __future__ import annotations
 
 import ast
 import math
+import operator
 import re
-import subprocess
-import sys
-import tempfile
 from dataclasses import dataclass, field
-from pathlib import Path
-
-CODE_TIMEOUT_SECONDS = 10
 
 # ── 代码块验证 ──────────────────────────────────────────────────────────
 
@@ -38,30 +31,13 @@ class CodeVerdict:
 
 
 def verify_python_block(code: str) -> CodeVerdict:
-    """隔离子进程跑一个 python 代码块。"""
+    """一般 Python 必须进入外部系统级沙箱；当前只报告未验证，绝不执行。"""
     if not code.strip():
         return CodeVerdict("unverifiable", "空代码块")
-    with tempfile.TemporaryDirectory() as tmp:
-        script = Path(tmp) / "snippet.py"
-        script.write_text(code, encoding="utf-8")
-        try:
-            proc = subprocess.run(
-                [sys.executable, "-I", str(script)],
-                capture_output=True,
-                text=True,
-                timeout=CODE_TIMEOUT_SECONDS,
-                cwd=tmp,
-            )
-        except subprocess.TimeoutExpired:
-            return CodeVerdict("failed", f"超时（>{CODE_TIMEOUT_SECONDS}s），疑似死循环或阻塞")
-    if proc.returncode == 0:
-        return CodeVerdict("passed")
-    stderr = (proc.stderr or "").strip().splitlines()
-    last = stderr[-1] if stderr else "未知错误"
-    # 缺第三方依赖：不是生成的错，是运行环境的边界——单列，不许算 failed
-    if "ModuleNotFoundError" in last:
-        return CodeVerdict("unverifiable", last)
-    return CodeVerdict("failed", last[:200])
+    return CodeVerdict(
+        "unverifiable",
+        "未配置系统级隔离执行环境；一般 Python 代码未执行",
+    )
 
 
 # ── 数值等式复核 ────────────────────────────────────────────────────────
@@ -69,54 +45,93 @@ def verify_python_block(code: str) -> CodeVerdict:
 # 允许的运算与函数：算术 + sqrt/exp/log + 常量 e/pi。白名单外一律拒解析。
 _ALLOWED_FUNCS = {"sqrt": math.sqrt, "exp": math.exp, "log": math.log, "abs": abs}
 _ALLOWED_NAMES = {"e": math.e, "pi": math.pi, "π": math.pi}
+_BINARY_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Pow: operator.pow,
+}
+_UNARY_OPS = {ast.UAdd: operator.pos, ast.USub: operator.neg}
+_MAX_AST_NODES = 64
+_MAX_AST_DEPTH = 16
 
-_ALLOWED_NODES = (
-    ast.Expression,
-    ast.BinOp,
-    ast.UnaryOp,
-    ast.Constant,
-    ast.Add,
-    ast.Sub,
-    ast.Mult,
-    ast.Div,
-    ast.Pow,
-    ast.USub,
-    ast.UAdd,
-    ast.Call,
-    ast.Name,
-    ast.Load,
-)
+
+def _eval_node(node: ast.AST, depth: int = 0) -> float | None:
+    """递归解释纯数值 AST；不 compile、不 eval，也不访问对象属性。"""
+    if depth > _MAX_AST_DEPTH:
+        return None
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
+            return None
+        value = float(node.value)
+    elif isinstance(node, ast.Name):
+        value = _ALLOWED_NAMES.get(node.id)
+        if value is None:
+            return None
+    elif isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY_OPS:
+        operand = _eval_node(node.operand, depth + 1)
+        if operand is None:
+            return None
+        value = _UNARY_OPS[type(node.op)](operand)
+    elif isinstance(node, ast.BinOp) and type(node.op) in _BINARY_OPS:
+        left = _eval_node(node.left, depth + 1)
+        right = _eval_node(node.right, depth + 1)
+        if left is None or right is None:
+            return None
+        # 防止极大幂在进入 float 有限性检查前耗尽 CPU/内存。
+        if isinstance(node.op, ast.Pow) and (abs(right) > 100 or abs(left) > 1e100):
+            return None
+        try:
+            value = _BINARY_OPS[type(node.op)](left, right)
+        except (ValueError, ZeroDivisionError, OverflowError):
+            return None
+    elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        func = _ALLOWED_FUNCS.get(node.func.id)
+        if func is None or node.keywords or not (1 <= len(node.args) <= 2):
+            return None
+        args = [_eval_node(arg, depth + 1) for arg in node.args]
+        if any(arg is None for arg in args):
+            return None
+        try:
+            value = func(*args)  # type: ignore[arg-type]
+        except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+            return None
+    else:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) else None
 
 
 def _safe_eval(expr: str) -> float | None:
-    """AST 白名单求值。解析不了/越权返回 None，绝不抛给调用方。"""
+    """AST 白名单解释。解析不了/越权返回 None，绝不执行任意代码。"""
     normalized = (
-        expr.replace("×", "*").replace("÷", "/").replace("−", "-").replace("^", "**").strip()
+        expr.replace("×", "*")
+        .replace("÷", "/")
+        .replace("−", "-")
+        .replace("^", "**")
+        .strip()
+    )
+    # 后缀百分号是除以 100；不支持 Python 取模，避免把自然语言百分比误读为模运算。
+    normalized = re.sub(
+        r"(?<![A-Za-z0-9_.])((?:\d+(?:\.\d*)?|\.\d+)(?:e[+\-]?\d+)?)\s*[%％]",
+        r"(\1/100)",
+        normalized,
+        flags=re.I,
     )
     # √ 归一化：√(x)/√64 → sqrt(...)。教学文本里根号比 sqrt 写法更常见（实测）
     normalized = re.sub(r"√\s*\(", "sqrt(", normalized)
     normalized = re.sub(r"√\s*([0-9.]+)", r"sqrt(\1)", normalized)
-    if not normalized or not re.search(r"\d", normalized):
+    if not normalized or len(normalized) > 256 or not re.search(r"\d", normalized):
         return None
     try:
         tree = ast.parse(normalized, mode="eval")
     except SyntaxError:
         return None
-    for node in ast.walk(tree):
-        if not isinstance(node, _ALLOWED_NODES):
-            return None
-        if isinstance(node, ast.Call):
-            if not isinstance(node.func, ast.Name) or node.func.id not in _ALLOWED_FUNCS:
-                return None
-        if isinstance(node, ast.Name) and node.id not in _ALLOWED_FUNCS | _ALLOWED_NAMES.keys():
-            return None
-    try:
-        value = eval(  # noqa: S307 — AST 白名单已过滤，只剩纯算术
-            compile(tree, "<arith>", "eval"), {"__builtins__": {}}, {**_ALLOWED_FUNCS, **_ALLOWED_NAMES}
-        )
-    except (ValueError, ZeroDivisionError, OverflowError):
+    if sum(1 for _ in ast.walk(tree)) > _MAX_AST_NODES:
         return None
-    return float(value) if isinstance(value, (int, float)) else None
+    return _eval_node(tree.body)
 
 
 # 候选等式：含数字的「左 = 右」或「左 ≈ 右」，两侧都不含中文才进入解析。
@@ -126,7 +141,30 @@ def _safe_eval(expr: str) -> float | None:
 # ③ 运算符：「5 − 0.1×10 = 4」中段「0.1×10 = 4」是大表达式的断肢，单独求值
 #    必假阳性；'=' 不在此列——链式等式「z = 2×3 = 6」的中段是真验算对象。
 _EQUATION_RE = re.compile(
-    r"(?<![A-Za-zα-ωΑ-Ω_₀-₉])([0-9eπ().\s+\-*/×÷^√sqrtexplog,\[\]]+?)\s*(=|≈)\s*([0-9eπ().\s+\-*/×÷^,\[\]]+)"
+    r"(?<![A-Za-zα-ωΑ-Ω_₀-₉])"
+    r"([0-9eπ().\s+\-*/×÷^√%％sqrtexplog,]+?)\s*(=|≈)\s*"
+    r"([0-9eπ().\s+\-*/×÷^√%％sqrtexplog,]+)"
+)
+
+_DIRECT_SOFTMAX_RE = re.compile(
+    r"softmax\s*\(\s*(?P<input>\[[^\]\n]{1,512}\])"
+    r"(?P<scale>\s*/\s*[^)\n]{1,64})?\s*\)\s*"
+    r"(?P<connector>=|≈|约(?:为)?|大约(?:为)?|近似(?:为)?|结果(?:为)?)\s*"
+    r"(?P<output>\[[^\]\n]{1,512}\])",
+    re.I,
+)
+_PROSE_SOFTMAX_RE = re.compile(
+    r"(?P<input>\[[^\]\n]{1,512}\])"
+    r"(?P<context>[^。\n\[]{0,160}?"
+    r"(?:softmax\s*(?:后|结果|得到|输出|概率)|概率(?:分布)?|归一化(?:后)?(?:权重)?|权重)"
+    r"[^。\n\[]{0,100}?)"
+    r"(?P<output>\[[^\]\n]{1,512}\])",
+    re.I,
+)
+_TEMPERATURE_RE = re.compile(
+    r"(?:\bT\b|temperature|温度)\s*(?:=|为)\s*"
+    r"((?:\d+(?:\.\d*)?|\.\d+)(?:e[+\-]?\d+)?)",
+    re.I,
 )
 
 # 匹配后前缀守卫（正则后顾挡不住位移重匹配——「− 0.1×10」被挡后引擎会从
@@ -151,28 +189,163 @@ class ArithmeticReport:
     checked: int = 0
     passed: int = 0
     failures: list[str] = field(default_factory=list)
+    unverifiable: int = 0
+    warnings: list[str] = field(default_factory=list)
+
+
+def _parse_numeric_vector(raw: str) -> tuple[list[float], list[str]] | None:
+    """解析纯数值向量；元素仍复用同一 AST 白名单解释器。"""
+    if not raw.startswith("[") or not raw.endswith("]"):
+        return None
+    parts = [part.strip() for part in re.split(r"[,，]", raw[1:-1])]
+    if not (2 <= len(parts) <= 128) or any(not part for part in parts):
+        return None
+    values = [_safe_eval(part) for part in parts]
+    if any(value is None for value in values):
+        return None
+    return [float(value) for value in values if value is not None], parts
+
+
+def _softmax(logits: list[float], temperature: float) -> list[float] | None:
+    if temperature <= 0:
+        return None
+    try:
+        scaled = [value / temperature for value in logits]
+    except OverflowError:
+        return None
+    if any(not math.isfinite(value) for value in scaled):
+        return None
+    peak = max(scaled)
+    weights = [math.exp(value - peak) for value in scaled]
+    total = sum(weights)
+    if not total or not math.isfinite(total):
+        return None
+    return [value / total for value in weights]
+
+
+def _rounding_tolerance(token: str) -> float:
+    """由展示精度推导四舍五入误差；两位小数即半个 0.01。"""
+    raw = token.strip().replace("％", "%")
+    percent = raw.endswith("%")
+    if percent:
+        raw = raw[:-1].strip()
+    match = re.fullmatch(r"[+\-]?(\d+)(?:\.(\d*))?(?:e([+\-]?\d+))?", raw, re.I)
+    if not match:
+        return 1e-9
+    decimals = len(match.group(2) or "")
+    exponent = int(match.group(3) or 0)
+    if decimals == 0 and exponent == 0 and not percent:
+        return 1e-9
+    quantum = 10.0 ** (exponent - decimals)
+    if percent:
+        quantum /= 100.0
+    return abs(quantum) / 2 + 1e-12
+
+
+def _record_softmax_example(
+    report: ArithmeticReport,
+    input_raw: str,
+    output_raw: str,
+    label: str,
+    temperature: float,
+) -> None:
+    parsed_input = _parse_numeric_vector(input_raw)
+    parsed_output = _parse_numeric_vector(output_raw)
+    if parsed_input is None or parsed_output is None:
+        report.unverifiable += 1
+        report.warnings.append(f"{label}：含非白名单或不可解析的向量表达式，未判为通过")
+        return
+    logits, _ = parsed_input
+    claimed, claimed_tokens = parsed_output
+    if temperature <= 0:
+        report.checked += 1
+        report.failures.append(f"{label}：softmax 温度必须大于 0")
+        return
+    expected = _softmax(logits, temperature)
+    if expected is None:
+        report.unverifiable += 1
+        report.warnings.append(f"{label}：数值超出安全计算范围，未判为通过")
+        return
+    report.checked += 1
+    expected_text = ", ".join(f"{value:.4g}" for value in expected)
+    if len(expected) != len(claimed):
+        report.failures.append(
+            f"{label}：概率向量维度不匹配（实算 [{expected_text}]）"
+        )
+        return
+    if all(
+        abs(actual - wanted) <= _rounding_tolerance(token)
+        for actual, wanted, token in zip(claimed, expected, claimed_tokens, strict=True)
+    ):
+        report.passed += 1
+        return
+    report.failures.append(f"{label}（实算 [{expected_text}]）")
+
+
+def _verify_softmax_examples(text: str, report: ArithmeticReport) -> None:
+    """验证显式 softmax 调用和自然语言中的 logits→概率 worked example。"""
+    direct_spans: list[tuple[int, int]] = []
+    for match in _DIRECT_SOFTMAX_RE.finditer(text):
+        direct_spans.append(match.span())
+        scale = match.group("scale")
+        temperature = _safe_eval(scale.lstrip().removeprefix("/").strip()) if scale else 1.0
+        if temperature is None:
+            report.unverifiable += 1
+            report.warnings.append("softmax 温度含非白名单或不可解析表达式，未判为通过")
+            continue
+        label = f"softmax({match.group('input')}{scale or ''}) {match.group('connector')} {match.group('output')}"
+        _record_softmax_example(
+            report,
+            match.group("input"),
+            match.group("output"),
+            label,
+            temperature,
+        )
+
+    for match in _PROSE_SOFTMAX_RE.finditer(text):
+        if any(start <= match.start() < end for start, end in direct_spans):
+            continue
+        context = match.group("context")
+        temp_match = _TEMPERATURE_RE.search(context)
+        temperature = _safe_eval(temp_match.group(1)) if temp_match else 1.0
+        if temperature is None:
+            report.unverifiable += 1
+            report.warnings.append("softmax 温度超出安全计算范围，未判为通过")
+            continue
+        label = f"{match.group('input')} … {context.strip()} {match.group('output')}"
+        _record_softmax_example(
+            report,
+            match.group("input"),
+            match.group("output"),
+            label,
+            temperature,
+        )
 
 
 def verify_arithmetic(text: str) -> ArithmeticReport:
-    """复核文本里可机械求值的数值等式。
+    """复核文本里可机械求值的标量等式与 softmax 数值微例。
 
     宽容度：`=` 相对误差 1%，`≈` 5%（教学文本四舍五入常见）。
-    任一侧解析失败即跳过——把自然语言误判成算错是不可接受的误报。
+    已识别但无法安全解析的表达式只记 warning，不得判为通过。
     """
     report = ArithmeticReport()
+    _verify_softmax_examples(text, report)
     for m in _EQUATION_RE.finditer(text):
         lhs_raw, op, rhs_raw = m.group(1), m.group(2), m.group(3)
-        # 向量/列表形态（[5, 2]）不是标量等式，跳过
-        if "[" in lhs_raw or "[" in rhs_raw:
+        if not re.search(r"\d", lhs_raw) or not re.search(r"\d", rhs_raw):
             continue
         # 断肢守卫：左值其实是更大表达式/变量名的尾巴，单独求值必假阳性
         if _fragment_of_larger_expression(text, m.start(1)):
             continue
         lhs, rhs = _safe_eval(lhs_raw), _safe_eval(rhs_raw)
         if lhs is None or rhs is None:
+            report.unverifiable += 1
+            report.warnings.append(
+                f"{lhs_raw.strip()} {op} {rhs_raw.strip()}：不可安全解析，未判为通过"
+            )
             continue
         # 纯数字 = 纯数字（如「难度 L2 = 2」误匹配）没有验算意义，要求至少一侧带运算
-        if not re.search(r"[+\-*/×÷^√]|sqrt|exp|log", lhs_raw + rhs_raw):
+        if not re.search(r"[+\-*/×÷^√%％]|sqrt|exp|log", lhs_raw + rhs_raw):
             continue
         report.checked += 1
         tol = 0.01 if op == "=" else 0.05
@@ -194,7 +367,7 @@ def verify_arithmetic(text: str) -> ArithmeticReport:
 _SUBSCRIPT = str.maketrans("₀₁₂₃₄₅₆₇₈₉ₖₙᵢⱼ", "xxxxxxxxxxxxxx")
 _SUPERSCRIPT = {"⁰": "^0", "¹": "^1", "²": "^2", "³": "^3", "⁴": "^4",
                 "⁵": "^5", "⁶": "^6", "⁷": "^7", "⁸": "^8", "⁹": "^9"}
-_FULLWIDTH = str.maketrans("＝＋－×（）．", "=+-*().")
+_FULLWIDTH = str.maketrans("＝＋－×（）．％，", "=+-*().%,")
 
 _UNIT = re.compile(r"(\d(?:[\d.]*\d)?)\s*(万亿|亿|万|[KMGT])B?(?![A-Za-z])")
 _UNIT_MULT = {"万": "1e4", "亿": "1e8", "万亿": "1e12",
@@ -229,6 +402,8 @@ def verify_content_api(code_blocks: list[str], texts: list[str]) -> dict:
         arith.checked += r.checked
         arith.passed += r.passed
         arith.failures.extend(r.failures)
+        arith.unverifiable += r.unverifiable
+        arith.warnings.extend(r.warnings)
     return {
         "code": code_results,
         "code_passed": sum(1 for r in code_results if r["verdict"] == "passed"),
@@ -238,5 +413,7 @@ def verify_content_api(code_blocks: list[str], texts: list[str]) -> dict:
             "checked": arith.checked,
             "passed": arith.passed,
             "failures": arith.failures[:10],
+            "unverifiable": arith.unverifiable,
+            "warnings": arith.warnings[:10],
         },
     }

@@ -118,14 +118,10 @@ function MetricCard({ metric }: { readonly metric: MetricEntry }) {
       {qualifier && (
         <p className="mt-2.5 text-xs leading-relaxed text-muted-foreground">{qualifier}</p>
       )}
-      <Caliber summary="展开口径原文与复算命令">
+      <Caliber summary="展开口径与来源">
         {foldedDetail && <p>{redactCaliber(foldedDetail)}</p>}
         <p>{redactCaliber(metric.caliber)}</p>
-        {metric.source && (
-          <p className="rounded-lg bg-muted px-2 py-1.5 font-mono text-[10px] leading-relaxed">
-            {redactCaliber(metric.source)}
-          </p>
-        )}
+        {metric.source && <p>来源：平台评测台账。</p>}
       </Caliber>
     </div>
   );
@@ -142,8 +138,7 @@ export function MetricBand({
     <div className="space-y-4">
       {metrics.length === 0 ? (
         <p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-xs leading-relaxed text-muted-foreground">
-          读不到引擎数据。这一栏的数字来自服务器上的引擎产物，本站当前取不到，这里先空着，不拿旧值顶。
-          刷新页面重试；反复出现请联系本站运维检查引擎连接。
+          系统暂时无法读取这组指标，因此这里先空着，不拿旧值顶。请刷新页面重试；反复出现请联系平台维护人员。
         </p>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2">

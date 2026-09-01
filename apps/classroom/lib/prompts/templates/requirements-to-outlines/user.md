@@ -95,4 +95,4 @@ Never return a bare array. Never omit `languageDirective` or `courseTitle`. All 
 - **Language**: Infer from the user's requirement text and context, then output all content in the inferred language
 - **If web search results are provided**, reference specific findings and sources in scene descriptions and keyPoints. The search results provide up-to-date information — incorporate it to make the course content current and accurate.
 
-**Final reminder**: your entire response must be a JSON **object** with exactly three top-level keys — `languageDirective` (string), `courseTitle` (string, ≤30 chars, in the teaching language), and `outlines` (array). Do not return a bare array. Do not wrap in prose or code fences.
+**Final reminder**: your entire response must be a JSON **object** with exactly four top-level keys — `languageDirective` (string), `courseTitle` (string, ≤30 chars, in the teaching language), `learningContract` (the complete machine-checked object from the system prompt), and `outlines` (array). Do not return a bare array. Do not wrap in prose or code fences.

@@ -47,7 +47,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { EmptyState } from '@/components/ui/empty-state';
 import { SiteHeader } from '@/components/site-header';
 import {
-  JOB_MAP_CORPUS,
   PracticeCard,
   projectsForJob,
   type PracticeProject,
@@ -55,10 +54,12 @@ import {
 import { cn } from '@/lib/utils';
 import { REQUIREMENT_DRAFT_KEY } from '@/lib/hooks/use-draft-cache';
 import { conceptLabel } from '@/lib/knowledge/concept-labels';
-import { corpusOf, domainLabel } from '@/lib/generation/learner-profile';
+import { domainLabel } from '@/lib/generation/learner-profile';
 import { loadLearnerProfile } from '@/components/generation/learner-profile-popover';
 import { ForeignDomainEmpty } from '@/components/skills/foreign-domain-empty';
 import type { CorpusStatus, JobSkills, SkillCoverage } from '@/app/api/skills/route';
+import { useEffectiveDomainContext } from '@/lib/knowledge/use-domain-context';
+import type { DomainContextProfile } from '@/lib/knowledge/domain-context';
 
 /** Shape of `market_stats` in data/jobs/job_skill_map.json. Every field optional:
  *  a tile renders only when its number is really there. */
@@ -103,10 +104,14 @@ interface SkillMapData {
 /** 快照多久算旧。判据口径本身会随引擎变（08-21 换过一次），两周没重新落盘就该提示。 */
 const SNAPSHOT_STALE_MS = 14 * 24 * 3600 * 1000;
 
-type LoadState =
+type LoadState = { kind: 'loading' } | { kind: 'offline' } | { kind: 'ok'; data: SkillMapData };
+
+type DomainPracticeState =
+  | { kind: 'idle' }
   | { kind: 'loading' }
-  | { kind: 'offline' }
-  | { kind: 'ok'; data: SkillMapData };
+  | { kind: 'ready'; projects: PracticeProject[] }
+  | { kind: 'missing'; reason: string }
+  | { kind: 'unavailable'; reason: string };
 
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
 
@@ -218,7 +223,9 @@ function ShareBars({ data, highlight }: { data: Record<string, number>; highligh
               style={{ width: `${Math.max(2, (value / max) * 100)}%` }}
             />
           </span>
-          <span className="w-12 shrink-0 text-right tabular-nums text-foreground">{pct(value)}</span>
+          <span className="w-12 shrink-0 text-right tabular-nums text-foreground">
+            {pct(value)}
+          </span>
         </div>
       ))}
     </div>
@@ -252,10 +259,22 @@ function TrendChart({ data }: { data: Record<string, number> }) {
               {/* 柱色实测：原来的 #3b82f6 + opacity .7 在亮色卡片上只有 2.43:1，
                   换成 chart-2 满不透明（亮 3.76 / 暗 4.77），两个主题都过 3:1 */}
               <rect x={x} y={h - barH} width={w} height={barH} rx={4} className="fill-chart-2" />
-              <text x={x + w / 2} y={h - barH - 6} textAnchor="middle" fontSize={12} className="fill-foreground tabular-nums">
+              <text
+                x={x + w / 2}
+                y={h - barH - 6}
+                textAnchor="middle"
+                fontSize={12}
+                className="fill-foreground tabular-nums"
+              >
                 {pct(value)}
               </text>
-              <text x={x + w / 2} y={h + 18} textAnchor="middle" fontSize={12} className="fill-muted-foreground tabular-nums">
+              <text
+                x={x + w / 2}
+                y={h + 18}
+                textAnchor="middle"
+                fontSize={12}
+                className="fill-muted-foreground tabular-nums"
+              >
                 {year.replace('_partial', '(1-7月)')}
               </text>
             </g>
@@ -403,13 +422,20 @@ export default function SkillsPage() {
    *  被判成"非外域"，照样看整张 AI 岗位图谱。
    *  null = 还没读到画像（localStorage 只能在客户端读），此时先不发请求，
    *  免得先按空域问一遍引擎再按真域重问。 */
-  const [profileCorpus, setProfileCorpus] = useState<string | null>(null);
+  const [profile, setProfile] = useState<DomainContextProfile | null>(null);
+  const [profileReady, setProfileReady] = useState(false);
+  /* eslint-disable react-hooks/set-state-in-effect -- 画像只存在 localStorage，SSR 首帧无法读取 */
   useEffect(() => {
-    setProfileCorpus(corpusOf(loadLearnerProfile()) ?? '');
+    setProfile(loadLearnerProfile());
+    setProfileReady(true);
   }, []);
-  const corpus = profileCorpus ?? '';
+  /* eslint-enable react-hooks/set-state-in-effect */
+  const contextState = useEffectiveDomainContext(profile, profileReady);
+  const context = contextState.kind === 'ready' ? contextState.context : null;
+  const corpus = context?.domain ?? '';
+  const effectiveDomainLabel = context?.label ?? domainLabel(corpus);
   /** 外域已发布的实操项目（引擎 practice-scout 真源，管理员审核后才有内容）。 */
-  const [domainPractice, setDomainPractice] = useState<PracticeProject[]>([]);
+  const [domainPractice, setDomainPractice] = useState<DomainPracticeState>({ kind: 'idle' });
   const [openJob, setOpenJob] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   // 项目卡「相关课程」的课名。课程边（courseIds）在 data/practice-projects.json 里，
@@ -440,16 +466,18 @@ export default function SkillsPage() {
 
   // 重新读取时不回到 loading：屏幕上已有的数据留着，取回新的再换，中间不闪空屏。
   useEffect(() => {
-    if (profileCorpus === null) return; // 等画像读出来再取，见 profileCorpus 的注释
+    if (contextState.kind !== 'ready' || !context?.domain) return;
+    const effectiveDomain = context.domain;
+    const isAi = context.isAi;
     let cancelled = false;
     (async () => {
-      // 快照先上屏：与引擎在不在线无关，不等它。
-      const snapshot = await loadSkillMap(SNAPSHOT_URL);
+      // AI 才能读 AI 快照。非 AI 域哪怕只闪一帧快照，也是在把别域岗位当成当前答案。
+      const snapshot = isAi ? await loadSkillMap(SNAPSHOT_URL) : null;
       if (cancelled) return;
       if (snapshot) setState({ kind: 'ok', data: snapshot });
       // 引擎在线就换成实时数据；拿不到就保持快照，不改屏幕上的任何东西。
       // 带上域：外域拿回的是空 jobs + reason，页面据此换空态，不再靠客户端猜。
-      const live = await loadSkillMap(`/api/skills?domain=${encodeURIComponent(profileCorpus)}`);
+      const live = await loadSkillMap(`/api/skills?domain=${encodeURIComponent(effectiveDomain)}`);
       if (cancelled) return;
       if (live) setState({ kind: 'ok', data: live });
       else if (!snapshot) setState((prev) => (prev.kind === 'ok' ? prev : { kind: 'offline' }));
@@ -457,7 +485,7 @@ export default function SkillsPage() {
     return () => {
       cancelled = true;
     };
-  }, [reloadKey, profileCorpus]);
+  }, [context, contextState.kind, reloadKey]);
 
   /** Hand the skill to the home page: write its requirement draft, then navigate. */
   const pickSkill = useCallback(
@@ -488,29 +516,64 @@ export default function SkillsPage() {
   // 空态判据以服务端为准：引擎说这个域没有岗位数据（jobs 空 + reason），就是没有。
   // 客户端那句只当降级——引擎还没答上来的头几百毫秒里，别让主域快照先糊到外域学员脸上。
   const serverEmpty = Boolean(data && !data.jobs?.length && data.reason);
-  const clientForeign = Boolean(corpus) && corpus !== JOB_MAP_CORPUS;
+  const clientForeign = Boolean(context?.domain) && !context?.isAi;
   const foreignDomain = serverEmpty || clientForeign;
+  const totalSkills = data?.jobs.reduce((sum, job) => sum + job.skills.length, 0) ?? 0;
+  const coveredSkills =
+    data?.jobs.reduce((sum, job) => sum + job.skills.filter((skill) => skill.covered).length, 0) ??
+    0;
+  const mlJob = data?.jobs.find((job) => job.job_id === 'ml_engineer');
+  const mlSkillGaps =
+    mlJob?.skills.filter((skill) => !skill.covered).map((skill) => skill.skill) ?? [];
 
+  /* eslint-disable react-hooks/set-state-in-effect -- 切换领域时需先清空上一领域的项目状态 */
   useEffect(() => {
-    if (!foreignDomain) {
-      setDomainPractice([]);
+    if (!clientForeign || !corpus) {
+      setDomainPractice({ kind: 'idle' });
       return;
     }
     let cancelled = false;
+    setDomainPractice({ kind: 'loading' });
     (async () => {
       try {
         const res = await fetch(`/api/practice-scout/${encodeURIComponent(corpus)}`);
-        if (!res.ok) return;
-        const body = await res.json();
-        if (!cancelled) setDomainPractice((body?.projects ?? []) as PracticeProject[]);
+        const body = (await res.json().catch(() => null)) as {
+          status?: string;
+          projects?: PracticeProject[];
+          reason?: string;
+        } | null;
+        if (cancelled) return;
+        if (!res.ok || body?.status === 'unavailable') {
+          setDomainPractice({
+            kind: 'unavailable',
+            reason:
+              body?.reason ?? '实操项目服务暂时不可用，当前无法确认该领域是否已有引擎生成结果。',
+          });
+          return;
+        }
+        const projects = body?.projects ?? [];
+        if (projects.length > 0) {
+          setDomainPractice({ kind: 'ready', projects });
+          return;
+        }
+        setDomainPractice({
+          kind: 'missing',
+          reason: body?.reason ?? '所属机构尚未提供该领域的实操项目',
+        });
       } catch {
-        // 引擎不在线就当没有——空态照常，不报错
+        if (!cancelled) {
+          setDomainPractice({
+            kind: 'unavailable',
+            reason: '实操项目服务暂时不可用，当前无法确认该领域是否已有引擎生成结果。',
+          });
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [foreignDomain, corpus]);
+  }, [clientForeign, corpus]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -551,48 +614,112 @@ export default function SkillsPage() {
             )}
             {asOfStale && (
               <p className="max-w-xs text-right text-xs leading-relaxed text-amber-700 dark:text-amber-300">
-                这份数据可能不是最新的，系统恢复实时读取后会自动更新。
+                快照可能已过期；系统恢复实时读取后会自动更新。
               </p>
             )}
           </div>
         </div>
 
-        {foreignDomain && domainPractice.length > 0 && (
+        {contextState.kind === 'loading' && (
+          <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" />
+            正在确认当前账户的课程指派与学习领域…
+          </div>
+        )}
+        {contextState.kind === 'error' && (
+          <EmptyState title="当前学习领域暂时无法确认" hint={contextState.reason} />
+        )}
+        {contextState.kind === 'ready' && !contextState.context.domain && (
+          <EmptyState
+            title="机构指派课程的领域尚未确认"
+            hint={contextState.context.reason ?? '课程归属产物补齐前不会展示其它领域的岗位或项目。'}
+          />
+        )}
+
+        {!foreignDomain && data && totalSkills > 0 && (
+          <section
+            role="note"
+            className="rounded-xl border border-amber-300/70 bg-amber-50/70 px-4 py-3 text-xs leading-relaxed text-amber-900 dark:border-amber-700/50 dark:bg-amber-950/30 dark:text-amber-100"
+          >
+            <p>
+              <span className="font-medium">供给边界：</span>AI 是当前有策展岗位图谱的领域，
+              不是完整覆盖域。当前引擎返回 {coveredSkills}/{totalSkills} 项技能可接地， 其余{' '}
+              {totalSkills - coveredSkills} 项没有达到本页的受控语料证据门槛；
+              可接地也不等于已经成课或完整教学供给。
+            </p>
+            {mlJob && mlSkillGaps.length > 0 && (
+              <p className="mt-1.5">
+                「{mlJob.title}」的引擎画像为“{mlJob.summary}”，但当前只可接地 {mlJob.covered_count}
+                /{mlJob.skills.length}，仍有未接地技能：
+                {mlSkillGaps.slice(0, 4).join('、')}
+                {mlSkillGaps.length > 4 ? `等 ${mlSkillGaps.length} 项` : ''}。
+                岗位定义与缺项名称都直接取自引擎返回，不以其它课程补齐。
+              </p>
+            )}
+          </section>
+        )}
+
+        {clientForeign && domainPractice.kind === 'ready' && (
           <section className="mb-8">
-            <h2 className="mb-1 text-sm font-medium">「{domainLabel(corpus)}」实操项目</h2>
+            <h2 className="mb-1 text-sm font-medium">「{effectiveDomainLabel}」实操项目</h2>
             <p className="mb-3 text-[11px] leading-relaxed text-muted-foreground">
               从 GitHub 实时搜索、经管理员逐条审核后发布的真实开源项目。星数、许可、
               链接均来自搜索时的实拉数据。
             </p>
             <div className="space-y-2">
-              {domainPractice.map((p) => (
+              {domainPractice.projects.map((p) => (
                 <PracticeCard key={p.id} project={p} />
               ))}
             </div>
           </section>
         )}
+        {clientForeign && domainPractice.kind === 'loading' && (
+          <section className="rounded-xl border border-border bg-card px-5 py-4 text-sm text-muted-foreground">
+            正在读取「{effectiveDomainLabel}」的引擎实操项目产物…
+          </section>
+        )}
+        {clientForeign &&
+          (domainPractice.kind === 'missing' || domainPractice.kind === 'unavailable') && (
+            <section className="rounded-xl border border-border bg-card px-5 py-4">
+              <h2 className="text-sm font-medium">
+                {domainPractice.kind === 'missing'
+                  ? '实操项目尚未生成或发布'
+                  : '实操项目状态暂时不可用'}
+              </h2>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                {domainPractice.reason}。本区只展示引擎生成并经管理员审核发布的本领域项目， 不使用
+                AI 项目或示例卡代替。
+              </p>
+            </section>
+          )}
         {foreignDomain && (
           <ForeignDomainEmpty
-            label={domainLabel(corpus || data?.domain)}
+            label={context?.label ?? domainLabel(corpus || data?.domain)}
             reason={serverEmpty ? data?.reason : undefined}
           />
         )}
 
-        {!foreignDomain && state.kind === 'loading' && (
-          <div className="flex items-center gap-2 py-16 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" />
-            正在读取岗位技能地图…
-          </div>
-        )}
+        {contextState.kind === 'ready' &&
+          context?.domain &&
+          !foreignDomain &&
+          state.kind === 'loading' && (
+            <div className="flex items-center gap-2 py-16 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" />
+              正在读取岗位技能地图…
+            </div>
+          )}
 
-        {!foreignDomain && state.kind === 'offline' && (
-          <EmptyState
-            title="岗位技能地图暂时读不到"
-            hint="静态快照与多智能体引擎都没有返回数据。点「重新读取」再试一次。"
-          />
-        )}
+        {contextState.kind === 'ready' &&
+          context?.domain &&
+          !foreignDomain &&
+          state.kind === 'offline' && (
+            <EmptyState
+              title="岗位技能地图暂时读不到"
+              hint="静态快照与多智能体引擎都没有返回数据。点「重新读取」再试一次。"
+            />
+          )}
 
-        {!foreignDomain && data && (
+        {contextState.kind === 'ready' && context?.domain && !foreignDomain && data && (
           <motion.div
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
@@ -603,9 +730,7 @@ export default function SkillsPage() {
             <SectionCard
               icon={TrendingUp}
               title="岗位市场事实"
-              description={`统计口径：${market.sample ?? '未提供样本口径'}。${
-                prov.market_data_source ?? ''
-              }`}
+              description={`统计口径：${market.sample ?? '未提供样本口径'}。数据来源与生成时间见本页说明。`}
             >
               {Object.keys(market).length === 0 ? (
                 <EmptyState
@@ -676,9 +801,8 @@ export default function SkillsPage() {
                   )}
 
                   <p className="text-xs leading-relaxed text-muted-foreground">
-                    口径、清洗规则与复算脚本见引擎仓库 <code>docs/job_market_research.md</code>
-                    （§2 筛选口径、§6 复算）。下方岗位与技能清单另有来源，其提炼方式为：
-                    {prov.method ?? '见 job_skill_map.json 的 _provenance'}。
+                    岗位与技能清单由平台按已接入资料完成清洗、归并与来源核验；提炼方式：
+                    {prov.method ?? '按资料来源与岗位技能映射规则生成'}。
                   </p>
                 </div>
               )}
@@ -697,8 +821,8 @@ export default function SkillsPage() {
                   所以这里只用一句话交代，不再单独铺一张岗位轨的图。 */}
               <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
                 和学习路径的对应关系：模块一（大模型基础）是所有岗位的共同底座，
-                再加模块二（检索与知识工程）对应 RAG 与知识工程岗，
-                再加模块三（智能体工程）对应 Agent 应用岗，三个模块都学完对应全栈 AI 应用工程师。
+                再加模块二（检索与知识工程）对应 RAG 与知识工程岗， 再加模块三（智能体工程）对应
+                Agent 应用岗，三个模块都学完对应全栈 AI 应用工程师。
               </p>
               <div className="space-y-2">
                 {data.jobs.map((job) => (
@@ -752,13 +876,10 @@ export default function SkillsPage() {
                         {c.available ? `已建设 · ${c.chunk_count} 条证据块` : '尚未建设'}
                       </span>
                     </div>
-                    <p className="mt-2 break-all font-mono text-xs text-muted-foreground">
-                      {c.index_path}
-                    </p>
                     <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
                       {c.available
                         ? '检索、审核与生成的事实边界都取自该语料库。'
-                        : '选择该领域生成课程时，检索返回空，课堂徽标显示「未接地」。建设方式：把该领域文档放进上述目录同级的 docs/ 后重建索引并同步到服务。'}
+                        : '所属机构尚未接入该领域知识材料，因此暂不提供接地课程。管理者可在「接入新的知识库」中补充资料并发起处理。'}
                     </p>
                   </div>
                 ))}
@@ -790,10 +911,8 @@ export default function SkillsPage() {
                 </li>
                 <li>
                   <span className="font-medium text-foreground">④ 换行业</span>
-                  ：把该行业语料放进{' '}
-                  <code className="font-mono">data/knowledge_base/corpora/&lt;领域&gt;/docs/</code>
-                  ，重建索引并同步到服务，画像里选中该领域即可——管线、UI、审核门禁一行不用改。
-                  标「尚未建设」的领域缺的只是语料：补上语料、重建索引即可启用，不需要改代码。
+                  ：管理者在「接入新的知识库」中提交行业资料，平台自动完成解析、切片、索引与质量检查；
+                  处理完成后即可面向对应学员造课。标「尚未建设」表示所属机构还没有提供可用资料。
                 </li>
               </ol>
             </SectionCard>

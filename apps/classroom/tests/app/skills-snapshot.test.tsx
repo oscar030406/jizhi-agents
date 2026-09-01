@@ -32,12 +32,20 @@ const snapshot = JSON.parse(readFileSync(SNAPSHOT_PATH, 'utf-8'));
 
 /** 引擎全挂：/api/skills 直接抛（连不上）。快照按需给或不给。 */
 function stubFetch(handlers: Record<string, () => unknown>) {
+  const withContextDefaults: Record<string, () => unknown> = {
+    '/api/org/assignments': ok({ success: true, assignments: [] }),
+    '/api/course-domains': ok({}),
+    '/api/domains': ok({
+      entries: { ai: { corpus: 'ai', label: 'ai', eligible: true } },
+    }),
+    ...handlers,
+  };
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) => {
-      const key = Object.keys(handlers).find((k) => String(url).includes(k));
+      const key = Object.keys(withContextDefaults).find((k) => String(url).includes(k));
       if (!key) throw new Error(`未预期的请求：${url}`);
-      return handlers[key]();
+      return withContextDefaults[key]();
     }),
   );
 }
@@ -71,6 +79,8 @@ async function render(): Promise<HTMLElement> {
 
 beforeEach(() => {
   vi.unstubAllGlobals();
+  window.localStorage.clear();
+  window.localStorage.setItem('learnerProfile', JSON.stringify({ domain: 'ai', corpus: 'ai' }));
 });
 
 describe('快照本身', () => {
@@ -116,6 +126,80 @@ describe('引擎在线', () => {
     const host = await render();
     expect(host.textContent).toContain('引擎实时返回的岗位');
     expect(host.textContent).not.toContain('数据截至');
+  });
+});
+
+describe('有效领域一致性', () => {
+  it('智能制造课程指派覆盖残留 AI 画像，岗位与实操都只问智能制造引擎产物', async () => {
+    const reason = '所属机构尚未提供该领域的岗位画像';
+    stubFetch({
+      '/api/org/assignments': ok({
+        success: true,
+        assignments: [{ id: 'mine', courseId: 'course-mfg', title: 'ROS2 与 PLC' }],
+      }),
+      '/api/course-domains': ok({
+        'course-mfg': { domain: 'smart-manufacturing', title: 'ROS2 与 PLC' },
+      }),
+      '/api/domains': ok({
+        entries: {
+          'smart-manufacturing': {
+            corpus: 'smart-manufacturing',
+            label: '智能制造：ROS2 与 S7-1200 PLC',
+            eligible: true,
+          },
+        },
+      }),
+      '/skill-map.json': ok(snapshot),
+      '/api/skills': ok({
+        ...snapshot,
+        snapshot_at: undefined,
+        domain: 'smart-manufacturing',
+        jobs: [],
+        reason,
+      }),
+      '/api/practice-scout': ok({
+        success: true,
+        corpus: 'smart-manufacturing',
+        status: 'missing',
+        projects: [],
+        reason: '所属机构尚未提供该领域的实操项目',
+      }),
+    });
+
+    const host = await render();
+    const urls = (globalThis.fetch as unknown as { mock: { calls: [string][] } }).mock.calls.map(
+      ([url]) => String(url),
+    );
+
+    expect(urls).toContain('/api/skills?domain=smart-manufacturing');
+    expect(urls).toContain('/api/practice-scout/smart-manufacturing');
+    expect(urls).not.toContain('/api/skills?domain=ai');
+    expect(host.textContent).toContain(reason);
+    expect(host.textContent).toContain('所属机构尚未提供该领域的实操项目');
+    expect(host.textContent).not.toContain(snapshot.jobs[0].title);
+  });
+});
+
+describe('AI 岗位图谱供给边界', () => {
+  it('按引擎返回值明示总覆盖与深度学习相关缺项，不称完整覆盖', async () => {
+    stubFetch({ '/skill-map.json': ok(snapshot), '/api/skills': dead });
+    const host = await render();
+    const total = snapshot.jobs.reduce(
+      (sum: number, job: { skills: unknown[] }) => sum + job.skills.length,
+      0,
+    );
+    const covered = snapshot.jobs.reduce(
+      (sum: number, job: { skills: Array<{ covered: boolean }> }) =>
+        sum + job.skills.filter((skill) => skill.covered).length,
+      0,
+    );
+    const ml = snapshot.jobs.find((job: { job_id: string }) => job.job_id === 'ml_engineer');
+    const firstMissing = ml.skills.find((skill: { covered: boolean }) => !skill.covered).skill;
+
+    expect(host.textContent).toContain(`当前引擎返回 ${covered}/${total} 项技能可接地`);
+    expect(host.textContent).toContain(ml.summary);
+    expect(host.textContent).toContain(firstMissing);
+    expect(host.textContent).toContain('不是完整覆盖域');
   });
 });
 

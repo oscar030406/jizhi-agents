@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 const streamLLMMock = vi.hoisted(() => vi.fn());
 const resolveModelFromRequestMock = vi.hoisted(() => vi.fn());
+const readDomainRegistryMock = vi.hoisted(() => vi.fn());
 const VOCATIONAL_FLAG = 'OPENMAIC_ENABLE_VOCATIONAL';
 let originalVocationalFlag: string | undefined;
 
@@ -11,6 +12,10 @@ vi.mock('@/lib/ai/llm', () => ({
 
 vi.mock('@/lib/server/resolve-model', () => ({
   resolveModelFromRequest: resolveModelFromRequestMock,
+}));
+
+vi.mock('@/lib/server/domain-registry', () => ({
+  readDomainRegistry: readDomainRegistryMock,
 }));
 
 async function readStreamBody(response: Response) {
@@ -50,10 +55,72 @@ function mockRequest(requirements: Record<string, unknown>) {
   };
 }
 
+function withLearningContract<T extends { outlines: Array<Record<string, unknown>> }>(payload: T) {
+  const first = payload.outlines[0];
+  const practice =
+    payload.outlines.find((outline) => outline.type === 'interactive' || outline.type === 'pbl') ??
+    first;
+  const feedback =
+    payload.outlines.find(
+      (outline) =>
+        outline.type === 'pbl' ||
+        outline.type === 'quiz' ||
+        (outline.type === 'interactive' &&
+          (outline.widgetType === 'game' || outline.widgetType === 'procedural-skill')),
+    ) ?? practice;
+  const assessment =
+    payload.outlines.find(
+      (outline) =>
+        outline.type === 'quiz' ||
+        outline.type === 'pbl' ||
+        (outline.type === 'interactive' && outline.widgetType === 'game'),
+    ) ??
+    payload.outlines.find(
+      (outline) => outline.type === 'interactive' && outline.widgetType === 'procedural-skill',
+    ) ??
+    feedback;
+
+  return {
+    ...payload,
+    learningContract: {
+      objectives: [
+        {
+          id: 'O1',
+          action: '完成本课要求的可观察任务',
+          condition: '给定课程中的新案例或操作条件',
+          successCriterion: '产出达到场景中声明的验收标准',
+        },
+      ],
+      prerequisiteActivation: [String(first.id)],
+      demonstration: [String(first.id)],
+      learnerPractice: [String(practice.id)],
+      feedbackRetry: [String(feedback.id)],
+      transferApplication: [String(assessment.id)],
+      assessmentMap: [{ sceneId: String(assessment.id), objectiveIds: ['O1'] }],
+      grounding: {
+        sourceRefs: ['corpus:ai'],
+        claimPolicy: 'cite-or-mark-uncertain',
+      },
+    },
+  };
+}
+
 describe('task-engine outline route', () => {
   beforeEach(() => {
     originalVocationalFlag = process.env[VOCATIONAL_FLAG];
     delete process.env[VOCATIONAL_FLAG];
+    readDomainRegistryMock.mockReset();
+    readDomainRegistryMock.mockResolvedValue({
+      entries: {
+        ai: { corpus: 'ai', hands_on_safety: false },
+        'smart-manufacturing': {
+          corpus: 'smart-manufacturing',
+          hands_on_safety: true,
+        },
+      },
+      generatedAt: null,
+      sourceRunId: null,
+    });
   });
 
   afterEach(() => {
@@ -64,11 +131,10 @@ describe('task-engine outline route', () => {
     }
   });
 
-  test('uses the task-engine prompt and preserves allowed mixed task-engine scene types', async () => {
+  test('auto-routes smart-manufacturing practice to task engine and preserves mixed scene types', async () => {
     vi.resetModules();
     streamLLMMock.mockReset();
     resolveModelFromRequestMock.mockReset();
-    process.env[VOCATIONAL_FLAG] = 'true';
 
     resolveModelFromRequestMock.mockResolvedValue({
       model: { provider: 'glm.chat', modelId: 'glm-5.1' },
@@ -79,102 +145,106 @@ describe('task-engine outline route', () => {
       thinkingConfig: undefined,
     });
 
-    const outlineResponse = JSON.stringify({
-      languageDirective: '用中文授课，保持职业教育语境。',
-      outlines: [
-        {
-          id: 'scene_slide',
-          type: 'slide',
-          title: '高压风险边界',
-          description: '解释高压安全边界。',
-          keyPoints: ['风险边界', '安全阈值'],
-          order: 1,
-          widgetType: 'procedural-skill',
-          widgetOutline: {
-            task: 'should be removed from slide',
+    const outlineResponse = JSON.stringify(
+      withLearningContract({
+        languageDirective: '用中文授课，保持职业教育语境。',
+        outlines: [
+          {
+            id: 'scene_slide',
+            type: 'slide',
+            title: '高压风险边界',
+            description: '解释高压安全边界。',
+            keyPoints: ['风险边界', '安全阈值'],
+            order: 1,
+            widgetType: 'procedural-skill',
+            widgetOutline: {
+              task: 'should be removed from slide',
+            },
           },
-        },
-        {
-          id: 'scene_procedure',
-          type: 'interactive',
-          title: 'PPE检查',
-          description: '完成PPE检查。',
-          keyPoints: ['检查绝缘手套', '确认工具状态'],
-          order: 2,
-          widgetType: 'procedural-skill',
-          widgetOutline: {
-            steps: ['确认下电', '选择PPE'],
+          {
+            id: 'scene_procedure',
+            type: 'interactive',
+            title: 'PPE检查',
+            description: '完成PPE检查。',
+            keyPoints: ['检查绝缘手套', '确认工具状态'],
+            order: 2,
+            widgetType: 'procedural-skill',
+            widgetOutline: {
+              steps: ['确认下电', '选择PPE'],
+            },
           },
-        },
-        {
-          id: 'scene_game',
-          type: 'interactive',
-          title: 'GO/STOP挑战',
-          description: '根据检测结果做安全裁决。',
-          keyPoints: ['读取状态', '选择GO或STOP'],
-          order: 3,
-          widgetType: 'game',
-          widgetOutline: {
-            challenge: '判断是否可以继续作业',
+          {
+            id: 'scene_game',
+            type: 'interactive',
+            title: 'GO/STOP挑战',
+            description: '根据检测结果做安全裁决。',
+            keyPoints: ['读取状态', '选择GO或STOP'],
+            order: 3,
+            widgetType: 'game',
+            widgetOutline: {
+              challenge: '判断是否可以继续作业',
+            },
           },
-        },
-        {
-          id: 'scene_diagram',
-          type: 'interactive',
-          title: '高压风险路径',
-          description: '查看高压风险传播路径。',
-          keyPoints: ['电池包', '维修开关', '测量点'],
-          order: 4,
-          widgetType: 'diagram',
-          widgetOutline: {
-            concept: '风险路径',
+          {
+            id: 'scene_diagram',
+            type: 'interactive',
+            title: '高压风险路径',
+            description: '查看高压风险传播路径。',
+            keyPoints: ['电池包', '维修开关', '测量点'],
+            order: 4,
+            widgetType: 'diagram',
+            widgetOutline: {
+              concept: '风险路径',
+            },
           },
-        },
-        {
-          id: 'scene_simulation',
-          type: 'interactive',
-          title: '普通概念模拟',
-          description: '非职教 fallback 可保留 simulation。',
-          keyPoints: ['变量观察'],
-          order: 5,
-          widgetType: 'simulation',
-          widgetOutline: {
-            concept: 'motion',
+          {
+            id: 'scene_simulation',
+            type: 'interactive',
+            title: '普通概念模拟',
+            description: '非职教 fallback 可保留 simulation。',
+            keyPoints: ['变量观察'],
+            order: 5,
+            widgetType: 'simulation',
+            widgetOutline: {
+              concept: 'motion',
+            },
           },
-        },
-        {
-          id: 'scene_code',
-          type: 'interactive',
-          title: '代码练习',
-          description: '非职教 fallback 可保留 code。',
-          keyPoints: ['代码运行'],
-          order: 6,
-          widgetType: 'code',
-          widgetOutline: {},
-        },
-        {
-          id: 'scene_3d',
-          type: 'interactive',
-          title: '三维观察',
-          description: '非职教 fallback 可保留 visualization3d。',
-          keyPoints: ['空间结构'],
-          order: 7,
-          widgetType: 'visualization3d',
-          widgetOutline: {},
-        },
-        {
-          id: 'scene_illegal',
-          type: 'quiz',
-          title: '非法场景',
-          description: '非法类型应兜底。',
-          keyPoints: ['兜底'],
-          order: 8,
-          widgetOutline: {
-            task: '非法类型兜底任务',
+          {
+            id: 'scene_code',
+            type: 'interactive',
+            title: '代码练习',
+            description: '非职教 fallback 可保留 code。',
+            keyPoints: ['代码运行'],
+            order: 6,
+            widgetType: 'code',
+            widgetOutline: {},
           },
-        },
-      ],
-    });
+          {
+            id: 'scene_3d',
+            type: 'interactive',
+            title: '三维观察',
+            description: '非职教 fallback 可保留 visualization3d。',
+            keyPoints: ['空间结构'],
+            order: 7,
+            widgetType: 'visualization3d',
+            widgetOutline: {},
+          },
+          {
+            id: 'scene_illegal',
+            type: 'quiz',
+            title: '任务验收',
+            description: '用新的设备状态验收目标。',
+            keyPoints: ['新状态', '验收证据', 'GO/STOP'],
+            order: 8,
+            quizConfig: {
+              questionCount: 2,
+              difficulty: 'medium',
+              questionTypes: ['text'],
+            },
+          },
+        ],
+      }),
+    );
 
     streamLLMMock.mockReturnValue({
       textStream: (async function* () {
@@ -187,7 +257,7 @@ describe('task-engine outline route', () => {
       mockRequest({
         requirement: 'NEV-A12 新能源车动力电池包更换前安全确认',
         interactiveMode: true,
-        taskEngineMode: true,
+        learnerProfile: { corpus: 'smart-manufacturing', domain: 'manufacturing' },
       }) as unknown as Parameters<typeof POST>[0],
     );
 
@@ -199,6 +269,7 @@ describe('task-engine outline route', () => {
     const done = events.find((event) => event.type === 'done');
     expect(done).toBeDefined();
     expect(done.taskEngineMode).toBe(true);
+    expect(done.learningContract.grounding.sourceRefs).toEqual(['corpus:smart-manufacturing']);
     expect(done.outlines).toHaveLength(8);
     expect(done.outlines[0]).toMatchObject({
       type: 'slide',
@@ -257,14 +328,14 @@ describe('task-engine outline route', () => {
     expect(done.outlines[6].widgetOutline.objects).toBeUndefined();
     expect(done.outlines[6].widgetOutline.interactions).toBeUndefined();
     expect(done.outlines[7]).toMatchObject({
-      type: 'slide',
-      title: '非法场景',
+      type: 'quiz',
+      title: '任务验收',
     });
     expect(done.outlines[7].widgetType).toBeUndefined();
     expect(done.outlines[7].widgetOutline).toBeUndefined();
   });
 
-  test('silently falls back to the existing interactive prompt when the server flag is off', async () => {
+  test('keeps a generic AI course on the existing interactive prompt without hidden flags', async () => {
     vi.resetModules();
     streamLLMMock.mockReset();
     resolveModelFromRequestMock.mockReset();
@@ -280,21 +351,36 @@ describe('task-engine outline route', () => {
 
     streamLLMMock.mockReturnValue({
       textStream: (async function* () {
-        yield JSON.stringify({
-          languageDirective: 'Teach in English.',
-          outlines: [
-            {
-              id: 'scene_1',
-              type: 'interactive',
-              title: 'Interactive Scene',
-              description: 'Explore a concept.',
-              keyPoints: ['Explore'],
-              order: 1,
-              widgetType: 'simulation',
-              widgetOutline: { concept: 'motion', keyVariables: ['speed'] },
-            },
-          ],
-        });
+        yield JSON.stringify(
+          withLearningContract({
+            languageDirective: 'Teach in English.',
+            outlines: [
+              {
+                id: 'scene_1',
+                type: 'interactive',
+                title: 'Interactive Scene',
+                description: 'Explore a concept.',
+                keyPoints: ['Explore'],
+                order: 1,
+                widgetType: 'simulation',
+                widgetOutline: { concept: 'motion', keyVariables: ['speed'] },
+              },
+              {
+                id: 'scene_2',
+                type: 'quiz',
+                title: 'Transfer Check',
+                description: 'Apply the idea to a new case.',
+                keyPoints: ['New case', 'Reasoning', 'Feedback'],
+                order: 2,
+                quizConfig: {
+                  questionCount: 1,
+                  difficulty: 'medium',
+                  questionTypes: ['text'],
+                },
+              },
+            ],
+          }),
+        );
       })(),
     });
 
@@ -303,7 +389,7 @@ describe('task-engine outline route', () => {
       mockRequest({
         requirement: 'Teach motion with interaction',
         interactiveMode: true,
-        taskEngineMode: true,
+        learnerProfile: { corpus: 'ai', domain: 'ai' },
       }) as unknown as Parameters<typeof POST>[0],
     );
 
@@ -333,27 +419,42 @@ describe('task-engine outline route', () => {
 
     streamLLMMock.mockReturnValue({
       textStream: (async function* () {
-        yield JSON.stringify({
-          languageDirective: 'Teach in English.',
-          outlines: [
-            {
-              id: 'scene_1',
-              type: 'interactive',
-              title: 'Operation Process',
-              description: 'A model mistakenly emitted the gated widget type.',
-              keyPoints: ['Step A', 'Step B'],
-              order: 1,
-              widgetType: 'procedural-skill',
-              widgetOutline: {
-                procedureType: 'inspection',
-                task: 'Inspect the device',
-                tools: ['checklist'],
-                steps: ['Check A', 'Check B'],
-                successCriteria: ['Complete'],
+        yield JSON.stringify(
+          withLearningContract({
+            languageDirective: 'Teach in English.',
+            outlines: [
+              {
+                id: 'scene_1',
+                type: 'interactive',
+                title: 'Operation Process',
+                description: 'A model mistakenly emitted the gated widget type.',
+                keyPoints: ['Step A', 'Step B'],
+                order: 1,
+                widgetType: 'procedural-skill',
+                widgetOutline: {
+                  procedureType: 'inspection',
+                  task: 'Inspect the device',
+                  tools: ['checklist'],
+                  steps: ['Check A', 'Check B'],
+                  successCriteria: ['Complete'],
+                },
               },
-            },
-          ],
-        });
+              {
+                id: 'scene_2',
+                type: 'quiz',
+                title: 'Process Check',
+                description: 'Apply the process to a new case and retry after feedback.',
+                keyPoints: ['New case', 'Decision', 'Retry'],
+                order: 2,
+                quizConfig: {
+                  questionCount: 1,
+                  difficulty: 'medium',
+                  questionTypes: ['text'],
+                },
+              },
+            ],
+          }),
+        );
       })(),
     });
 
@@ -398,27 +499,29 @@ describe('task-engine outline route', () => {
 
     streamLLMMock.mockReturnValue({
       textStream: (async function* () {
-        yield JSON.stringify({
-          languageDirective: '用中文授课。',
-          outlines: [
-            {
-              id: 'scene_pbl',
-              type: 'pbl',
-              title: '同理沟通练习',
-              description: '练习安慰压力很大的朋友。',
-              keyPoints: ['倾听', '回应'],
-              order: 1,
-              pblConfig: {
-                projectTopic: '同理沟通练习',
-                projectDescription: '练习安慰压力很大的朋友。',
-                targetSkills: ['倾听', '回应'],
-                issueCount: 2,
-                scenarioRoleplay: true,
-                scenarioBrief: '朋友压力很大，学习者练习倾听和支持。',
+        yield JSON.stringify(
+          withLearningContract({
+            languageDirective: '用中文授课。',
+            outlines: [
+              {
+                id: 'scene_pbl',
+                type: 'pbl',
+                title: '同理沟通练习',
+                description: '练习安慰压力很大的朋友。',
+                keyPoints: ['倾听', '回应'],
+                order: 1,
+                pblConfig: {
+                  projectTopic: '同理沟通练习',
+                  projectDescription: '练习安慰压力很大的朋友。',
+                  targetSkills: ['倾听', '回应'],
+                  issueCount: 2,
+                  scenarioRoleplay: true,
+                  scenarioBrief: '朋友压力很大，学习者练习倾听和支持。',
+                },
               },
-            },
-          ],
-        });
+            ],
+          }),
+        );
       })(),
     });
 
@@ -456,27 +559,54 @@ describe('task-engine outline route', () => {
 
     streamLLMMock.mockReturnValue({
       textStream: (async function* () {
-        yield JSON.stringify({
-          languageDirective: 'Teach in English.',
-          outlines: [
-            {
-              id: 'scene_4',
-              type: 'slide',
-              title: 'First Scene',
-              description: 'First scene.',
-              keyPoints: ['A'],
-              order: 1,
-            },
-            {
-              id: 'scene_4',
-              type: 'slide',
-              title: 'Second Scene',
-              description: 'Second scene.',
-              keyPoints: ['B'],
-              order: 2,
-            },
-          ],
-        });
+        yield JSON.stringify(
+          withLearningContract({
+            languageDirective: 'Teach in English.',
+            outlines: [
+              {
+                id: 'scene_4',
+                type: 'slide',
+                title: 'First Scene',
+                description: 'First scene.',
+                keyPoints: ['A'],
+                order: 1,
+              },
+              {
+                id: 'scene_4',
+                type: 'slide',
+                title: 'Second Scene',
+                description: 'Second scene.',
+                keyPoints: ['B'],
+                order: 2,
+              },
+              {
+                id: 'scene_assessment',
+                type: 'quiz',
+                title: 'Assessment',
+                description: 'Apply the topic in a new case.',
+                keyPoints: ['Application', 'Evidence', 'Feedback'],
+                order: 3,
+                quizConfig: {
+                  questionCount: 1,
+                  difficulty: 'medium',
+                  questionTypes: ['text'],
+                },
+              },
+              {
+                id: 'scene_practice',
+                type: 'interactive',
+                title: 'Guided Practice',
+                description: 'Apply the topic with immediate feedback.',
+                keyPoints: ['Practice', 'Feedback', 'Retry'],
+                order: 4,
+                widgetType: 'game',
+                widgetOutline: {
+                  challenge: 'Apply the topic to a fresh example',
+                },
+              },
+            ],
+          }),
+        );
       })(),
     });
 
@@ -496,7 +626,7 @@ describe('task-engine outline route', () => {
     expect(ids[1]).not.toBe('scene_4');
   });
 
-  test('falls back to a slide for invalid task-engine outlines without regex promotion', async () => {
+  test('blocks publish when a task-engine response lacks its required vocational structure', async () => {
     vi.resetModules();
     streamLLMMock.mockReset();
     resolveModelFromRequestMock.mockReset();
@@ -513,19 +643,21 @@ describe('task-engine outline route', () => {
 
     streamLLMMock.mockReturnValue({
       textStream: (async function* () {
-        yield JSON.stringify({
-          languageDirective: 'Teach in English.',
-          outlines: [
-            {
-              id: 'scene_bad',
-              type: 'quiz',
-              title: 'Pythagorean theorem recap',
-              description: 'A non-vocational math topic with an invalid type.',
-              keyPoints: ['a squared plus b squared equals c squared'],
-              order: 1,
-            },
-          ],
-        });
+        yield JSON.stringify(
+          withLearningContract({
+            languageDirective: 'Teach in English.',
+            outlines: [
+              {
+                id: 'scene_bad',
+                type: 'quiz',
+                title: 'Pythagorean theorem recap',
+                description: 'A non-vocational math topic with an invalid type.',
+                keyPoints: ['a squared plus b squared equals c squared'],
+                order: 1,
+              },
+            ],
+          }),
+        );
       })(),
     });
 
@@ -540,12 +672,13 @@ describe('task-engine outline route', () => {
 
     const events = parseSseEvents(await readStreamBody(response));
     const done = events.find((event) => event.type === 'done');
-    expect(done).toBeDefined();
-    expect(done.outlines[0]).toMatchObject({
-      type: 'slide',
+    const outline = events.find((event) => event.type === 'outline');
+    const error = events.find((event) => event.type === 'error');
+    expect(done).toBeUndefined();
+    expect(outline?.data).toMatchObject({
+      type: 'quiz',
       title: 'Pythagorean theorem recap',
     });
-    expect(done.outlines[0].widgetType).toBeUndefined();
-    expect(done.outlines[0].widgetOutline).toBeUndefined();
+    expect(error?.error).toContain('vocational');
   });
 });

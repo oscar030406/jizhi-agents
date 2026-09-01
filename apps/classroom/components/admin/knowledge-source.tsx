@@ -23,6 +23,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { redactCaliber } from '@/lib/metrics/redact-caliber';
 import type { SourceFileDetail, SourceFileRow, SourceView } from '@/lib/server/knowledge-source';
 
 /** 一组默认先渲染多少行。odoo 一个库就有 962 个原件，全渲染没人看得完。 */
@@ -40,9 +41,19 @@ function StatusCell({ row }: { readonly row: SourceFileRow }) {
     return <span className="tabular-nums text-emerald-700 dark:text-emerald-300">{row.chunks} 块</span>;
   }
   if (row.rejected) {
-    return <span className="text-amber-700 dark:text-amber-300">退回 · {row.rejected}</span>;
+    return (
+      <span className="text-amber-700 dark:text-amber-300">
+        退回 · {redactCaliber(row.rejected)}
+      </span>
+    );
   }
-  return <span className="text-muted-foreground">在盘未入库</span>;
+  return <span className="text-muted-foreground">已接收，未入库</span>;
+}
+
+function sourceSummary(view: SourceView): string {
+  if (!view.rootLabel) return '系统未记录原件来源';
+  if (view.rootLabel.split(/[\\/]/).includes('intake_runs')) return '本次接入时上传的文档';
+  return view.external ? '平台管理的外部资料源' : '平台知识库资料源';
 }
 
 export function SourceFilesPanel({
@@ -88,7 +99,11 @@ export function SourceFilesPanel({
           f.rel,
           String(f.bytes),
           String(f.chunks),
-          f.chunks > 0 ? '已入库' : f.rejected ? `退回：${f.rejected}` : '在盘未入库',
+          f.chunks > 0
+            ? '已入库'
+            : f.rejected
+              ? `退回：${redactCaliber(f.rejected)}`
+              : '已接收，未入库',
           f.title ?? '',
         ]);
       }
@@ -107,7 +122,7 @@ export function SourceFilesPanel({
       <div className="rounded-2xl border border-border bg-card p-5 shadow-card">
         <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
           <div>
-            <dt className="text-[10px] text-muted-foreground">原目录里的文件</dt>
+            <dt className="text-[10px] text-muted-foreground">系统已接收原件</dt>
             <dd className="text-sm tabular-nums">
               {view.totals.files}
               <span className="ml-1 text-[10px] text-muted-foreground">
@@ -120,7 +135,7 @@ export function SourceFilesPanel({
             <dd className="text-sm tabular-nums">{view.totals.chunks}</dd>
           </div>
           <div>
-            <dt className="text-[10px] text-muted-foreground">在盘未入库</dt>
+            <dt className="text-[10px] text-muted-foreground">已接收未入库</dt>
             <dd className="text-sm tabular-nums">{view.totals.unindexed}</dd>
           </div>
           <div>
@@ -135,19 +150,17 @@ export function SourceFilesPanel({
           </div>
         </dl>
 
-        <p className="mt-4 break-all border-t border-border/60 pt-3 font-mono text-[10px] leading-relaxed text-muted-foreground">
-          原件目录：{view.rootLabel || '（就绪度报告里没有 source_dir，这个库的原件位置无据可查）'}
+        <p className="mt-4 border-t border-border/60 pt-3 text-[11px] leading-relaxed text-muted-foreground">
+          原件来源：{sourceSummary(view)}
         </p>
         {view.rootLabel && !view.rootExists && (
           <p className="mt-1 text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
-            这个目录不在当前这台机器上。扩展域的原件路径是接入时写进就绪度报告的绝对路径，
-            换机器或换目录就断——下面只能列出索引里反查得到的部分，列不出原件字节数。
+            系统当前无法读取这批原件。索引中的可追溯记录仍会显示；如需恢复原文查看，请联系平台维护人员。
           </p>
         )}
         {view.external && view.rootExists && (
           <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-            原件在引擎数据目录之外（<code className="font-mono">corpora/{corpus}/</code> 下只有索引和向量），
-            打包提交时这批原件不会跟着数据目录走。
+            系统已从平台管理的外部资料源接收原件；索引与向量产物已纳入当前知识库。
           </p>
         )}
         {view.indexChunks !== view.totals.chunks && (
@@ -157,15 +170,13 @@ export function SourceFilesPanel({
           </p>
         )}
         {view.orphans.length > 0 && (
-          <p className="mt-1 break-all font-mono text-[10px] leading-relaxed text-amber-700 dark:text-amber-300">
-            反查不到原件的 source_id 前缀：{view.orphans.slice(0, 20).join('、')}
-            {view.orphans.length > 20 && ` 等 ${view.orphans.length} 个`}
+          <p className="mt-1 text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
+            有 {view.orphans.length} 个索引条目暂时无法关联原件；数量与状态仍按索引统计。
           </p>
         )}
         {view.scopedOut && view.scopedOut.files.length > 0 && (
           <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-            接入时按前缀圈掉了 {view.scopedOut.files.length} 个文件
-            {view.scopedOut.prefixes.length > 0 && `（${view.scopedOut.prefixes.join('、')}）`}。
+            接入时按范围排除了 {view.scopedOut.files.length} 个文件。
             {view.scopedOut.stillIndexed > 0 && (
               <span className="text-amber-700 dark:text-amber-300">
                 {' '}
@@ -206,7 +217,7 @@ export function SourceFilesPanel({
               {view.rejectedBuckets.slice(0, 12).map((b) => (
                 <li key={b.reason} className="flex gap-2">
                   <span className="w-10 shrink-0 text-right tabular-nums">{b.count}</span>
-                  <span>{b.reason}</span>
+                  <span>{redactCaliber(b.reason)}</span>
                 </li>
               ))}
             </ul>
@@ -216,10 +227,8 @@ export function SourceFilesPanel({
               </p>
             )}
             <p className="mt-3 text-[10px] leading-relaxed text-muted-foreground">
-              判定在 <code className="font-mono">backend/rag/intake.py:77</code> 的 triage()
-              加上 <code className="font-mono">backend/services/domain_intake.py:249</code> 的内容去重。
-              另外 .git / node_modules / .venv 一类目录是**整棵静默跳过的**，既不收也不进这份清单，
-              所以「原目录文件数」这一格不含它们。
+              系统接入规则负责格式初筛与内容去重；版本控制、依赖和虚拟环境目录会自动跳过，
+              既不接收也不计入原件总数。
             </p>
           </>
         )}
@@ -300,7 +309,11 @@ export function SourceFilesPanel({
             </DialogDescription>
           </DialogHeader>
 
-          {error && <p className="text-[11px] text-rose-600 dark:text-rose-400">{error}</p>}
+          {error && (
+            <p className="text-[11px] text-rose-600 dark:text-rose-400">
+              {redactCaliber(error)}
+            </p>
+          )}
           {!detail && !error && (
             <p className="flex items-center gap-2 text-[11px] text-muted-foreground">
               <Loader2 className="size-3.5 animate-spin" />

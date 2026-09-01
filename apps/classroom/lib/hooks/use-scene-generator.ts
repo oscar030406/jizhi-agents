@@ -111,14 +111,21 @@ export function reportPipeline(sceneTitle: string, pipeline: ScenePipelineMeta |
     const codeTotal = vr.codePassed + vr.codeFailed + vr.codeUnverifiable;
     if (codeTotal > 0) {
       let seg = `代码 ${vr.codePassed}/${codeTotal} 沙箱通过`;
-      if (vr.codeUnverifiable > 0) seg += `（${vr.codeUnverifiable} 块缺依赖未验）`;
+      if (vr.codeUnverifiable > 0) seg += `（${vr.codeUnverifiable} 块未判为通过）`;
       parts.push(seg);
     }
-    if (vr.arithmeticChecked > 0) parts.push(`数值等式 ${vr.arithmeticPassed}/${vr.arithmeticChecked} 复核通过`);
+    if (vr.arithmeticChecked > 0)
+      parts.push(`数值等式 ${vr.arithmeticPassed}/${vr.arithmeticChecked} 复核通过`);
+    if ((vr.arithmeticUnverifiable ?? 0) > 0) {
+      parts.push(`${vr.arithmeticUnverifiable} 项数值表达式不可安全解析`);
+    }
     if (parts.length) {
       const bad = vr.codeFailed > 0 || vr.arithmeticPassed < vr.arithmeticChecked;
       push(sceneTitle, `🧪 验算：${parts.join(' · ')}`, bad ? 'red' : 'purple');
       for (const f of vr.failures) push(sceneTitle, `🧪 验算不过：${f}`, 'red');
+      for (const warning of vr.warnings ?? []) {
+        push(sceneTitle, `🧪 未判为通过：${warning}`, 'yellow');
+      }
     }
   }
 }
@@ -144,7 +151,8 @@ function reportAudit(
       : '单审核',
     `断言 ${audit.totalClaims} 条`,
   ];
-  if (audit.verdict === 'revised') parts.push(`修订 ${audit.rounds > 1 ? `${audit.rounds} 轮` : '1 轮'}`);
+  if (audit.verdict === 'revised')
+    parts.push(`修订 ${audit.rounds > 1 ? `${audit.rounds} 轮` : '1 轮'}`);
   if (audit.incorrectCount > 0) parts.push(`仍有 ${audit.incorrectCount} 条判错`);
   if (audit.uncertainCount > 0) parts.push(`${audit.uncertainCount} 条超出资料覆盖`);
   parts.push(`factuality ${factuality}`);
@@ -163,7 +171,7 @@ function reportAudit(
 function reportAuditUnavailable(sceneTitle: string): void {
   useWorkshopStore
     .getState()
-    .push(sceneTitle, '⚠️ 审核：审核服务未响应，本场景未经核验放行', 'yellow');
+    .push(sceneTitle, '⛔ 审核：审核服务未响应，本场景已保留为待复核草稿', 'red');
 }
 
 function reportFailure(sceneTitle: string, phase: string, error: string): void {
@@ -421,6 +429,7 @@ interface SceneAuditResult {
   success: boolean;
   audit?: import('@/lib/generation/hallucination-audit').SceneAudit;
   content?: unknown;
+  verification?: ScenePipelineMeta['verification'];
   error?: string;
 }
 
@@ -511,7 +520,9 @@ export function mergeAudits(content: SceneAudit | undefined, speech: SceneAudit)
   return {
     ...content,
     verdict:
-      VERDICT_RANK[speech.verdict] > VERDICT_RANK[content.verdict] ? speech.verdict : content.verdict,
+      VERDICT_RANK[speech.verdict] > VERDICT_RANK[content.verdict]
+        ? speech.verdict
+        : content.verdict,
     claims,
     totalClaims: claims.length,
     flaggedCount: claims.filter((c) => c.verdict !== 'supported').length,
@@ -1019,7 +1030,10 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
           // 实测：diagram 类教具反复吐 markdown 抽不出 HTML，一个场景能把整门课
           // 卡在重试马拉松里。降级页走讲义主路径，审核/验算照常。
           let effectiveOutlineForScene: SceneOutline = outline;
-          if ((!contentResult.success || !contentResult.content) && outline.type === 'interactive') {
+          if (
+            (!contentResult.success || !contentResult.content) &&
+            outline.type === 'interactive'
+          ) {
             if (abortRef.current || store.getState().generationEpoch !== startEpoch) {
               pausedByFailureOrAbort = true;
               break;
@@ -1127,12 +1141,7 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
               revised: unknown,
             ): Scene['content'] | null => {
               const r = revised as { elements?: unknown[] } | null;
-              if (
-                cur.type === 'slide' &&
-                r &&
-                typeof r === 'object' &&
-                Array.isArray(r.elements)
-              ) {
+              if (cur.type === 'slide' && r && typeof r === 'object' && Array.isArray(r.elements)) {
                 return {
                   ...cur,
                   canvas: { ...cur.canvas, elements: r.elements },
@@ -1140,7 +1149,11 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
               }
               return null;
             };
-            const applyAuditAsync = (audit: SceneAudit, revisedContent?: unknown) => {
+            const applyAuditAsync = (
+              audit: SceneAudit,
+              revisedContent?: unknown,
+              verification?: ScenePipelineMeta['verification'],
+            ) => {
               if (store.getState().generationEpoch !== startEpoch) return;
               const cur = store.getState().scenes.find((s) => s.id === scene.id);
               if (!cur) return;
@@ -1148,6 +1161,7 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
                 revisedContent != null ? mergeRevisedContent(cur.content, revisedContent) : null;
               store.getState().updateScene(scene.id, {
                 audit: cur.audit ? mergeAudits(cur.audit, audit) : audit,
+                ...(verification ? { verification } : {}),
                 ...(mergedContent ? { content: mergedContent } : {}),
               });
             };
@@ -1198,7 +1212,11 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
                     );
                     store.getState().recordBlockedScene(outline.title, auditResult.audit);
                   }
-                  applyAuditAsync(auditResult.audit, auditResult.content ?? undefined);
+                  applyAuditAsync(
+                    auditResult.audit,
+                    auditResult.content ?? undefined,
+                    auditResult.verification,
+                  );
                 } else if (!auditResult.success) {
                   reportAuditUnavailable(outline.title);
                 }
@@ -1400,6 +1418,9 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
 
         if (auditResult.success && auditResult.audit) {
           actionsResult.scene.audit = auditResult.audit;
+          if (auditResult.verification) {
+            actionsResult.scene.verification = auditResult.verification;
+          }
         }
 
         // Step 2.5: script audit, before TTS.
@@ -1649,6 +1670,7 @@ export async function generateRemediationScene(params: {
     const scene = actionsResult.scene;
     if (auditResult.success && auditResult.audit) {
       scene.audit = auditResult.audit;
+      if (auditResult.verification) scene.verification = auditResult.verification;
     }
 
     const speechAudit = await auditSceneSpeech(scene, outline, stage.id, stage.name);

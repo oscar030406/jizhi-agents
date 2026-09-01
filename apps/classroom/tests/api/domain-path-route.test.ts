@@ -10,8 +10,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NextRequest } from 'next/server';
 
+const access = vi.hoisted(() => ({
+  requireCorpusVisible: vi.fn(),
+}));
+
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+}));
+
+vi.mock('@/lib/server/corpus-access', () => ({
+  requireCorpusVisible: access.requireCorpusVisible,
 }));
 
 const req = {} as NextRequest;
@@ -28,6 +36,7 @@ const originalUrl = process.env.GROUNDING_URL;
 describe('GET /api/domain-path/[corpus]', () => {
   beforeEach(() => {
     process.env.GROUNDING_URL = 'http://engine.test';
+    access.requireCorpusVisible.mockResolvedValue({ ok: true, visible: () => true });
   });
   afterEach(() => {
     globalThis.fetch = originalFetch;
@@ -54,6 +63,7 @@ describe('GET /api/domain-path/[corpus]', () => {
     expect(body.success).toBe(false);
     expect(body.path).toBeUndefined();
     expect(body.error).toContain('学习路径服务');
+    expect(JSON.stringify(body)).not.toContain('ECONNREFUSED');
   });
 
   it('引擎在线：拆掉 ApiResponse 信封，路径本体包进 { path }', async () => {
@@ -121,21 +131,17 @@ describe('机构可见性闸', () => {
   afterEach(() => {
     globalThis.fetch = originalFetch;
     process.env.GROUNDING_URL = originalUrl2;
-    vi.resetModules();
     vi.restoreAllMocks();
   });
 
   it('别的机构的库：403，且不打引擎', async () => {
     // 学习端一共三个取数口（domains / skills / 这条），隔离轴要列全——
     // 少挡一个口，私有教材的概念表与目录结构就从这里漏出去。
-    vi.resetModules(); // 前面的用例已经把路由模块拉进注册表，不重置的话 doMock 不生效
     process.env.GROUNDING_URL = 'http://engine.test';
-    vi.doMock('next/headers', () => ({ cookies: async () => ({ get: () => undefined }) }));
-    vi.doMock('@/lib/accounts/store', () => ({ accountForSession: async () => null }));
-    vi.doMock('@/lib/accounts/session', () => ({ SESSION_COOKIE: 'sid' }));
-    vi.doMock('@/lib/accounts/org-store', () => ({
-      corpusVisibilityFor: async () => (c: string) => c !== 'smart-manufacturing',
-    }));
+    access.requireCorpusVisible.mockResolvedValue({
+      ok: false,
+      response: new Response(JSON.stringify({ success: false }), { status: 403 }),
+    });
     const spy = vi.fn();
     globalThis.fetch = spy as unknown as typeof fetch;
 
@@ -149,22 +155,18 @@ describe('机构可见性闸', () => {
     expect(body.success).toBe(false);
     expect(body).not.toHaveProperty('path');
     expect(spy).not.toHaveBeenCalled();
+    expect(access.requireCorpusVisible).toHaveBeenCalledWith('smart-manufacturing');
   });
 
   it('公共库：闸放行，照常打引擎', async () => {
-    vi.resetModules(); // 前面的用例已经把路由模块拉进注册表，不重置的话 doMock 不生效
     process.env.GROUNDING_URL = 'http://engine.test';
-    vi.doMock('next/headers', () => ({ cookies: async () => ({ get: () => undefined }) }));
-    vi.doMock('@/lib/accounts/store', () => ({ accountForSession: async () => null }));
-    vi.doMock('@/lib/accounts/session', () => ({ SESSION_COOKIE: 'sid' }));
-    vi.doMock('@/lib/accounts/org-store', () => ({
-      corpusVisibilityFor: async () => () => true,
-    }));
-    globalThis.fetch = vi.fn(async () =>
-      new Response(JSON.stringify({ data: { corpus: 'iotdb', source: 'intake', stages: [] } }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      }),
+    access.requireCorpusVisible.mockResolvedValue({ ok: true, visible: () => true });
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ data: { corpus: 'iotdb', source: 'intake', stages: [] } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
     ) as unknown as typeof fetch;
 
     const { GET } = await import('@/app/api/domain-path/[corpus]/route');

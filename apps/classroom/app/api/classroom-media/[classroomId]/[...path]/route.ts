@@ -1,10 +1,22 @@
 import { promises as fs, createReadStream } from 'fs';
 import path from 'path';
 import { NextRequest, NextResponse } from 'next/server';
-import { CLASSROOMS_DIR, isValidClassroomId } from '@/lib/server/classroom-storage';
+import { corpusOwnership } from '@/lib/accounts/org-store';
+import { isCourseLearnerReleased } from '@/lib/generation/learner-release';
+import { courseVisibleToOrg, viewerOrgId } from '@/lib/server/course-access';
+import { CLASSROOMS_DIR, isValidClassroomId, readClassroom } from '@/lib/server/classroom-storage';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('ClassroomMedia');
+const PRIVATE_NO_STORE = 'private, no-store';
+const PUBLIC_CACHE = 'public, max-age=86400, immutable';
+
+function notFound() {
+  return NextResponse.json(
+    { error: 'Not found' },
+    { status: 404, headers: { 'Cache-Control': PRIVATE_NO_STORE } },
+  );
+}
 
 const MIME_TYPES: Record<string, string> = {
   '.png': 'image/png',
@@ -21,7 +33,7 @@ const MIME_TYPES: Record<string, string> = {
 };
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ classroomId: string; path: string[] }> },
 ) {
   const { classroomId, path: pathSegments } = await params;
@@ -40,22 +52,37 @@ export async function GET(
   // Only allow media/ and audio/ subdirectories
   const subDir = pathSegments[0];
   if (subDir !== 'media' && subDir !== 'audio') {
-    return NextResponse.json({ error: 'Invalid path' }, { status: 404 });
+    return notFound();
   }
 
-  const filePath = path.join(CLASSROOMS_DIR, classroomId, ...pathSegments);
-  const resolvedBase = path.resolve(CLASSROOMS_DIR, classroomId);
-
   try {
+    const [classroom, ownership, orgId] = await Promise.all([
+      readClassroom(classroomId),
+      corpusOwnership(),
+      viewerOrgId(req),
+    ]);
+    if (
+      !classroom ||
+      !isCourseLearnerReleased(classroom) ||
+      !courseVisibleToOrg(classroom, orgId, ownership)
+    ) {
+      return notFound();
+    }
+    const cacheControl = courseVisibleToOrg(classroom, null, ownership)
+      ? PUBLIC_CACHE
+      : PRIVATE_NO_STORE;
+    const filePath = path.join(CLASSROOMS_DIR, classroomId, ...pathSegments);
+    const resolvedBase = path.resolve(CLASSROOMS_DIR, classroomId);
+
     // Resolve symlinks and verify the real path stays within the classroom dir
     const realPath = await fs.realpath(filePath);
     if (!realPath.startsWith(resolvedBase + path.sep) && realPath !== resolvedBase) {
-      return NextResponse.json({ error: 'Not found' }, { status: 404 });
+      return notFound();
     }
 
     const stat = await fs.stat(realPath);
     if (!stat.isFile()) {
-      return NextResponse.json({ error: 'Not found' }, { status: 404 });
+      return notFound();
     }
 
     const ext = path.extname(realPath).toLowerCase();
@@ -79,12 +106,12 @@ export async function GET(
       headers: {
         'Content-Type': contentType,
         'Content-Length': String(stat.size),
-        'Cache-Control': 'public, max-age=86400, immutable',
+        'Cache-Control': cacheControl,
       },
     });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return NextResponse.json({ error: 'Not found' }, { status: 404 });
+      return notFound();
     }
     log.error(
       `Classroom media serving failed [classroomId=${classroomId}, path=${joined}]:`,

@@ -103,7 +103,11 @@ const FOCUS_RING =
   'focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-chart-2';
 
 export default async function PathPage() {
-  const [pathData, courses, practice] = await Promise.all([loadPath(), listClassrooms(), loadPractice()]);
+  const [pathData, courses, practice] = await Promise.all([
+    loadPath(),
+    listClassrooms({ learnerReleasedOnly: true }),
+    loadPractice(),
+  ]);
   const courseById = new Map(courses.map((c) => [c.id, c]));
   const nodeById = new Map(pathData.nodes.map((n) => [n.id, n]));
 

@@ -85,7 +85,7 @@ export async function POST(req: NextRequest) {
     return apiError(
       API_ERROR_CODES.INTERNAL_ERROR,
       503,
-      'GROUNDING_URL 未配置，多智能体引擎不可用',
+      '多智能体审核服务暂不可用。',
     );
   }
   // 发起侧鉴权：一次对比要占引擎十几分钟，公共页已经不给未登录访客入口，

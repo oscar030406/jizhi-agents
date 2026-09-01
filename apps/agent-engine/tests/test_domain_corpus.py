@@ -22,6 +22,8 @@ def test_unbuilt_domain_returns_empty_with_reason():
     result = evidence_retrieve_api("数控机床刀具补偿", corpus="manufacturing")
     assert result["chunks"] == []
     assert "尚未建设" in result["missing_evidence_warning"]
+    assert "管理者" in result["missing_evidence_warning"]
+    assert "data/knowledge_base" not in result["missing_evidence_warning"]
 
 
 def test_corpus_name_is_path_safe():

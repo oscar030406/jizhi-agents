@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import '@/lib/chat/pi/tools/call-agent';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import type { StatelessChatRequest, StatelessEvent } from '@/lib/types/chat';
 
@@ -100,19 +101,20 @@ function makeBody(
 }
 
 function makeMockChildWithJsonOutput(jsonOutput: string) {
+  let handler: ((event: unknown) => unknown) | null = null;
   return {
-    subscribe: (handler: (event: unknown) => void) => {
-      setTimeout(() => {
-        handler({
-          type: 'message_update',
-          assistantMessageEvent: { type: 'text_delta', delta: jsonOutput },
-        });
-      }, 0);
-      return () => {};
+    subscribe: (nextHandler: (event: unknown) => unknown) => {
+      handler = nextHandler;
+      return () => {
+        if (handler === nextHandler) handler = null;
+      };
     },
     prompt: async () => {},
     waitForIdle: async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await handler?.({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: jsonOutput },
+      });
     },
     state: {
       messages: [
@@ -139,7 +141,9 @@ function mockChildWithChunks(chunks: string[], finalMessage?: string) {
   mocks.buildAgent.mockReturnValue({
     subscribe: (h: (event: unknown) => unknown) => {
       handler = h;
-      return () => {};
+      return () => {
+        if (handler === h) handler = null;
+      };
     },
     prompt: async () => {},
     waitForIdle: async () => {
@@ -184,7 +188,6 @@ function baseToolOpts(events: StatelessEvent[]) {
 
 describe('Pi call_agent JSON action output', () => {
   beforeEach(() => {
-    vi.resetModules();
     mocks.buildAgent.mockReset();
   });
 

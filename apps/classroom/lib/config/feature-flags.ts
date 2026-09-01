@@ -31,11 +31,13 @@ export function isPiChatEnabled(): boolean {
 
 /**
  * Server-authoritative gate for the vocational task-engine generation path.
- * Default OFF. When disabled, requests that include taskEngineMode must
- * silently fall back to the ordinary standard / interactive generation paths.
+ * Default ON so trustworthy corpus/domain metadata can select the stronger
+ * task engine without a hidden request flag. Explicit `false` / `0` remains
+ * an emergency kill switch and falls back to ordinary generation.
  */
 export function isVocationalTaskEngineEnabled(): boolean {
-  return readBoolean(process.env.OPENMAIC_ENABLE_VOCATIONAL);
+  const value = process.env.OPENMAIC_ENABLE_VOCATIONAL;
+  return value !== 'false' && value !== '0';
 }
 
 export function resolveVocationalActive(

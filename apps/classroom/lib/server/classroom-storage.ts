@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import type { NextRequest } from 'next/server';
 import type { Scene, Stage } from '@/lib/types/stage';
+import { isCourseLearnerReleased } from '@/lib/generation/learner-release';
 
 export const CLASSROOMS_DIR = path.join(process.cwd(), 'data', 'classrooms');
 export const CLASSROOM_JOBS_DIR = path.join(process.cwd(), 'data', 'classroom-jobs');
@@ -178,7 +179,9 @@ export interface ClassroomSummary {
  * 用户课程——这批课未登录也能读，是产品的门面。读失败的单个文件跳过而不是
  * 整个清单报错：一门课的文件坏了不该让整面墙消失。
  */
-export async function listClassrooms(): Promise<ClassroomSummary[]> {
+export async function listClassrooms(
+  options: { learnerReleasedOnly?: boolean } = {},
+): Promise<ClassroomSummary[]> {
   let files: string[];
   try {
     files = (await fs.readdir(CLASSROOMS_DIR)).filter((f) => f.endsWith('.json'));
@@ -194,6 +197,9 @@ export async function listClassrooms(): Promise<ClassroomSummary[]> {
       if (!isValidClassroomId(id)) return null;
       const data = await readClassroom(id).catch(() => null);
       if (!data?.stage || !Array.isArray(data.scenes)) return null;
+      // 管理端与冻结指标仍读默认的全量清单；只有学习者发布面显式打开此选项。
+      // 门禁只过滤返回值，原始 JSON 草稿不改、不删。
+      if (options.learnerReleasedOnly && !isCourseLearnerReleased(data)) return null;
       return {
         id: data.id ?? id,
         title: data.stage.name ?? id,

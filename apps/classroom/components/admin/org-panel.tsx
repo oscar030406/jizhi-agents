@@ -34,6 +34,8 @@ interface Assignment {
   id: string;
   courseId: string;
   title: string;
+  learnerAccountId: string | null;
+  learnerDisplayName: string | null;
   createdAt: string;
 }
 
@@ -56,6 +58,7 @@ export function OrgPanel() {
   const [ownership, setOwnership] = useState<Record<string, string>>({});
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [courses, setCourses] = useState<CourseOption[]>([]);
+  const [pickLearner, setPickLearner] = useState('');
   const [pickCourse, setPickCourse] = useState('');
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
@@ -74,7 +77,10 @@ export function OrgPanel() {
       const ownBody = await ownResp.json();
       setOwnership(ownBody?.ownership ?? {});
       const domBody = await domResp.json();
-      const entries = (domBody?.entries ?? {}) as Record<string, { label?: string; eligible?: boolean }>;
+      const entries = (domBody?.entries ?? {}) as Record<
+        string,
+        { label?: string; eligible?: boolean }
+      >;
       setCorpora(
         Object.entries(entries).map(([corpus, e]) => ({
           corpus,
@@ -121,7 +127,8 @@ export function OrgPanel() {
     try {
       const resp = await fn();
       const body = await resp.json();
-      if (!resp.ok) setError(body?.error?.message ?? body?.error ?? `操作失败（HTTP ${resp.status}）`);
+      if (!resp.ok)
+        setError(body?.error?.message ?? body?.error ?? `操作失败（HTTP ${resp.status}）`);
       else {
         if (okNotice) setNotice(okNotice);
         await reload();
@@ -271,7 +278,9 @@ export function OrgPanel() {
                           className="text-xs"
                           disabled={busy}
                           onClick={() => {
-                            const pw = window.prompt(`给 ${m.displayName} 设新密码（6-64 位字母或数字）：`);
+                            const pw = window.prompt(
+                              `给 ${m.displayName} 设新密码（6-64 位字母或数字）：`,
+                            );
                             if (!pw) return;
                             void act(
                               () =>
@@ -294,9 +303,12 @@ export function OrgPanel() {
                           onClick={() =>
                             act(
                               () =>
-                                fetch(`/api/org/members?accountId=${encodeURIComponent(m.accountId)}`, {
-                                  method: 'DELETE',
-                                }),
+                                fetch(
+                                  `/api/org/members?accountId=${encodeURIComponent(m.accountId)}`,
+                                  {
+                                    method: 'DELETE',
+                                  },
+                                ),
                               `已移出 ${m.displayName}`,
                             )
                           }
@@ -325,18 +337,46 @@ export function OrgPanel() {
         <section className="rounded-2xl border border-border bg-card p-6 shadow-card">
           <h2 className="text-sm font-medium">课程指派</h2>
           <p className="mt-1 text-[11px] text-muted-foreground">
-            指派的课程会出现在本机构每位学员首页的「机构指派」卡上；指派是登记不是复制，
-            学员点进的就是那门课本体。
+            先选择一名学员，再为其指派课程；课程只会出现在该学员首页的「机构指派」卡上。
+            历史全体指派仍对所有学员有效。
           </p>
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <select
+              aria-label="选择学员"
+              value={pickLearner}
+              onChange={(e) => {
+                setPickLearner(e.target.value);
+                setPickCourse('');
+              }}
+              className="h-9 min-w-56 rounded-lg border border-border bg-background px-2 text-sm"
+            >
+              <option value="">选择要接收课程的学员…</option>
+              {members
+                .filter((member) => member.role === 'member')
+                .map((member) => (
+                  <option key={member.accountId} value={member.accountId}>
+                    {member.displayName}（{member.username}）
+                  </option>
+                ))}
+            </select>
+            <select
+              aria-label="选择课程"
               value={pickCourse}
               onChange={(e) => setPickCourse(e.target.value)}
+              disabled={!pickLearner}
               className="h-9 min-w-64 rounded-lg border border-border bg-background px-2 text-sm"
             >
               <option value="">选择要指派的课程…</option>
               {courses
-                .filter((c) => !assignments.some((a) => a.courseId === c.id))
+                .filter(
+                  (course) =>
+                    !assignments.some(
+                      (assignment) =>
+                        assignment.courseId === course.id &&
+                        (assignment.learnerAccountId === null ||
+                          assignment.learnerAccountId === pickLearner),
+                    ),
+                )
                 .map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.title}
@@ -345,19 +385,24 @@ export function OrgPanel() {
             </select>
             <Button
               size="sm"
-              disabled={busy || !pickCourse}
+              disabled={busy || !pickLearner || !pickCourse}
               onClick={() => {
                 const course = courses.find((c) => c.id === pickCourse);
-                if (!course) return;
+                const learner = members.find((member) => member.accountId === pickLearner);
+                if (!course || !learner) return;
                 setPickCourse('');
                 void act(
                   () =>
                     fetch('/api/org/assignments', {
                       method: 'POST',
                       headers: { 'content-type': 'application/json' },
-                      body: JSON.stringify({ courseId: course.id, title: course.title }),
+                      body: JSON.stringify({
+                        learnerAccountId: learner.accountId,
+                        courseId: course.id,
+                        title: course.title,
+                      }),
                     }),
-                  `已指派「${course.title}」`,
+                  `已向 ${learner.displayName} 指派「${course.title}」`,
                 );
               }}
             >
@@ -370,7 +415,15 @@ export function OrgPanel() {
                 key={a.id}
                 className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border px-3 py-2"
               >
-                <span className="text-sm">{a.title}</span>
+                <span>
+                  <span className="block text-sm">{a.title}</span>
+                  <span className="block text-[11px] text-muted-foreground">
+                    指派给：
+                    {a.learnerAccountId
+                      ? (a.learnerDisplayName ?? a.learnerAccountId)
+                      : '全体学员（历史指派）'}
+                  </span>
+                </span>
                 <span className="flex items-center gap-2">
                   <span className="text-[11px] tabular-nums text-muted-foreground">
                     {new Date(a.createdAt).toLocaleDateString('zh-CN')}
@@ -382,7 +435,10 @@ export function OrgPanel() {
                     disabled={busy}
                     onClick={() =>
                       act(
-                        () => fetch(`/api/org/assignments?id=${encodeURIComponent(a.id)}`, { method: 'DELETE' }),
+                        () =>
+                          fetch(`/api/org/assignments?id=${encodeURIComponent(a.id)}`, {
+                            method: 'DELETE',
+                          }),
                         `已撤回「${a.title}」`,
                       )
                     }
@@ -419,7 +475,9 @@ export function OrgPanel() {
                 >
                   <div className="min-w-0">
                     <span className="text-sm font-medium">{c.label}</span>
-                    <span className="ml-2 font-mono text-[11px] text-muted-foreground">{c.corpus}</span>
+                    <span className="ml-2 font-mono text-[11px] text-muted-foreground">
+                      {c.corpus}
+                    </span>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="rounded-full bg-muted px-2 py-px text-[10px]">
@@ -467,7 +525,9 @@ export function OrgPanel() {
                         归属本机构
                       </Button>
                     )}
-                    {state === 'other' && <span className="text-[11px] text-muted-foreground">{owner}</span>}
+                    {state === 'other' && (
+                      <span className="text-[11px] text-muted-foreground">{owner}</span>
+                    )}
                   </div>
                 </li>
               );

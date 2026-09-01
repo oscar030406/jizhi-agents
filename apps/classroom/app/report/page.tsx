@@ -54,6 +54,11 @@ import { parseTier, rankRepractice } from '@/lib/quiz/item-selection';
 import { learnerDomain } from '@/lib/evidence/profile-bridge';
 import { belongsToDomain } from '@/lib/knowledge/use-course-domains';
 import { LEGACY_DOMAIN } from '@/lib/evidence/types';
+import { applyEffectiveDomain, type EffectiveDomainContext } from '@/lib/knowledge/domain-context';
+import {
+  loadEffectiveDomainContext,
+  type EffectiveDomainContextState,
+} from '@/lib/knowledge/use-domain-context';
 import {
   knowledgeState,
   prereqClosure,
@@ -630,7 +635,9 @@ function ReviewNextBlock({ profile }: { profile: LearnerProfileFields | null }) 
       </p>
       {schedule.length > 0 && (
         <div className="space-y-1">
-          <p className="text-xs text-muted-foreground">复习排期（按知识类型的间隔序列重放作答史得出）：</p>
+          <p className="text-xs text-muted-foreground">
+            复习排期（按知识类型的间隔序列重放作答史得出）：
+          </p>
           {schedule.map((s) => (
             <div key={s.key} className="flex items-center gap-2 text-xs">
               <span className="truncate text-muted-foreground" title={conceptLabel(s.key)}>
@@ -671,14 +678,22 @@ function ReviewNextBlock({ profile }: { profile: LearnerProfileFields | null }) 
  * 正确答案的本机回放。解析在作答界面不展示（防泄答案），错后到这里才看得到——
  * 这正是它进错题本的价值。空答与答错分开标（补救方向不同）。
  */
-function MistakeBankBlock({ profile }: { profile: LearnerProfileFields | null }) {
+function MistakeBankBlock({
+  profile,
+  domain,
+}: {
+  profile: LearnerProfileFields | null;
+  domain?: string | null;
+}) {
   const [mistakes, setMistakes] = useState<MistakeEntry[]>([]);
+  /* eslint-disable react-hooks/set-state-in-effect -- localStorage 错题需在有效领域变化后重新分桶 */
   useEffect(() => {
     // 按当前画像域过滤（联动清单 C2：换库后两个知识库的错题不许混排）。
     // 老记录没有 domain 字段：归入 LEGACY_DOMAIN（ai）桶——与证据层同一兜底口径。
-    const current = learnerDomain() ?? LEGACY_DOMAIN;
+    const current = domain ?? learnerDomain() ?? LEGACY_DOMAIN;
     setMistakes(readMistakes().filter((m) => (m.domain ?? LEGACY_DOMAIN) === current));
-  }, []);
+  }, [domain]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   /**
    * 重练顺序：先答错的、后空答的，同类内按 Fisher 信息量降序
@@ -767,8 +782,8 @@ function QuizMasteryBlock({ profile }: { profile: LearnerProfileFields | null })
     return (
       <p className="rounded-md border border-dashed border-border/70 p-2.5 text-xs leading-relaxed text-muted-foreground">
         <span className="font-medium text-foreground">实测盲区（来自测验）：</span>
-        暂无数据——完成课程中的测验后生成。每次交卷，该场景主题的掌握度会以 EMA
-        累积写回画像，低于 0.6 的主题在此突出显示。
+        暂无数据——完成课程中的测验后生成。每次交卷，该场景主题的掌握度会以 EMA 累积写回画像，低于
+        0.6 的主题在此突出显示。
       </p>
     );
   }
@@ -777,7 +792,7 @@ function QuizMasteryBlock({ profile }: { profile: LearnerProfileFields | null })
     <div className="space-y-2 rounded-md border border-border/70 p-2.5">
       <p className="text-xs leading-relaxed text-muted-foreground">
         <span className="font-medium text-foreground">实测盲区（来自测验）：</span>
-        以下掌握度来自本机测验成绩的 EMA 累积（quiz-decision 写回），与上图引擎推断值不同源。
+        以下掌握度来自当前账户测验成绩的 EMA 累积（quiz-decision 写回），与上图引擎推断值不同源。
         {weak.length > 0
           ? `低于 0.6 的 ${weak.length} 个主题为实测薄弱点。`
           : '当前没有低于 0.6 的主题。'}
@@ -1148,7 +1163,7 @@ function DifficultyCurveChart({
         场景难度中只有测验场景有大纲记录值（easy/medium/hard 换算为第 1/2/3 档）；本课程{' '}
         {points.length} 个场景里有 {estimated} 个无记录难度，按场景类型在能力区间内保守取值。
         {dynDifficulty
-          ? ' 橙色虚线为最近一次测验决策写回的当前自适应难度（单点现状；本机未存历史轨迹，难度变化曲线随学习积累后呈现）。'
+          ? ' 橙色虚线为最近一次测验决策写回的当前自适应难度（单点现状；当前账户尚无历史轨迹，难度变化曲线随学习积累后呈现）。'
           : ' 完成测验后，此图会额外标出测验决策写回的当前自适应难度（随学习积累形成变化轨迹）。'}
       </Caliber>
 
@@ -1202,10 +1217,18 @@ function DifficultyCurveChart({
  * 它回答的是另一个问题：**这份缺口清单本身够不够学**。两者结论不一样时以这里为准，
  * 因为拓扑序只在缺口清单内部排，图上必经但清单没列的点它看不见。
  */
-export function NextStepPanel({ bp, gapConcepts }: { bp: LearnerBlueprint; gapConcepts: string[] }) {
+export function NextStepPanel({
+  bp,
+  gapConcepts,
+  domain,
+}: {
+  bp: LearnerBlueprint;
+  gapConcepts: string[];
+  domain?: string | null;
+}) {
   // 按学习者画像取域，不焊死主域（2026-08-28 清查 M1）。没有图的域返回空图 →
   // matched 为 0 → 面板不渲染，与下面的降级注释同一条路，不会拿错域的图硬排。
-  const graph = prereqGraphFor(learnerDomain() ?? LEGACY_DOMAIN);
+  const graph = prereqGraphFor(domain ?? learnerDomain() ?? LEGACY_DOMAIN);
   const inGraph = new Set(graph.items);
   const matched = gapConcepts.filter((c) => inGraph.has(c));
   // 一个缺口都不在图的词表内时不渲染：那时所有结论都退化成「不可达」，
@@ -1253,7 +1276,9 @@ export function NextStepPanel({ bp, gapConcepts }: { bp: LearnerBlueprint; gapCo
 
       {blocked.length > 0 && (
         <div className="space-y-1 border-t border-border/60 pt-2">
-          <p className="text-xs font-medium text-muted-foreground">还要先过前置（按距当前步数排）</p>
+          <p className="text-xs font-medium text-muted-foreground">
+            还要先过前置（按距当前步数排）
+          </p>
           <ul className="space-y-1 text-xs text-muted-foreground">
             {blocked.map((p) => {
               const need = unmetPrereqs(graph, p.kc, known);
@@ -1301,7 +1326,7 @@ export function NextStepPanel({ bp, gapConcepts }: { bp: LearnerBlueprint; gapCo
 // Chart 3 — 学习路径规划图
 // ─────────────────────────────────────────────────────────────────────────────
 
-function LearningPathChart({ bp }: { bp: LearnerBlueprint }) {
+function LearningPathChart({ bp, domain }: { bp: LearnerBlueprint; domain?: string | null }) {
   const byPriority = [...(bp.blueprint?.skill_gaps ?? [])].sort(
     (a, b) => (a.priority ?? 99) - (b.priority ?? 99) || b.gap - a.gap,
   );
@@ -1310,7 +1335,7 @@ function LearningPathChart({ bp }: { bp: LearnerBlueprint }) {
   // 所以这是在原排序上加一层约束，不是换一套排序。
   const ordering = orderByPrereq(
     byPriority.map((g) => g.concept),
-    learnerDomain() ?? LEGACY_DOMAIN,
+    domain ?? learnerDomain() ?? LEGACY_DOMAIN,
   );
   const gapByConceptId = new Map(byPriority.map((g) => [g.concept, g] as const));
   const gaps = ordering.concepts.map((c) => gapByConceptId.get(c)!).filter(Boolean);
@@ -1326,7 +1351,7 @@ function LearningPathChart({ bp }: { bp: LearnerBlueprint }) {
 
   return (
     <div className="space-y-3">
-      <NextStepPanel bp={bp} gapConcepts={gaps.map((g) => g.concept)} />
+      <NextStepPanel bp={bp} gapConcepts={gaps.map((g) => g.concept)} domain={domain} />
 
       <Caliber summary="这份缺口清单的排序口径">
         {ordering.usedGraph ? (
@@ -1345,7 +1370,6 @@ function LearningPathChart({ bp }: { bp: LearnerBlueprint }) {
           </>
         )}
       </Caliber>
-
 
       <div className="grid gap-1.5">
         {gaps.map((g) => (
@@ -1368,6 +1392,7 @@ type BlueprintState =
   | { kind: 'ok'; bp: LearnerBlueprint }
   | { kind: 'no-profile' }
   | { kind: 'no-course' }
+  | { kind: 'domain-unavailable'; reason: string }
   | { kind: 'offline' };
 
 type CourseState =
@@ -1380,6 +1405,9 @@ export default function ReportPage() {
   const [stages, setStages] = useState<StageListItem[] | null>(null);
   const [stageId, setStageId] = useState<string | null | undefined>(undefined);
   const [profile, setProfile] = useState<LearnerProfileFields | null>(null);
+  const [domainContextState, setDomainContextState] = useState<EffectiveDomainContextState>({
+    kind: 'loading',
+  });
   const [courseState, setCourseState] = useState<CourseState>({ kind: 'loading' });
   const [bpState, setBpState] = useState<BlueprintState>({ kind: 'loading' });
   const [reloadKey, setReloadKey] = useState(0);
@@ -1394,31 +1422,43 @@ export default function ReportPage() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      setProfile(readStoredProfile());
-      let list: StageListItem[] = [];
-      try {
-        list = await listStages();
-      } catch {
-        list = [];
-      }
+      const stored = readStoredProfile();
+      const [resolved, loadedStages] = await Promise.all([
+        loadEffectiveDomainContext(stored),
+        listStages().catch(() => [] as StageListItem[]),
+      ]);
       if (cancelled) return;
-      // D3 域过滤：课程下拉只列当前画像域的课（联动铁令「两个库不混」）。
-      // 判据用与最近学习同一份 belongsToDomain——归属表没有的课算本域可见
-      // （新课入表有延迟，宁可多显示也不让刚生成的课凭空消失）。
-      const corpus = readStoredProfile()?.corpus?.trim() || undefined;
-      if (corpus) {
-        try {
-          const resp = await fetch('/api/course-domains');
-          if (resp.ok) {
-            const domains = (await resp.json()) as Record<
-              string,
-              { domain?: string; corpus?: string; title?: string }
-            >;
-            const filtered = list.filter((s) => belongsToDomain(s.id, corpus, domains));
-            if (filtered.length > 0) list = filtered;
-          }
-        } catch {
-          // 拉不到归属表就不过滤——展示全量好过误藏
+      setDomainContextState(resolved);
+      setProfile(
+        stored && resolved.kind === 'ready'
+          ? applyEffectiveDomain(stored, resolved.context)
+          : stored,
+      );
+
+      let list = loadedStages;
+      if (resolved.kind !== 'ready') {
+        list = [];
+      } else {
+        const { context } = resolved;
+        const domains = resolved.courseDomains ?? {};
+        if (!context.domain) {
+          // 已有画像或机构指派、却解析不出领域时，不能再拿第一门（通常是 AI）课程顶上。
+          if (stored || context.assignment) list = [];
+        } else if (context.assignment) {
+          // 指派接口已经按当前 learner 过滤；只选这名学习者实际收到的课程。
+          list = list.filter((stage) => stage.id === context.assignment?.courseId);
+        } else if (context.isAi) {
+          // 保留既有 AI 行为：新课尚未进入归属表时仍可见，且只有过滤结果非空才收窄。
+          const filtered = list.filter((stage) =>
+            belongsToDomain(stage.id, context.domain!, domains),
+          );
+          if (filtered.length > 0) list = filtered;
+        } else {
+          // 已知非 AI 域必须有运行时归属证据才展示；缺表时不能把全量 AI 课程放回来。
+          list = list.filter((stage) => {
+            const entry = domains[stage.id];
+            return (entry?.corpus ?? entry?.domain ?? '') === context.domain;
+          });
         }
       }
       if (cancelled) return;
@@ -1434,7 +1474,7 @@ export default function ReportPage() {
 
   // Load the classroom, then ask the engine for the blueprint.
   useEffect(() => {
-    if (stageId === undefined) return;
+    if (stageId === undefined || domainContextState.kind === 'loading') return;
     let cancelled = false;
     const manual = manualRef.current;
 
@@ -1452,6 +1492,25 @@ export default function ReportPage() {
     };
 
     (async () => {
+      if (!profile) {
+        setCourseState({ kind: 'none' });
+        setBpState({ kind: 'no-profile' });
+        finish(() => toast.warning('还没有学习者画像，先在首页填写再重新计算'));
+        return;
+      }
+      if (domainContextState.kind === 'error') {
+        setCourseState({ kind: 'error', message: domainContextState.reason });
+        setBpState({ kind: 'domain-unavailable', reason: domainContextState.reason });
+        finish(() => toast.error(domainContextState.reason));
+        return;
+      }
+      if (!domainContextState.context.domain) {
+        const reason = domainContextState.context.reason ?? '当前课程的有效领域尚未由引擎确认。';
+        setCourseState({ kind: 'error', message: reason });
+        setBpState({ kind: 'domain-unavailable', reason });
+        finish(() => toast.error(reason));
+        return;
+      }
       if (stageId === null) {
         setCourseState({ kind: 'none' });
         setBpState({ kind: 'no-course' });
@@ -1501,18 +1560,11 @@ export default function ReportPage() {
       }
       setCourseState({ kind: 'ok', course });
 
-      const stored = readStoredProfile();
-      if (!stored) {
-        setBpState({ kind: 'no-profile' });
-        finish(() => toast.warning('还没有学习者画像，先在首页填写再重新计算'));
-        return;
-      }
-
       try {
         const res = await fetch('/api/adaptive/blueprint', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ learningGoal: course.stage.name, profile: stored }),
+          body: JSON.stringify({ learningGoal: course.stage.name, profile }),
         });
         if (cancelled) {
           finish();
@@ -1548,11 +1600,17 @@ export default function ReportPage() {
     return () => {
       cancelled = true;
     };
-  }, [stageId, reloadKey]);
+  }, [domainContextState, profile, reloadKey, stageId]);
 
   const course = courseState.kind === 'ok' ? courseState.course : null;
   const bp = bpState.kind === 'ok' ? bpState.bp : null;
   const mix = bp?.blueprint?.resource_mix ?? null;
+  const effectiveContext: EffectiveDomainContext | null =
+    domainContextState.kind === 'ready' ? domainContextState.context : null;
+  const effectiveDomain = effectiveContext?.domain ?? null;
+  const effectiveDomainName =
+    effectiveContext?.label ?? (effectiveDomain ? domainLabel(effectiveDomain) : '领域待确认');
+  const isAiDomain = effectiveContext?.isAi === true;
 
   // 核心大数（⑪）：全部从页内已有数据推算，不引新数据源。
   const dynLevel =
@@ -1588,13 +1646,29 @@ export default function ReportPage() {
         />
       );
     }
+    if (bpState.kind === 'domain-unavailable') {
+      return (
+        <EmptyState
+          title="当前课程的有效领域尚未确认"
+          hint={`${bpState.reason} 学情报告不会改用 AI 画像或 AI 诊断代替。`}
+        />
+      );
+    }
+    if (effectiveDomain && !isAiDomain) {
+      return (
+        <EmptyState
+          title="所属机构尚未提供该领域的学情数据"
+          hint={`当前没有可用的「${effectiveDomainName}」学情引擎产物（也可能是诊断服务暂时不可用）；系统没有改用 AI 学情代替。机构补齐产物或服务恢复后可重新计算。`}
+        />
+      );
+    }
     return (
       <EmptyState
         title="引擎离线，学情数据不可用"
         hint="多智能体引擎未响应。请确认引擎服务已启动后点右上角「重新计算」。"
       />
     );
-  }, [bpState.kind]);
+  }, [bpState, effectiveDomain, effectiveDomainName, isAiDomain]);
 
   const audit = course ? summarizeAudits(course.scenes) : null;
 
@@ -1612,7 +1686,7 @@ export default function ReportPage() {
               个人学情与资源匹配度报告
             </h1>
             <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-              数据来源仅三处：本机学习者画像、多智能体引擎诊断结果、本课程已生成的场景与审核记录。
+              数据来源仅三处：当前账户的学习者画像、多智能体引擎诊断结果、本课程已生成的场景与审核记录。
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -1694,7 +1768,7 @@ export default function ReportPage() {
           <SectionCard
             icon={Target}
             title="画像摘要"
-            description="左半是你在本机填的画像，右半是多智能体引擎据此给出的学情诊断。"
+            description="左半是你为当前账户填写的画像，右半是多智能体引擎据此给出的学情诊断。"
           >
             {!profile ? (
               <EmptyState
@@ -1703,7 +1777,7 @@ export default function ReportPage() {
               />
             ) : (
               <div className="space-y-3">
-                {isUntouchedDefault(profile) && (
+                {isAiDomain && isUntouchedDefault(profile) && (
                   <p className="flex items-start gap-2 rounded-lg border border-yellow-deep/20 bg-yellow-soft p-3 text-sm leading-relaxed text-yellow-deep">
                     <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
                     <span>
@@ -1716,8 +1790,11 @@ export default function ReportPage() {
                   <div className="space-y-3">
                     <div className="flex flex-wrap gap-1.5 text-xs">
                       <span className="rounded-full border px-2 py-0.5">
-                        领域 · {profile.domain ? domainLabel(profile.domain) : '未填'}
+                        有效领域 · {effectiveDomainName}
                       </span>
+                      {effectiveContext?.source === 'course-assignment' && (
+                        <span className="rounded-full border px-2 py-0.5">来源 · 当前课程指派</span>
+                      )}
                       <span className="rounded-full border px-2 py-0.5">
                         学历 ·{' '}
                         {EDUCATION_LABEL[profile.education ?? ''] ?? profile.education ?? '未填'}
@@ -1731,32 +1808,38 @@ export default function ReportPage() {
                         </span>
                       )}
                     </div>
-                    <div className="space-y-1.5">
-                      {PROFILE_DIMENSIONS.map((d) => {
-                        const v = (profile[d.key] as number) ?? 0;
-                        return (
-                          <div key={String(d.key)} className="flex items-center gap-2">
-                            <span className="w-14 shrink-0 text-xs text-muted-foreground">
-                              {d.label}
-                            </span>
-                            <div className="flex flex-1 gap-1">
-                              {[0, 1, 2, 3, 4].map((lv) => (
-                                <span
-                                  key={lv}
-                                  className={cn(
-                                    'h-1.5 flex-1 rounded-full',
-                                    lv <= v ? 'bg-primary' : 'bg-muted',
-                                  )}
-                                />
-                              ))}
+                    {isAiDomain ? (
+                      <div className="space-y-1.5">
+                        {PROFILE_DIMENSIONS.map((d) => {
+                          const v = (profile[d.key] as number) ?? 0;
+                          return (
+                            <div key={String(d.key)} className="flex items-center gap-2">
+                              <span className="w-14 shrink-0 text-xs text-muted-foreground">
+                                {d.label}
+                              </span>
+                              <div className="flex flex-1 gap-1">
+                                {[0, 1, 2, 3, 4].map((lv) => (
+                                  <span
+                                    key={lv}
+                                    className={cn(
+                                      'h-1.5 flex-1 rounded-full',
+                                      lv <= v ? 'bg-primary' : 'bg-muted',
+                                    )}
+                                  />
+                                ))}
+                              </div>
+                              <span className="w-6 text-right text-xs tabular-nums text-muted-foreground">
+                                {v}
+                              </span>
                             </div>
-                            <span className="w-6 text-right text-xs tabular-nums text-muted-foreground">
-                              {v}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="rounded-md border border-dashed border-border/70 p-2.5 text-xs leading-relaxed text-muted-foreground">
+                        本领域能力维度以学情引擎产物为准；旧领域画像中的自评维度不会在此展示。
+                      </p>
+                    )}
                     {profile.learning_preference && (
                       <p className="text-xs text-muted-foreground">
                         学习偏好：{profile.learning_preference}
@@ -1802,7 +1885,22 @@ export default function ReportPage() {
               description="每一条都是「这门课的某个做法 ← 你画像里的哪个字段」。字段缺就不写那一条，不补占位。"
             >
               {bp && profile ? (
-                <WhyThisCourse bp={bp} profile={profile} course={course} />
+                isAiDomain ? (
+                  <WhyThisCourse bp={bp} profile={profile} course={course} />
+                ) : (
+                  <div className="space-y-2 rounded-lg border border-border/70 p-3 text-sm">
+                    <p className="leading-relaxed">{humanize(bp.diagnosis_summary)}</p>
+                    {(mix?.rationale ?? []).map((reason) => (
+                      <p key={reason} className="text-xs leading-relaxed text-muted-foreground">
+                        {humanize(reason)}
+                      </p>
+                    ))}
+                    <p className="text-xs leading-relaxed text-muted-foreground">
+                      本段只展示学情引擎返回的「{effectiveDomainName}」诊断，
+                      不套用其它领域的固定自评维度。
+                    </p>
+                  </div>
+                )
               ) : (
                 blueprintFallback()
               )}
@@ -1817,10 +1915,10 @@ export default function ReportPage() {
           >
             <div className="space-y-4">
               {bp ? <BlindSpotChart bp={bp} /> : blueprintFallback()}
-              {/* 实测掌握度不依赖引擎在线——测验数据在本机 localStorage */}
-              <QuizMasteryBlock profile={profile} />
-              <ReviewNextBlock profile={profile} />
-              <MistakeBankBlock profile={profile} />
+              {/* 旧画像里的 conceptMastery 没有领域键；非 AI 域不能把它当成本领域测验。 */}
+              {isAiDomain && <QuizMasteryBlock profile={profile} />}
+              {isAiDomain && <ReviewNextBlock profile={profile} />}
+              {effectiveDomain && <MistakeBankBlock profile={profile} domain={effectiveDomain} />}
             </div>
           </SectionCard>
 
@@ -1839,6 +1937,8 @@ export default function ReportPage() {
                 <Loader2 className="size-4 animate-spin" />
                 正在读取课程…
               </div>
+            ) : courseState.kind === 'error' ? (
+              blueprintFallback()
             ) : (
               <EmptyState
                 title="没有可分析的课程"
@@ -1847,25 +1947,26 @@ export default function ReportPage() {
             )}
           </SectionCard>
 
-          {/* ── 4. 学习路径规划图 ── */}
+          {/* ── 4. 本次诊断缺口 + 统一路径入口 ── */}
           <div id="learning-path" className="scroll-mt-6">
             <SectionCard
               icon={GitBranch}
-              title="学习路径规划"
-              description="按引擎给出的技能缺口优先级与概念前置关系排出补齐顺序，并给出下一步先学什么。"
+              title="本次诊断的技能缺口"
+              description="这里只解释本次学情引擎返回的缺口及其补齐顺序；领域全景路径以路径页的引擎产物为唯一口径。"
             >
-              {bp ? <LearningPathChart bp={bp} /> : blueprintFallback()}
+              {bp ? <LearningPathChart bp={bp} domain={effectiveDomain} /> : blueprintFallback()}
               <a
                 href="/path"
                 className="mt-5 flex items-center justify-between gap-4 rounded-xl border border-border bg-card px-5 py-4 shadow-card transition-colors hover:bg-accent"
               >
                 <span>
                   <span className="block text-sm font-medium">
-                    学习路径规划：查看完整课程路径全景 →
+                    查看「{effectiveDomainName}」的引擎全景路径 →
                   </span>
                   <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
-                    上面排的是概念级的补齐顺序。整条培养路线——从高数、Python
-                    到各岗位方向的课程怎么衔接——在路径全景页上有一张完整的图。
+                    本页只列本次诊断返回的概念缺口，不维护第二份静态培养路线。
+                    完整路径统一由路径全景页按当前有效领域读取引擎产物；
+                    缺失或生成中会在该页如实显示。
                   </span>
                 </span>
                 <GitBranch className="size-5 shrink-0 text-muted-foreground" />
@@ -1880,7 +1981,7 @@ export default function ReportPage() {
               title="学情证据时间轨迹"
               description="上面三张图画的是当前状态，这一张画的是发生过什么：每个点是一次真实判定，来自测验与导学的证据流。"
             >
-              <EvidenceTrajectoryChart />
+              <EvidenceTrajectoryChart domain={effectiveDomain ?? undefined} />
             </SectionCard>
           </div>
 
@@ -1950,10 +2051,7 @@ export default function ReportPage() {
                         <p className="text-xs font-medium">{col.title}</p>
                         <ul className="mt-1 space-y-0.5">
                           {col.items.map((it, i) => (
-                            <li
-                              key={i}
-                              className="text-xs leading-relaxed text-muted-foreground"
-                            >
+                            <li key={i} className="text-xs leading-relaxed text-muted-foreground">
                               · {humanize(it)}
                             </li>
                           ))}
@@ -1994,9 +2092,7 @@ export default function ReportPage() {
                       label: '证据接地率',
                       value: `${Math.round((audit.grounded / audit.audited) * 100)}%`,
                       tone:
-                        audit.grounded === audit.audited
-                          ? 'text-green-deep'
-                          : 'text-yellow-deep',
+                        audit.grounded === audit.audited ? 'text-green-deep' : 'text-yellow-deep',
                     },
                     {
                       testid: 'audit-summary-claims',
@@ -2008,8 +2104,7 @@ export default function ReportPage() {
                       testid: 'audit-summary-flagged',
                       label: '标记 / 拦截',
                       value: `${audit.flagged} / ${audit.blocked}`,
-                      tone:
-                        audit.blocked > 0 ? 'text-destructive' : 'text-foreground',
+                      tone: audit.blocked > 0 ? 'text-destructive' : 'text-foreground',
                     },
                   ].map((k) => (
                     <div

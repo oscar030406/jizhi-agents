@@ -104,9 +104,9 @@ describe('isVocationalTaskEngineEnabled', () => {
     }
   });
 
-  it('defaults off when unset', () => {
+  it('defaults on when unset so automatic routing does not require a hidden flag', () => {
     delete process.env[flag];
-    expect(isVocationalTaskEngineEnabled()).toBe(false);
+    expect(isVocationalTaskEngineEnabled()).toBe(true);
   });
 
   it("returns true for 'true' and '1'", () => {
@@ -117,8 +117,11 @@ describe('isVocationalTaskEngineEnabled', () => {
     expect(isVocationalTaskEngineEnabled()).toBe(true);
   });
 
-  it("returns false for 'false'", () => {
+  it("supports explicit 'false' and '0' as an emergency kill switch", () => {
     process.env[flag] = 'false';
+    expect(isVocationalTaskEngineEnabled()).toBe(false);
+
+    process.env[flag] = '0';
     expect(isVocationalTaskEngineEnabled()).toBe(false);
   });
 

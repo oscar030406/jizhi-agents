@@ -16,6 +16,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { FirstCourseLauncher } from '@/components/admin/first-course-launcher';
 import {
   AlertTriangle,
@@ -30,6 +31,7 @@ import {
 import type { IntakeEvent, IntakeRunRecord, StageStatus } from '@/lib/server/intake-runs';
 import { deriveView, type StageView } from '@/lib/knowledge/intake-run-timeline';
 import { domainLabel, hasDomainLabel } from '@/lib/knowledge/domain-labels';
+import { redactCaliber } from '@/lib/metrics/redact-caliber';
 
 const POLL_MS = 1500;
 /** 回放按事件顺序等速走，不按真实时长——一次 run 的事件常常只差几毫秒，照真实时长演等于闪一下。 */
@@ -226,17 +228,22 @@ function labelOf(key: string, value?: unknown): string {
 /** 值侧的同一张表。非档位值原样返回。 */
 function textOf(value: unknown): string {
   const text = String(value);
-  return TIER_LABEL[text] ?? text;
+  return redactCaliber(TIER_LABEL[text] ?? text);
 }
 
 function isPathish(key: string, value: string): boolean {
   return /path|dir|_at$/.test(key) || value.includes('/');
 }
 
+function isArtifactLocation(field: string): boolean {
+  return /path|paths|dir/i.test(field);
+}
+
 function Value({ field, value }: { readonly field: string; readonly value: unknown }) {
   if (value === null || value === undefined || value === '') {
     return <span className="text-muted-foreground">无</span>;
   }
+  if (isArtifactLocation(field)) return <span>系统已生成</span>;
   if (typeof value === 'boolean') return <span>{value ? '是' : '否'}</span>;
   if (typeof value === 'number') return <span className="tabular-nums">{value}</span>;
   if (typeof value === 'string') {
@@ -255,7 +262,9 @@ function Value({ field, value }: { readonly field: string; readonly value: unkno
           <li key={i}>
             {item !== null && typeof item === 'object'
               ? Object.entries(item as Record<string, unknown>)
-                  .map(([k, v]) => `${labelOf(k, v)} ${textOf(v)}`)
+                  .map(([k, v]) =>
+                    `${labelOf(k, v)} ${isArtifactLocation(k) ? '系统已生成' : textOf(v)}`,
+                  )
                   .join(' · ')
               : textOf(item)}
           </li>
@@ -333,18 +342,20 @@ function StageCard({ stage }: { readonly stage: StageView }) {
 
       {stage.status === 'failed' && stage.error && (
         <p className="mb-2 rounded-lg border border-rose-300/70 bg-rose-50 px-3 py-2 text-[11px] leading-relaxed text-rose-900 dark:border-rose-800/60 dark:bg-rose-950/40 dark:text-rose-200">
-          {stage.error}
+          {redactCaliber(stage.error)}
         </p>
       )}
 
       {(stage.status === 'skipped' || stage.status === 'pending') && stage.message && (
-        <p className="mb-2 text-[11px] leading-relaxed text-muted-foreground">{stage.message}</p>
+        <p className="mb-2 text-[11px] leading-relaxed text-muted-foreground">
+          {redactCaliber(stage.message)}
+        </p>
       )}
 
       {stage.progress.length > 0 && (
         <ul className="mb-2 space-y-1 border-l border-border/70 pl-2.5 text-[11px] leading-relaxed text-muted-foreground">
           {stage.progress.map((p) => (
-            <li key={p.seq}>{p.message}</li>
+            <li key={p.seq}>{redactCaliber(p.message)}</li>
           ))}
         </ul>
       )}
@@ -535,15 +546,19 @@ export function IntakeRunView({
                   : '失败'}
           </span>
           {view.runStatus === 'queued' && view.queueNote && (
-            <span className="text-[11px] text-amber-700 dark:text-amber-300">{view.queueNote}</span>
+            <span className="text-[11px] text-amber-700 dark:text-amber-300">
+              {redactCaliber(view.queueNote)}
+            </span>
           )}
           <span className="text-[11px] tabular-nums text-muted-foreground">
             {record.files.length} 个文件
-            {ms(view.runMs) && ` · 墙钟 ${ms(view.runMs)}`}
+            {ms(view.runMs) && ` · 总耗时 ${ms(view.runMs)}`}
           </span>
         </div>
         {record.scope && <p className="mt-1 text-sm text-muted-foreground">{record.scope}</p>}
-        <p className="mt-2 font-mono text-[10px] text-muted-foreground/80">{record.corpus} · {record.run_id}</p>
+        <p className="mt-2 font-mono text-[10px] text-muted-foreground/80">
+          {record.corpus} · 接入编号 {record.run_id}
+        </p>
 
         <div className="mt-3 flex flex-wrap gap-1.5 text-[10px]">
           <span className="rounded-full bg-muted px-2 py-0.5 text-muted-foreground">
@@ -577,11 +592,11 @@ export function IntakeRunView({
           <div className="mt-3 rounded-lg border border-rose-300/70 bg-white/70 px-3 py-2 text-xs leading-relaxed dark:border-rose-800/60 dark:bg-black/20">
             <p className="font-medium text-rose-800 dark:text-rose-200">
               卡在 {view.stages.find((s) => s.status === 'failed')?.label ?? '未知站'}：
-              {record.error || String(finale?.error ?? '') || '（原因未记录）'}
+              {redactCaliber(record.error || String(finale?.error ?? '') || '（原因未记录）')}
             </p>
             <p className="mt-1 text-muted-foreground">
               {cleaned.length > 0
-                ? `已清掉这次建的半成品：${cleaned.join('、')}`
+                ? `系统已清理这次接入产生的 ${cleaned.length} 项半成品。`
                 : '没有需要清理的半成品——失败发生在写入之前，系统里没有留下这个库。'}
             </p>
           </div>
@@ -590,14 +605,14 @@ export function IntakeRunView({
         {record.warnings?.length > 0 && (
           <ul className="mt-3 space-y-1 text-[11px] text-amber-700 dark:text-amber-300">
             {record.warnings.map((w) => (
-              <li key={w}>旁路告警：{w}</li>
+              <li key={w}>旁路告警：{redactCaliber(w)}</li>
             ))}
           </ul>
         )}
 
         {pollError && (
           <p className="mt-3 text-[11px] text-amber-700 dark:text-amber-300">
-            事件拉取暂时失败（{pollError}），下一轮会重试；已经拿到的事件不受影响。
+            事件拉取暂时失败（{redactCaliber(pollError)}），下一轮会重试；已经拿到的事件不受影响。
           </p>
         )}
       </section>
@@ -606,13 +621,12 @@ export function IntakeRunView({
       <section>
         <h2 className="mb-1 text-sm font-medium">流水线</h2>
         <p className="mb-3 text-[11px] leading-relaxed text-muted-foreground">
-          按依赖波次分组：同一波里的站互不依赖，编排器同时发车。时间条共用一根时间轴， 左端是 run
-          起点、右端是最后一条事件——条子在横向上重叠，就是那几站真的同时在跑。
+          按依赖波次分组：同一波里的站互不依赖，系统会同时处理。时间条共用一根时间轴，左端是本次接入起点、右端是最后一条事件；横向重叠表示这些站确实并行处理。
           {parallel.length > 0 && `本次有 ${parallel.length} 站的运行区间与别的站重叠。`}
           {view.stageMsTotal > 0 && view.runMs !== null && (
             <>
               {' '}
-              各站耗时合计 {ms(view.stageMsTotal)}，run 墙钟 {ms(view.runMs)}
+              各站耗时合计 {ms(view.stageMsTotal)}，实际总耗时 {ms(view.runMs)}
               {view.stageMsTotal > view.runMs && '（合计大于墙钟，差额就是并行叠掉的部分）'}。
             </>
           )}
@@ -638,7 +652,7 @@ export function IntakeRunView({
       <section>
         <h2 className="mb-1 text-sm font-medium">每站产出</h2>
         <p className="mb-3 text-[11px] leading-relaxed text-muted-foreground">
-          一站一张卡，字段取自这次 run 的事件 detail。
+          一站一张卡，展示本次接入记录中的实际处理结果。
         </p>
         <div className="grid gap-3 md:grid-cols-2">
           {view.stages.map((s) => (
@@ -650,15 +664,23 @@ export function IntakeRunView({
       {/* 产物 */}
       {Object.keys(record.products ?? {}).length > 0 && (
         <section>
-          <h2 className="mb-3 text-sm font-medium">落盘产物</h2>
-          <ul className="space-y-1 rounded-2xl border border-border bg-card p-4 font-mono text-[10px] shadow-card">
-            {Object.entries(record.products).map(([key, value]) => (
-              <li key={key} className="break-all">
-                <span className="mr-2 font-sans text-muted-foreground">{key}</span>
-                {value}
+          <h2 className="mb-3 text-sm font-medium">本次接入产物</h2>
+          <ul className="space-y-1 rounded-2xl border border-border bg-card p-4 text-[11px] shadow-card">
+            {Object.keys(record.products).map((key) => (
+              <li key={key}>
+                <span className="mr-2 text-muted-foreground">
+                  {FIELD_LABEL[key] ?? '处理结果'}
+                </span>
+                系统已生成
               </li>
             ))}
           </ul>
+          <Link
+            href={`/admin/knowledge/${encodeURIComponent(record.corpus)}`}
+            className="mt-2 inline-block text-[11px] text-purple-700 underline underline-offset-2 hover:text-purple-900 dark:text-purple-300 dark:hover:text-purple-100"
+          >
+            前往知识库详情查看
+          </Link>
         </section>
       )}
 
@@ -714,8 +736,7 @@ export function IntakeRunView({
           )}
         </div>
         <p className="mb-3 text-[11px] leading-relaxed text-muted-foreground">
-          回放读的是这次 run 落盘的全量事件，按事件顺序等速重演（不按真实时长——一次 run 的
-          相邻事件常常只差几毫秒）。上面的泳道与每站产出跟着游标一起回到当时的样子。
+          回放使用系统保存的本次接入事件，按事件顺序等速重演；相邻事件可能只差几毫秒，因此不按真实时长播放。上面的泳道与每站产出会随游标回到当时的状态。
         </p>
         <ol
           data-testid="intake-run-events"
@@ -728,7 +749,9 @@ export function IntakeRunView({
                 {offset(e.ts, view.startTs)}
               </span>
               <span className="w-20 shrink-0 truncate text-muted-foreground">{e.stage}</span>
-              <span className="min-w-0 flex-1 break-words font-sans">{e.message}</span>
+              <span className="min-w-0 flex-1 break-words font-sans">
+                {redactCaliber(e.message)}
+              </span>
             </li>
           ))}
           {shown === 0 && <li className="text-muted-foreground">（游标在起点，还没有事件）</li>}

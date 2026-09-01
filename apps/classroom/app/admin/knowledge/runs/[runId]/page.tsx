@@ -11,6 +11,7 @@ import { notFound } from 'next/navigation';
 
 import { SiteHeader } from '@/components/site-header';
 import { IntakeRunView } from '@/components/admin/intake-run-view';
+import { isScratchCorpus } from '@/lib/knowledge/domain-registry';
 import { isValidRunId, readRunEvents } from '@/lib/server/intake-runs';
 
 import { Denied, managerAccount } from '../../guard';
@@ -28,12 +29,17 @@ export default async function IntakeRunPage({
   // 一次 run 的事件是十几到几十条，一次全取；超过 2000 条才截断，届时页面顶部会显示。
   const payload = await readRunEvents(runId, 0, 2000);
   if (!payload) notFound();
+  if (
+    isScratchCorpus(payload.record.corpus) ||
+    /(?:fullprobe|fullpath[-_]?probe|(?:^|[-_])probe(?:[-_]|$))/i.test(payload.record.corpus)
+  )
+    notFound();
 
   return (
     <>
       <SiteHeader
         backHref="/admin/knowledge/runs"
-        backLabel="回 run 列表"
+        backLabel="回接入记录"
         maxWidth="max-w-4xl"
       />
       <main className="mx-auto max-w-4xl px-4 py-10 sm:px-6">
@@ -41,15 +47,18 @@ export default async function IntakeRunPage({
 
         {payload.truncated && (
           <p className="mt-6 text-[11px] text-amber-700 dark:text-amber-300">
-            这次接入的事件超过 2000 条，本页只显示前 2000
-            条；完整事件留在服务器上的这次接入记录里，需要全量导出请联系本站运维。
+            这次接入的事件超过 2000 条，本页显示前 2000 条；其余事件仍保留在本次接入记录中。{' '}
+            <Link
+              href={`/api/knowledge/intake-runs/${runId}/events?since=${payload.nextSeq}`}
+              className="underline underline-offset-2 hover:text-foreground"
+            >
+              查看下一批事件
+            </Link>
           </p>
         )}
 
         <p className="mt-8 text-[11px] leading-relaxed text-muted-foreground">
-          这一页读的是 run 目录下的两个文件：<code className="font-mono">run.json</code>{' '}
-          是每站的状态与耗时，
-          <code className="font-mono">events.jsonl</code> 是一行一条的事件。 回到{' '}
+          本页显示系统保存的各站状态、耗时与事件。回到{' '}
           <Link
             href="/admin/knowledge"
             className="underline underline-offset-2 hover:text-foreground"
