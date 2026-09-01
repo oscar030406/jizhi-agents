@@ -55,6 +55,7 @@ function usedExcerptsFor(stageId: string): Set<string> {
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { llmApiError } from '@/lib/server/llm-error-response';
 import { resolveModelFromRequest } from '@/lib/server/resolve-model';
+import { requireCorpusVisible } from '@/lib/server/corpus-access';
 import { resolveVocationalActive } from '@/lib/config/feature-flags';
 import {
   fetchEvidence,
@@ -135,6 +136,9 @@ export async function POST(req: NextRequest) {
     if (!stageId) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'stageId is required');
     }
+    const corpus = corpusOf(requirements?.learnerProfile) ?? 'ai';
+    const access = await requireCorpusVisible(corpus);
+    if (!access.ok) return access.response;
     // 交互式生成的 token 账也归到这门课。批量路径在 `classroom-generation.ts` 里
     // 用 `run()` 把整段包住；这条是**逐场景的单次请求**，一个请求就是一门课，
     // 所以用 `enterWith` 就地进上下文——不用把整个 handler 缩进一层重排。
@@ -224,12 +228,14 @@ export async function POST(req: NextRequest) {
         `${courseTitle} ${effectiveOutline.title} ${effectiveOutline.description ?? ''}`.trim(),
         // 显式选的知识库优先，否则沿用培训领域；未建的库返回空而不是拿 AI 语料
         // 顶上（见 fetchEvidence）。
-        corpusOf(requirements?.learnerProfile),
+        corpus,
         // 掌握度触发 outer-fringe 选段：已会概念的块被引擎跳过（带理由）。
         requirements?.learnerProfile?.conceptMastery,
         onBridgeFailure,
         // 摘录难度跟姿态档走——超档摘录会把 L1 讲义整段拖硬（2A 纯净测病根）。
-        requirements?.learnerProfile ? excerptDifficultyCap(requirements.learnerProfile) : undefined,
+        requirements?.learnerProfile
+          ? excerptDifficultyCap(requirements.learnerProfile)
+          : undefined,
         // 摘录代码形态也跟姿态档走：难度档管不住代码长度，零基础档限 5 行。
         requirements?.learnerProfile ? excerptCodeLineCap(requirements.learnerProfile) : undefined,
         // 长度也管不住**结构**：零基础档再加一道 import/def/class 闸。
@@ -334,7 +340,9 @@ export async function POST(req: NextRequest) {
           );
         } else {
           // 模型整节没写占位符也要留痕——「弃引」与「被拒」必须可区分
-          log.info(`Excerpt injection "${effectiveOutline.title}": 0 placeholders written by model`);
+          log.info(
+            `Excerpt injection "${effectiveOutline.title}": 0 placeholders written by model`,
+          );
         }
       }
 
@@ -396,9 +404,7 @@ export async function POST(req: NextRequest) {
     if (lectureStreamEligible) {
       const prompts = buildLecturePrompts(effectiveOutline, languageDirective);
       if (prompts) {
-        log.info(
-          `Streaming lecture content: "${effectiveOutline.title}" [model=${modelString}]`,
-        );
+        log.info(`Streaming lecture content: "${effectiveOutline.title}" [model=${modelString}]`);
         const encoder = new TextEncoder();
         const sse = new ReadableStream({
           async start(controller) {

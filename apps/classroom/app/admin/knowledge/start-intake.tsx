@@ -128,9 +128,11 @@ export function StartIntake() {
    *  选完 392MB 的 zip 什么都没看到，只能靠开控制台查 DOM 才确认挂上了。 */
   const [picked, setPicked] = useState<string | null>(null);
   /** 上传进度。null = 没在传。大包要传好几分钟，不给数就跟死了没区别。 */
-  const [sent, setSent] = useState<{ loaded: number; total: number; bytesPerSecond: number } | null>(
-    null,
-  );
+  const [sent, setSent] = useState<{
+    loaded: number;
+    total: number;
+    bytesPerSecond: number;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const files = pending ? pending.getAll('files').filter((f) => f instanceof File) : [];
@@ -138,7 +140,11 @@ export function StartIntake() {
   const gitUrl = String(pending?.get('git_url') ?? '').trim();
   /** 确认弹层里那句「这次投的是什么」——三种形态各说各的，别都印成文件数。 */
   const sourceSummary =
-    zip instanceof File ? `压缩包 ${zip.name}` : gitUrl ? `仓库 ${gitUrl}` : `${files.length} 个文件`;
+    zip instanceof File
+      ? `压缩包 ${zip.name}`
+      : gitUrl
+        ? `仓库 ${gitUrl}`
+        : `${files.length} 个文件`;
   const trial = pending?.get('trial_run') === 'true';
   const vector = pending?.get('build_vector') === 'true';
   /** 追加模式。**必须在弹层里回显**：新建与追加的行为差别极大（跑几站、
@@ -169,51 +175,48 @@ export function StartIntake() {
    *  不引任何库——原生 `upload.onprogress` 就给字节数。 */
   async function send() {
     if (!pending) return;
+    const corpusName = String(pending.get('corpus') ?? '').trim();
+    if (!corpusName) {
+      setError('请填写新库名');
+      return;
+    }
     setBusy(true);
     setError(null);
     setSent(null);
     try {
-      const body = await new Promise<{ success?: boolean; error?: string; run?: { run_id?: string } }>(
-        (resolve, reject) => {
-          const xhr = new XMLHttpRequest();
-          xhr.open('POST', '/api/knowledge/intake-runs');
-          const startedAt = Date.now();
-          xhr.upload.onprogress = (e) => {
-            if (!e.lengthComputable) return;
-            const seconds = (Date.now() - startedAt) / 1000;
-            setSent({
-              loaded: e.loaded,
-              total: e.total,
-              // 均速而不是瞬时速率：瞬时值在弱网下会剧烈跳动，反而让人觉得卡了。
-              bytesPerSecond: seconds > 0 ? e.loaded / seconds : 0,
-            });
-          };
-          xhr.onload = () => {
-            try {
-              resolve(JSON.parse(xhr.responseText));
-            } catch {
-              reject(new Error(`发起失败（HTTP ${xhr.status}）`));
-            }
-          };
-          xhr.onerror = () => reject(new Error('网络中断，这次上传没有完成'));
-          xhr.ontimeout = () => reject(new Error('上传超时'));
-          xhr.send(pending);
-        },
-      );
+      const body = await new Promise<{
+        success?: boolean;
+        error?: string;
+        run?: { run_id?: string };
+      }>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/knowledge/intake-runs');
+        xhr.setRequestHeader('x-jizhi-corpus', corpusName);
+        const startedAt = Date.now();
+        xhr.upload.onprogress = (e) => {
+          if (!e.lengthComputable) return;
+          const seconds = (Date.now() - startedAt) / 1000;
+          setSent({
+            loaded: e.loaded,
+            total: e.total,
+            // 均速而不是瞬时速率：瞬时值在弱网下会剧烈跳动，反而让人觉得卡了。
+            bytesPerSecond: seconds > 0 ? e.loaded / seconds : 0,
+          });
+        };
+        xhr.onload = () => {
+          try {
+            resolve(JSON.parse(xhr.responseText));
+          } catch {
+            reject(new Error(`发起失败（HTTP ${xhr.status}）`));
+          }
+        };
+        xhr.onerror = () => reject(new Error('网络中断，这次上传没有完成'));
+        xhr.ontimeout = () => reject(new Error('上传超时'));
+        xhr.send(pending);
+      });
       if (!body.success || !body.run?.run_id) {
         setError(body.error || '发起失败');
         return;
-      }
-      // 机构联动（2026-08-30）：发起人属于机构时，新库自动归属其机构——
-      // 归属即学习端可见性（本机构学员可见，外机构不可见）。发起人无机构或
-      // 认领失败都不拦发起：库落成后随时可在 /admin/org 手动归属。
-      const corpusName = String(pending?.get('corpus') ?? '').trim();
-      if (corpusName) {
-        void fetch('/api/org/corpora', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ corpus: corpusName, action: 'claim' }),
-        }).catch(() => undefined);
       }
       router.push(`/admin/knowledge/runs/${body.run.run_id}`);
     } catch (err) {
@@ -382,8 +385,8 @@ export function StartIntake() {
           岗位/技能要求（选填）：这个域的学习者将来做什么岗、每个岗要会什么。
           填了，学习端的「岗位技能地图」就按这份清单列岗位，并拿这个库逐条判有没有对应的教材；
           <strong className="font-medium">不填也能建库</strong>
-          ，只是那一页会如实显示「该领域未登记岗位要求」。
-          格式是 JSON 数组，每项 <code>{'{title, skills, summary?}'}</code>
+          ，只是那一页会如实显示「该领域未登记岗位要求」。 格式是 JSON 数组，每项{' '}
+          <code>{'{title, skills, summary?}'}</code>
           ；写坏了发起时当场退回并指出是第几个岗位，不会悄悄少收一条。
           <span className="mt-1 block">
             只在新建库时生效：勾了「追加到已有库」这次不重算注册清单，填了会被退回。
@@ -493,8 +496,7 @@ export function StartIntake() {
             <input type="checkbox" name="extract_concepts" value="true" className="mt-0.5" />
             <span>
               <span className="font-medium text-foreground">概念词表与前置图</span>
-              ：从语料里抽概念词表、建章节前置关系图，就绪度的两道闸看它们——调 LLM，按 token
-              计费。
+              ：从语料里抽概念词表、建章节前置关系图，就绪度的两道闸看它们——调 LLM，按 token 计费。
             </span>
           </label>
           {/* E31 T0：追加。此前「补几篇文档进已有的库」的唯一出路是整库重建，
@@ -505,8 +507,8 @@ export function StartIntake() {
             <input type="checkbox" name="append" value="true" className="mt-0.5" />
             <span>
               <span className="font-medium text-foreground">追加到已有库</span>
-              ：把这批文档补进上面填的那个<strong className="font-medium">已经存在</strong>的库。既有内容原样保留，
-              已经出的课引用的出处不会断。只跑收料、切块、刷索引三站——
+              ：把这批文档补进上面填的那个<strong className="font-medium">已经存在</strong>
+              的库。既有内容原样保留， 已经出的课引用的出处不会断。只跑收料、切块、刷索引三站——
               概念词表、金标、注册清单沿用既有的。
               <span className="text-muted-foreground">
                 {' '}
@@ -586,11 +588,11 @@ export function StartIntake() {
             </li>
             {trial ? (
               <li className="rounded-lg border border-amber-300/70 bg-amber-50 px-3 py-2 text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-200">
-                <span className="font-medium">试跑体检开</span>
-                ：{TRIAL_COST.minutes} 分钟，大半时间花在逐条审核上。已经跑完的两次分别是{' '}
-                {TRIAL_COST.calls} 次模型调用、{TRIAL_COST.tokens} token，按价目表折算 ¥
-                {TRIAL_COST.yuan}（价目表自注以账单为准）；换库换模型会有出入，累计到{' '}
-                {TRIAL_COST.budget} token 就停机不再发新的生成。
+                <span className="font-medium">试跑体检开</span>：{TRIAL_COST.minutes}{' '}
+                分钟，大半时间花在逐条审核上。已经跑完的两次分别是 {TRIAL_COST.calls} 次模型调用、
+                {TRIAL_COST.tokens} token，按价目表折算 ¥{TRIAL_COST.yuan}
+                （价目表自注以账单为准）；换库换模型会有出入，累计到 {TRIAL_COST.budget} token
+                就停机不再发新的生成。
                 {/* 联动但不圆场：试跑的档数是引擎写死的两档，与上面填几档无关。
                     这句从表单挪到这里——真要花钱的是这一步，说清楚的地方也该是这一步。 */}
                 <span className="mt-1 block">

@@ -15,6 +15,10 @@ vi.mock('@/lib/server/resolve-model', () => ({
   resolveModelFromRequest: resolveModelFromRequestMock,
 }));
 
+vi.mock('@/lib/server/corpus-access', () => ({
+  requireCorpusVisible: vi.fn().mockResolvedValue({ ok: true }),
+}));
+
 describe('scene-content vocational gate', () => {
   beforeEach(() => {
     originalVocationalFlag = process.env[VOCATIONAL_FLAG];

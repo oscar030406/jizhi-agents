@@ -27,12 +27,16 @@ const mocks = vi.hoisted(() => ({
   accountForSession: vi.fn(),
   readProfileEnvelope: vi.fn(),
   writeProfileEnvelope: vi.fn(),
+  requireCorpusVisible: vi.fn(),
 }));
 
 vi.mock('@/lib/accounts/store', () => ({
   accountForSession: mocks.accountForSession,
   readProfileEnvelope: mocks.readProfileEnvelope,
   writeProfileEnvelope: mocks.writeProfileEnvelope,
+}));
+vi.mock('@/lib/server/corpus-access', () => ({
+  requireCorpusVisible: mocks.requireCorpusVisible,
 }));
 
 function request(cookies: Record<string, string>, body?: unknown) {
@@ -46,6 +50,7 @@ beforeEach(() => {
   mocks.accountForSession.mockResolvedValue({ id: 'acc-1', role: 'learner' });
   mocks.readProfileEnvelope.mockResolvedValue(structuredClone(envelope));
   mocks.writeProfileEnvelope.mockResolvedValue(undefined);
+  mocks.requireCorpusVisible.mockResolvedValue({ ok: true });
 });
 
 afterEach(() => vi.clearAllMocks());
@@ -82,6 +87,19 @@ describe('知识库视角预览', () => {
 
     expect(res.status).toBe(409);
     // 这条是本文件的重点：预览绝不能落进别人的账户
+    expect(mocks.writeProfileEnvelope).not.toHaveBeenCalled();
+  });
+
+  it('不能把画像切到当前账户不可见的知识库', async () => {
+    const denied = new Response(JSON.stringify({ success: false }), { status: 403 });
+    mocks.requireCorpusVisible.mockResolvedValue({ ok: false, response: denied });
+    const { POST } = await import('@/app/api/profile/route');
+    const res = await POST(
+      request({ session: 't' }, { action: 'update', fields: { corpus: 'private-b' } }),
+    );
+
+    expect(res).toBe(denied);
+    expect(mocks.requireCorpusVisible).toHaveBeenCalledWith('private-b');
     expect(mocks.writeProfileEnvelope).not.toHaveBeenCalled();
   });
 });

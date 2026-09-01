@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('@/lib/accounts/org-store', () => ({
+  orgForAccount: vi.fn(async () => ({ id: 'org-a' })),
+}));
+
 describe('embedded persistence route', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -107,13 +111,18 @@ describe('embedded persistence route', () => {
     // back to a Response) is the most bug-prone code in the route — exercise a
     // full body round-trip, a 204, multi-value headers, and path encoding.
     const seen: Array<{ method?: string; url?: string; body: string }> = [];
+    const documentStoreOptions: Array<Record<string, unknown>> = [];
     vi.doMock('@openmaic/storage/runtime/pg', () => ({
       ensureSchema: vi.fn().mockResolvedValue(undefined),
       PgRuntimeStore: class {},
     }));
     vi.doMock('@openmaic/storage/document/pg', () => ({
       ensureDocumentSchema: vi.fn().mockResolvedValue(undefined),
-      PgDocumentStore: class {},
+      PgDocumentStore: class {
+        constructor(_queryable: unknown, options: Record<string, unknown>) {
+          documentStoreOptions.push(options);
+        }
+      },
     }));
     vi.doMock('@openmaic/storage/server/reference', () => ({
       nodePostgresTransaction: vi.fn(() => vi.fn()),
@@ -152,7 +161,11 @@ describe('embedded persistence route', () => {
     const put = await handlePersistenceRequest(
       new Request('http://localhost/api/persistence/documents/stage%2Fslash', {
         method: 'PUT',
-        headers: { authorization: 'Bearer test-token', 'content-type': 'application/json' },
+        headers: {
+          authorization: 'Bearer test-token',
+          'content-type': 'application/json',
+          'x-learner-key': 'author-a',
+        },
         body: JSON.stringify({ hello: 'world' }),
       }),
       { poolFactory: () => pool as never },
@@ -165,7 +178,7 @@ describe('embedded persistence route', () => {
     const del = await handlePersistenceRequest(
       new Request('http://localhost/api/persistence/documents/stage%2Fslash', {
         method: 'DELETE',
-        headers: { authorization: 'Bearer test-token' },
+        headers: { authorization: 'Bearer test-token', 'x-learner-key': 'author-a' },
       }),
       { poolFactory: () => pool as never },
     );
@@ -177,5 +190,9 @@ describe('embedded persistence route', () => {
     expect(seen[0]?.url).toContain('stage%2Fslash');
     expect(seen[0]?.body).toBe(JSON.stringify({ hello: 'world' }));
     expect(seen[1]?.method).toBe('DELETE');
+    expect(documentStoreOptions.at(-1)?.access).toEqual({
+      accountId: 'author-a',
+      orgId: 'org-a',
+    });
   });
 });

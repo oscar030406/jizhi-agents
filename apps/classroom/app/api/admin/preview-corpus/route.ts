@@ -24,6 +24,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { accountForSession } from '@/lib/accounts/store';
 import { SESSION_COOKIE } from '@/lib/accounts/session';
 import { createLogger } from '@/lib/logger';
+import { requireCorpusVisible } from '@/lib/server/corpus-access';
 
 const log = createLogger('PreviewCorpus API');
 
@@ -67,6 +68,8 @@ export async function POST(req: NextRequest) {
   if (typeof corpus !== 'string' || !CORPUS_RE.test(corpus)) {
     return NextResponse.json({ error: '库名不合法' }, { status: 400 });
   }
+  const access = await requireCorpusVisible(corpus);
+  if (!access.ok) return access.response;
 
   const res = NextResponse.json({ ok: true, previewCorpus: corpus });
   res.cookies.set(PREVIEW_CORPUS_COOKIE, corpus, {
@@ -82,7 +85,12 @@ export async function POST(req: NextRequest) {
 export async function GET(req: NextRequest) {
   const manager = await requireManager(req);
   if (!manager) return NextResponse.json({ error: '仅管理员可用' }, { status: 403 });
+  const corpus = req.cookies.get(PREVIEW_CORPUS_COOKIE)?.value;
+  if (corpus) {
+    const access = await requireCorpusVisible(corpus);
+    if (!access.ok) return access.response;
+  }
   return NextResponse.json({
-    previewCorpus: req.cookies.get(PREVIEW_CORPUS_COOKIE)?.value ?? null,
+    previewCorpus: corpus ?? null,
   });
 }

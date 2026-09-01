@@ -18,6 +18,10 @@ vi.mock('@/lib/server/domain-registry', () => ({
   readDomainRegistry: readDomainRegistryMock,
 }));
 
+vi.mock('@/lib/server/corpus-access', () => ({
+  requireCorpusVisible: vi.fn().mockResolvedValue({ ok: true }),
+}));
+
 async function readStreamBody(response: Response) {
   const reader = response.body?.getReader();
   expect(reader).toBeDefined();

@@ -12,7 +12,12 @@
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/lib/logger';
 import { apiSuccess } from '@/lib/server/api-response';
-import { fetchLearnerBlueprint, type LearnerProfileInput } from '@/lib/generation/learner-profile';
+import {
+  corpusOf,
+  fetchLearnerBlueprint,
+  type LearnerProfileInput,
+} from '@/lib/generation/learner-profile';
+import { requireCorpusVisible } from '@/lib/server/corpus-access';
 
 const log = createLogger('Adaptive Blueprint');
 
@@ -24,6 +29,8 @@ export async function POST(req: NextRequest) {
     };
     const goal = body.learningGoal?.trim();
     if (!goal) return new Response(null, { status: 204 });
+    const access = await requireCorpusVisible(corpusOf(body.profile) ?? 'ai');
+    if (!access.ok) return access.response;
 
     const blueprint = await fetchLearnerBlueprint(goal, body.profile ?? {});
     if (!blueprint) return new Response(null, { status: 204 });

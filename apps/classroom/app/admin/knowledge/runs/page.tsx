@@ -18,6 +18,7 @@ import { isScratchCorpus } from '@/lib/knowledge/domain-registry';
 import { domainLabel, hasDomainLabel } from '@/lib/knowledge/domain-labels';
 import { redactCaliber } from '@/lib/metrics/redact-caliber';
 import { listRuns } from '@/lib/server/intake-runs';
+import { corpusVisibilityFor } from '@/lib/accounts/org-store';
 
 import { Denied, managerAccount } from '../guard';
 
@@ -43,23 +44,22 @@ function when(iso: string | null): string {
 }
 
 export default async function IntakeRunsPage() {
-  if (!(await managerAccount())) return <Denied />;
+  const account = await managerAccount();
+  if (!account) return <Denied />;
+  const visible = await corpusVisibilityFor(account.id);
   // run 行的库名走 domainLabel，先灌域注册清单（同 admin 总览页的补法）
   const { readDomainRegistry } = await import('@/lib/server/domain-registry');
   await readDomainRegistry().catch(() => null);
   const runs = (await listRuns(30)).filter(
     (run) =>
       !isScratchCorpus(run.corpus) &&
+      visible(run.corpus) &&
       !/(?:fullprobe|fullpath[-_]?probe|(?:^|[-_])probe(?:[-_]|$))/i.test(run.corpus),
   );
 
   return (
     <>
-      <SiteHeader
-        backHref="/admin/knowledge"
-        backLabel="回知识库"
-        maxWidth="max-w-4xl"
-      />
+      <SiteHeader backHref="/admin/knowledge" backLabel="回知识库" maxWidth="max-w-4xl" />
       <main className="mx-auto max-w-4xl px-4 py-10 sm:px-6">
         <header className="mb-8">
           <h1 className="text-2xl font-semibold tracking-tight">接入记录</h1>

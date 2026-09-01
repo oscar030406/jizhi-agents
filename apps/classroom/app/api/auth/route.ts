@@ -21,6 +21,8 @@ import {
   writeProfile,
 } from '@/lib/accounts/store';
 import { SESSION_COOKIE } from '@/lib/accounts/session';
+import { corpusVisibilityFor } from '@/lib/accounts/org-store';
+import { corpusOf } from '@/lib/generation/learner-profile';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('Auth API');
@@ -38,13 +40,19 @@ function cookieOptions(maxAge: number) {
   };
 }
 
+async function profileForAccount(accountId: string, profile: unknown) {
+  const corpus = corpusOf(profile as { corpus?: unknown; domain?: unknown } | null);
+  if (!corpus) return profile;
+  return (await corpusVisibilityFor(accountId))(corpus) ? profile : null;
+}
+
 /** GET：当前登录身份 + 档案。未登录返回 { account: null }，不报错。 */
 export async function GET(req: NextRequest) {
   if (!accountsEnabled()) return NextResponse.json({ enabled: false, account: null });
   try {
     const account = await accountForSession(req.cookies.get(SESSION_COOKIE)?.value);
     if (!account) return NextResponse.json({ enabled: true, account: null });
-    const profile = await readProfile(account.id);
+    const profile = await profileForAccount(account.id, await readProfile(account.id));
     return NextResponse.json({ enabled: true, account, profile });
   } catch (error) {
     log.error('session lookup failed:', error);
@@ -103,7 +111,7 @@ export async function POST(req: NextRequest) {
       }
 
       const { token, maxAge } = await createSession(account.id);
-      const profile = await readProfile(account.id);
+      const profile = await profileForAccount(account.id, await readProfile(account.id));
       const res = NextResponse.json({ account, profile });
       res.cookies.set(SESSION_COOKIE, token, cookieOptions(maxAge));
       log.info(`${action === 'register' ? 'Registered' : 'Logged in'}: ${account.username}`);
@@ -120,6 +128,10 @@ export async function POST(req: NextRequest) {
     if (action === 'save-profile') {
       const account = await accountForSession(req.cookies.get(SESSION_COOKIE)?.value);
       if (!account) return NextResponse.json({ error: '未登录' }, { status: 401 });
+      const corpus = corpusOf(body.profile as { corpus?: unknown; domain?: unknown } | null);
+      if (corpus && !(await corpusVisibilityFor(account.id))(corpus)) {
+        return NextResponse.json({ error: '当前账户无权使用该知识库。' }, { status: 403 });
+      }
       await writeProfile(account.id, body.profile ?? null);
       return NextResponse.json({ ok: true });
     }

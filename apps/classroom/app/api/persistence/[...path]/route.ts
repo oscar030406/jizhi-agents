@@ -10,6 +10,7 @@ import {
 } from '@openmaic/storage/server/reference';
 import { Pool } from 'pg';
 
+import { orgForAccount } from '@/lib/accounts/org-store';
 import { validateAppScene, validateAppStage } from '@/lib/document-store/validators';
 import { authenticatePersistenceRequest } from '@/lib/persistence/server-auth';
 
@@ -19,9 +20,17 @@ const ROUTE_PREFIX = '/api/persistence';
 
 type PoolFactory = (connectionString: string) => Pool;
 
+interface PersistenceResources {
+  queryable: ConnectableQueryable;
+  withTransaction: ReturnType<typeof nodePostgresTransaction>;
+  runtimeStore: PgRuntimeStore;
+  documentStore: PgDocumentStore;
+  runtimeHandler: RequestListener;
+}
+
 interface PersistenceHandlerState {
   connectionString?: string;
-  handlerPromise?: Promise<RequestListener>;
+  resourcesPromise?: Promise<PersistenceResources>;
 }
 
 const HANDLER_STATE_KEY = Symbol.for('openmaic.persistence-route.handler');
@@ -34,10 +43,10 @@ function jsonError(status: number, code: string, message: string): Response {
   return Response.json({ error: { code, message } }, { status });
 }
 
-async function createPersistenceHandler(
+async function createPersistenceResources(
   connectionString: string,
   poolFactory: PoolFactory,
-): Promise<RequestListener> {
+): Promise<PersistenceResources> {
   const pool = poolFactory(connectionString);
   const queryable = pool as unknown as ConnectableQueryable;
   try {
@@ -50,7 +59,7 @@ async function createPersistenceHandler(
       validateScene: validateAppScene,
       validateStage: validateAppStage,
     });
-    return createStorageHttpHandler(runtimeStore, documentStore, {
+    const runtimeHandler = createStorageHttpHandler(runtimeStore, documentStore, {
       authenticate: authenticatePersistenceRequest,
       authorizeMerge: async () => false,
       authorizeAdmin: async () => false,
@@ -58,32 +67,75 @@ async function createPersistenceHandler(
       validateScene: validateAppScene,
       validateStage: validateAppStage,
     });
+    return { queryable, withTransaction, runtimeStore, documentStore, runtimeHandler };
   } catch (error) {
     await pool.end().catch(() => {});
     throw error;
   }
 }
 
-function getPersistenceHandler(
+function getPersistenceResources(
   connectionString: string,
   poolFactory: PoolFactory,
-): Promise<RequestListener> {
-  if (handlerState.handlerPromise && handlerState.connectionString === connectionString) {
-    return handlerState.handlerPromise;
+): Promise<PersistenceResources> {
+  if (handlerState.resourcesPromise && handlerState.connectionString === connectionString) {
+    return handlerState.resourcesPromise;
   }
 
   handlerState.connectionString = connectionString;
-  const initialization = createPersistenceHandler(connectionString, poolFactory).catch((error) => {
-    // Do not poison the singleton with a rejected promise. createPersistenceHandler
-    // has already closed its failed pool, and the next request gets a clean retry.
-    if (handlerState.handlerPromise === initialization) {
-      handlerState.handlerPromise = undefined;
-      handlerState.connectionString = undefined;
-    }
-    throw error;
-  });
-  handlerState.handlerPromise = initialization;
+  const initialization = createPersistenceResources(connectionString, poolFactory).catch(
+    (error) => {
+      // Do not poison the singleton with a rejected promise. createPersistenceResources
+      // has already closed its failed pool, and the next request gets a clean retry.
+      if (handlerState.resourcesPromise === initialization) {
+        handlerState.resourcesPromise = undefined;
+        handlerState.connectionString = undefined;
+      }
+      throw error;
+    },
+  );
+  handlerState.resourcesPromise = initialization;
   return initialization;
+}
+
+function isDocumentRequest(request: Request): boolean {
+  const pathname = new URL(request.url).pathname;
+  const relative = pathname.startsWith(ROUTE_PREFIX)
+    ? pathname.slice(ROUTE_PREFIX.length) || '/'
+    : pathname;
+  return relative === '/documents' || relative.startsWith('/documents/');
+}
+
+function authenticationRequest(request: Request): IncomingMessage {
+  return { headers: Object.fromEntries(request.headers.entries()) } as IncomingMessage;
+}
+
+async function documentHandler(
+  request: Request,
+  resources: PersistenceResources,
+): Promise<RequestListener> {
+  const principal = await authenticatePersistenceRequest(authenticationRequest(request));
+  const accountId = principal?.learnerKey;
+  const documentStore = accountId
+    ? new PgDocumentStore(resources.queryable, {
+        withTransaction: resources.withTransaction,
+        validateScene: validateAppScene,
+        validateStage: validateAppStage,
+        access: {
+          accountId,
+          orgId: (await orgForAccount(accountId))?.id ?? null,
+        },
+      })
+    : resources.documentStore;
+
+  return createStorageHttpHandler(resources.runtimeStore, documentStore, {
+    authenticate: async () => principal,
+    authorizeMerge: async () => false,
+    authorizeAdmin: async () => false,
+    authorizeDocuments: async () => Boolean(accountId),
+    validateScene: validateAppScene,
+    validateStage: validateAppStage,
+  });
 }
 
 function nodeRequest(request: Request): IncomingMessage {
@@ -188,8 +240,11 @@ export async function handlePersistenceRequest(
 
   try {
     const poolFactory = deps.poolFactory ?? ((value) => new Pool({ connectionString: value }));
+    const resources = await getPersistenceResources(connectionString, poolFactory);
     return await runNodeHandler(
-      await getPersistenceHandler(connectionString, poolFactory),
+      isDocumentRequest(request)
+        ? await documentHandler(request, resources)
+        : resources.runtimeHandler,
       request,
     );
   } catch (error) {

@@ -1,4 +1,6 @@
 import { type NextRequest } from 'next/server';
+import { accountForSession } from '@/lib/accounts/store';
+import { SESSION_COOKIE } from '@/lib/accounts/session';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import {
   isValidClassroomJobId,
@@ -22,7 +24,12 @@ export async function GET(req: NextRequest, context: { params: Promise<{ jobId: 
     }
 
     const job = await readClassroomGenerationJob(jobId);
-    if (!job) {
+    if (
+      !job ||
+      (job.ownerAccountId &&
+        (await accountForSession(req.cookies.get(SESSION_COOKIE)?.value))?.id !==
+          job.ownerAccountId)
+    ) {
       return apiError('INVALID_REQUEST', 404, 'Classroom generation job not found');
     }
 

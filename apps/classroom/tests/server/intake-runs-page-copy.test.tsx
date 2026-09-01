@@ -25,6 +25,9 @@ vi.mock('@/components/admin/intake-run-view', () => ({
   IntakeRunView: ({ record }: { record: { corpus: string } }) => <div>{record.corpus}</div>,
 }));
 vi.mock('@/lib/server/domain-registry', () => ({ readDomainRegistry: async () => ({}) }));
+vi.mock('@/lib/accounts/org-store', () => ({
+  corpusVisibilityFor: async () => (corpus: string) => corpus !== 'private-b',
+}));
 vi.mock('@/lib/server/intake-runs', () => ({
   RUNS_DIR_LABEL: 'data/knowledge_base/intake_runs/',
   isValidRunId: () => true,
@@ -80,6 +83,13 @@ describe('知识库接入记录页的提供方文案', () => {
     expect(html).not.toMatch(/data[\\/]|knowledge_base[\\/]|fullpath-probe|fullprobe/i);
   });
 
+  it('列表不渲染其他机构的接入记录', async () => {
+    mocks.runs = [run('private-b'), run('iotdb')];
+    const html = renderToStaticMarkup(await IntakeRunsPage());
+    expect(html).toContain('iotdb');
+    expect(html).not.toContain('private-b');
+  });
+
   it('截断时提供页面可查看的后续事件入口，不让用户去服务器找', async () => {
     mocks.payload = payload('iotdb', true);
     const html = renderToStaticMarkup(
@@ -94,6 +104,13 @@ describe('知识库接入记录页的提供方文案', () => {
   it('详情路由拒绝渲染测试语料记录', async () => {
     mocks.payload = payload('fullpath-probe');
 
+    await expect(
+      IntakeRunPage({ params: Promise.resolve({ runId: '20260831T120000-abcdef' }) }),
+    ).rejects.toThrow('NEXT_NOT_FOUND');
+  });
+
+  it('详情路由拒绝渲染其他机构的接入记录', async () => {
+    mocks.payload = payload('private-b');
     await expect(
       IntakeRunPage({ params: Promise.resolve({ runId: '20260831T120000-abcdef' }) }),
     ).rejects.toThrow('NEXT_NOT_FOUND');

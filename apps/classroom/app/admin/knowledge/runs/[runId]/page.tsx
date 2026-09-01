@@ -13,6 +13,7 @@ import { SiteHeader } from '@/components/site-header';
 import { IntakeRunView } from '@/components/admin/intake-run-view';
 import { isScratchCorpus } from '@/lib/knowledge/domain-registry';
 import { isValidRunId, readRunEvents } from '@/lib/server/intake-runs';
+import { corpusVisibilityFor } from '@/lib/accounts/org-store';
 
 import { Denied, managerAccount } from '../../guard';
 
@@ -24,12 +25,15 @@ export default async function IntakeRunPage({
   readonly params: Promise<{ runId: string }>;
 }) {
   const { runId } = await params;
-  if (!(await managerAccount())) return <Denied />;
+  const account = await managerAccount();
+  if (!account) return <Denied />;
   if (!isValidRunId(runId)) notFound();
   // 一次 run 的事件是十几到几十条，一次全取；超过 2000 条才截断，届时页面顶部会显示。
   const payload = await readRunEvents(runId, 0, 2000);
   if (!payload) notFound();
+  const visible = await corpusVisibilityFor(account.id);
   if (
+    !visible(payload.record.corpus) ||
     isScratchCorpus(payload.record.corpus) ||
     /(?:fullprobe|fullpath[-_]?probe|(?:^|[-_])probe(?:[-_]|$))/i.test(payload.record.corpus)
   )
@@ -37,11 +41,7 @@ export default async function IntakeRunPage({
 
   return (
     <>
-      <SiteHeader
-        backHref="/admin/knowledge/runs"
-        backLabel="回接入记录"
-        maxWidth="max-w-4xl"
-      />
+      <SiteHeader backHref="/admin/knowledge/runs" backLabel="回接入记录" maxWidth="max-w-4xl" />
       <main className="mx-auto max-w-4xl px-4 py-10 sm:px-6">
         <IntakeRunView record={payload.record} events={payload.events} />
 

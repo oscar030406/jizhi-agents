@@ -23,6 +23,8 @@ describe('corpusOf', () => {
     expect(corpusOf({ corpus: '   ', domain: 'ai' })).toBe('ai');
     expect(corpusOf({})).toBeUndefined();
     expect(corpusOf(undefined)).toBeUndefined();
+    expect(corpusOf({ corpus: 42, domain: ' ai ' })).toBe('ai');
+    expect(corpusOf({ corpus: {}, domain: null })).toBeUndefined();
   });
 });
 
@@ -98,14 +100,14 @@ describe('判官读的是正文那本书', () => {
       stageId: 's1',
       courseTitle: '测试课',
     });
-    const body = JSON.parse(
-      (vi.mocked(fetch).mock.calls[0]?.[1] as { body: string }).body,
-    ) as { learnerProfile?: { corpus?: string; domain?: string } };
+    const body = JSON.parse((vi.mocked(fetch).mock.calls[0]?.[1] as { body: string }).body) as {
+      learnerProfile?: { corpus?: string; domain?: string };
+    };
     return body;
   };
 
   it('画像里选了 odoo，审核请求就带着 odoo 走', async () => {
-    window.localStorage.setItem("learnerProfile", JSON.stringify({ domain: "ai", corpus: "odoo" }));
+    window.localStorage.setItem('learnerProfile', JSON.stringify({ domain: 'ai', corpus: 'odoo' }));
     expect((await callAudit()).learnerProfile).toEqual({ domain: 'ai', corpus: 'odoo' });
   });
 

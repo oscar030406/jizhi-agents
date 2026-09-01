@@ -19,6 +19,7 @@ const log = createLogger('Compare Proxy');
 export const dynamic = 'force-dynamic';
 
 interface CompareJob {
+  accountId: string;
   status: 'queued' | 'running' | 'succeeded' | 'failed';
   createdAt: number;
   result?: Record<string, unknown>;
@@ -82,15 +83,12 @@ async function runCompareJob(jobId: string, base: string, body: CompareRequestBo
 export async function POST(req: NextRequest) {
   const base = process.env.GROUNDING_URL;
   if (!base) {
-    return apiError(
-      API_ERROR_CODES.INTERNAL_ERROR,
-      503,
-      '多智能体审核服务暂不可用。',
-    );
+    return apiError(API_ERROR_CODES.INTERNAL_ERROR, 503, '多智能体审核服务暂不可用。');
   }
-  // 发起侧鉴权：一次对比要占引擎十几分钟，公共页已经不给未登录访客入口，
-  // 接口这一侧也要挡住直接打 POST 的。GET 轮询不加——带 jobId 的深链是只读的。
-  const account = await accountForSession(sessionTokenFromCookieHeader(req.headers.get('cookie') ?? undefined));
+  // 一次对比要占引擎十几分钟，创建与轮询都绑定发起账户。
+  const account = await accountForSession(
+    sessionTokenFromCookieHeader(req.headers.get('cookie') ?? undefined),
+  );
   if (!account) {
     return apiError(API_ERROR_CODES.UNAUTHORIZED, 401, '登录后才能发起对比');
   }
@@ -110,7 +108,7 @@ export async function POST(req: NextRequest) {
     }
 
     const jobId = nanoid(10);
-    jobs.set(jobId, { status: 'queued', createdAt: Date.now() });
+    jobs.set(jobId, { accountId: account.id, status: 'queued', createdAt: Date.now() });
     const input: CompareRequestBody = {
       learningGoal: body.learningGoal,
       profiles: body.profiles,
@@ -134,8 +132,17 @@ export async function GET(req: NextRequest) {
   if (!jobId) {
     return apiError(API_ERROR_CODES.INVALID_REQUEST, 400, '缺少 job 查询参数');
   }
+  const account = await accountForSession(
+    sessionTokenFromCookieHeader(req.headers.get('cookie') ?? undefined),
+  );
+  if (!account) {
+    return apiError(API_ERROR_CODES.UNAUTHORIZED, 401, '登录后才能查看对比任务');
+  }
   const job = jobs.get(jobId);
   if (!job) {
+    return apiError(API_ERROR_CODES.INVALID_REQUEST, 404, '对比任务不存在或已过期');
+  }
+  if (job.accountId !== account.id) {
     return apiError(API_ERROR_CODES.INVALID_REQUEST, 404, '对比任务不存在或已过期');
   }
   return apiSuccess({

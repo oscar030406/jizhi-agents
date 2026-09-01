@@ -46,6 +46,11 @@ export interface PgDocumentStoreOptions {
   validateScene?: SceneValidator;
   /** Stage write-boundary validator. Defaults to the DSL validateStage. */
   validateStage?: StageValidator;
+  /** Optional deployment-owned author scope. Omit to retain the unscoped store contract. */
+  access?: {
+    accountId: string;
+    orgId?: string | null;
+  };
 }
 
 /** Idempotent schema for the PostgreSQL document backend. */
@@ -60,6 +65,15 @@ CREATE TABLE IF NOT EXISTS document_stages (
   updated_at DOUBLE PRECISION NOT NULL,
   data JSONB NOT NULL
 );
+
+ALTER TABLE document_stages ADD COLUMN IF NOT EXISTS owner_account_id TEXT;
+ALTER TABLE document_stages ADD COLUMN IF NOT EXISTS owner_org_id TEXT;
+
+CREATE INDEX IF NOT EXISTS document_stages_owner_account_idx
+  ON document_stages (owner_account_id);
+
+CREATE INDEX IF NOT EXISTS document_stages_owner_org_idx
+  ON document_stages (owner_org_id);
 
 CREATE TABLE IF NOT EXISTS document_scenes (
   stage_id TEXT NOT NULL REFERENCES document_stages(id) ON DELETE CASCADE,
@@ -191,6 +205,7 @@ export class PgDocumentStore<
   private readonly transactionHook: WithTransaction;
   private readonly validateScene: SceneValidator;
   private readonly validateStage: StageValidator;
+  private readonly access: PgDocumentStoreOptions['access'];
 
   constructor(queryable: Queryable, options: PgDocumentStoreOptions) {
     if (typeof options?.withTransaction !== 'function') {
@@ -204,6 +219,7 @@ export class PgDocumentStore<
     this.transactionHook = options.withTransaction;
     this.validateScene = options.validateScene ?? validateScene;
     this.validateStage = options.validateStage ?? validateStage;
+    this.access = options.access;
   }
 
   private async transaction<T>(body: (queryable: Queryable) => Promise<T>): Promise<T> {
@@ -219,8 +235,10 @@ export class PgDocumentStore<
     const result = await queryable.query<StoredJsonRow>(
       `SELECT data
          FROM document_stages
-        WHERE id = $1${suffix}`,
-      [stageId],
+        WHERE id = $1${
+          this.access ? ' AND (owner_account_id = $2 OR owner_org_id = $3)' : ''
+        }${suffix}`,
+      this.access ? [stageId, this.access.accountId, this.access.orgId ?? null] : [stageId],
     );
     const storedRow = result.rows[0];
     if (!storedRow) return undefined;
@@ -307,10 +325,11 @@ export class PgDocumentStore<
   }
 
   private async persistStage(queryable: Queryable, stageRow: StageRow<TStage>): Promise<void> {
-    await queryable.query(
+    const result = await queryable.query<{ id: string }>(
       `INSERT INTO document_stages
-         (id, name, description, interactive_mode, task_engine_mode, created_at, updated_at, data)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+         (id, name, description, interactive_mode, task_engine_mode, created_at, updated_at, data,
+          owner_account_id, owner_org_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
        ON CONFLICT (id) DO UPDATE
          SET name = EXCLUDED.name,
              description = EXCLUDED.description,
@@ -318,7 +337,17 @@ export class PgDocumentStore<
              task_engine_mode = EXCLUDED.task_engine_mode,
              created_at = EXCLUDED.created_at,
              updated_at = EXCLUDED.updated_at,
-             data = EXCLUDED.data`,
+             data = EXCLUDED.data,
+             owner_account_id = COALESCE(document_stages.owner_account_id, EXCLUDED.owner_account_id),
+             owner_org_id = COALESCE(document_stages.owner_org_id, EXCLUDED.owner_org_id)
+       ${
+         this.access
+           ? `WHERE document_stages.owner_account_id = EXCLUDED.owner_account_id
+                  OR document_stages.owner_org_id = EXCLUDED.owner_org_id
+                  OR (document_stages.owner_account_id IS NULL AND document_stages.owner_org_id IS NULL)`
+           : ''
+       }
+       RETURNING id`,
       [
         stageRow.id,
         stageRow.name,
@@ -328,8 +357,16 @@ export class PgDocumentStore<
         stageRow.createdAt,
         stageRow.updatedAt,
         encodeJson(stageRow, `document stage ${JSON.stringify(stageRow.id)}`),
+        this.access?.accountId ?? null,
+        this.access?.orgId ?? null,
       ],
     );
+    if (this.access && result.rows.length === 0) {
+      throw new DocumentNotFoundError(
+        stageRow.id,
+        `@openmaic/storage: missing document ${JSON.stringify(stageRow.id)}`,
+      );
+    }
   }
 
   async saveDocument(doc: MaicDocument<TScene, TStage>): Promise<void> {
@@ -424,8 +461,10 @@ export class PgDocumentStore<
               COUNT(scenes.id)::text AS scene_count
          FROM document_stages AS stages
          LEFT JOIN document_scenes AS scenes ON scenes.stage_id = stages.id
+       ${this.access ? 'WHERE stages.owner_account_id = $1 OR stages.owner_org_id = $2' : ''}
         GROUP BY stages.id
         ORDER BY stages.id ASC`,
+      this.access ? [this.access.accountId, this.access.orgId ?? null] : undefined,
     );
     return result.rows.map((row) => ({
       id: row.id,
@@ -442,7 +481,11 @@ export class PgDocumentStore<
   async deleteDocument(stageId: string): Promise<void> {
     if (!isPgQueryableKey(stageId)) return;
     // One statement; both child tables are removed by their FK cascades.
-    await this.queryable.query('DELETE FROM document_stages WHERE id = $1', [stageId]);
+    await this.queryable.query(
+      `DELETE FROM document_stages
+        WHERE id = $1${this.access ? ' AND (owner_account_id = $2 OR owner_org_id = $3)' : ''}`,
+      this.access ? [stageId, this.access.accountId, this.access.orgId ?? null] : [stageId],
+    );
   }
 
   async putStage(stageId: string, stage: TStage): Promise<void> {

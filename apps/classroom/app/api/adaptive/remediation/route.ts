@@ -21,6 +21,7 @@
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
+import { requireCorpusVisible } from '@/lib/server/corpus-access';
 import { fetchEvidence } from '@/lib/generation/evidence-grounding';
 import type { LearnerBlueprint } from '@/lib/generation/learner-profile';
 import { corpusOf, fetchLearnerBlueprint } from '@/lib/generation/learner-profile';
@@ -37,10 +38,7 @@ const log = createLogger('Remediation');
 
 export const maxDuration = 60;
 
-export type RemediationDecision =
-  | 'downgrade_explanation'
-  | 'add_practice'
-  | 'advance_challenge';
+export type RemediationDecision = 'downgrade_explanation' | 'add_practice' | 'advance_challenge';
 
 const PLANS: Record<
   RemediationDecision,
@@ -82,7 +80,11 @@ const PLANS: Record<
     brief:
       '学习者已经掌握本主题，给一道**进阶挑战任务**：一道需要综合运用本主题知识的开放题，' +
       '要求说明思路而不是背结论，可以引入一个真实工程场景中的边界条件或失败模式。只出 1 道。',
-    keyPoints: (focus) => [`基于「${focus}」的综合应用题`, '要求说明推理过程', '引入真实场景的边界条件'],
+    keyPoints: (focus) => [
+      `基于「${focus}」的综合应用题`,
+      '要求说明推理过程',
+      '引入真实场景的边界条件',
+    ],
     quizConfig: { questionCount: 1, difficulty: 'hard', questionTypes: ['text'] },
   },
 };
@@ -206,15 +208,15 @@ export async function POST(req: NextRequest) {
     const historicalMissed = (body.historicalMissedPoints ?? [])
       .filter((s) => typeof s === 'string')
       .slice(0, 5);
+    const corpus = corpusOf(body.learnerProfile) ?? 'ai';
+    const access = await requireCorpusVisible(corpus);
+    if (!access.ok) return access.response;
 
     // Both bridges degrade to null; neither is required to produce an outline.
     const [evidence, blueprint] = await Promise.all([
       // 补救场景与正课同一本书：这里原来一个语料参数都不传，补救内容永远接地在
       // 默认（ai）语料上，与刚讲完的那门课可能不是同一个知识库。
-      fetchEvidence(
-        `${courseTitle} ${sceneTitle} ${missedPoints.join(' ')}`.trim(),
-        corpusOf(body.learnerProfile),
-      ),
+      fetchEvidence(`${courseTitle} ${sceneTitle} ${missedPoints.join(' ')}`.trim(), corpus),
       body.learnerProfile
         ? fetchLearnerBlueprint(courseTitle || sceneTitle, body.learnerProfile)
         : Promise.resolve(null),

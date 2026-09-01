@@ -18,6 +18,10 @@ vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
 }));
 
+vi.mock('@/lib/server/corpus-access', () => ({
+  requireCorpusVisible: vi.fn().mockResolvedValue({ ok: true }),
+}));
+
 async function plan(body: Record<string, unknown>) {
   const { POST } = await import('@/app/api/adaptive/remediation/route');
   const request = new Request('http://localhost/api/adaptive/remediation', {
@@ -72,18 +76,15 @@ describe('补救 outline 的焦点取值', () => {
     // 长度过了 2 字的门槛就当知识点用了，标题会变成「降维讲解：知识」。
     '综合知识测试',
     '知识小测试',
-  ])(
-    '其余几种通用标题一样退到课程标题：%s',
-    async (sceneTitle) => {
-      const { outline } = await plan({
-        decision: 'add_practice',
-        sceneTitle,
-        courseTitle: 'RAG 检索增强生成入门',
-        missedPoints: [],
-      });
-      expect(outline.title).toBe('针对性练习：RAG 检索增强生成入门');
-    },
-  );
+  ])('其余几种通用标题一样退到课程标题：%s', async (sceneTitle) => {
+    const { outline } = await plan({
+      decision: 'add_practice',
+      sceneTitle,
+      courseTitle: 'RAG 检索增强生成入门',
+      missedPoints: [],
+    });
+    expect(outline.title).toBe('针对性练习：RAG 检索增强生成入门');
+  });
 
   it('课程墙上每个真实测验标题逐条过一遍，没有一条产出套话标题', async () => {
     const { readdirSync, readFileSync } = await import('fs');

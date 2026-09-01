@@ -31,7 +31,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, Header, HTTPException, UploadFile
 
 from backend.integration.personalize_api import verify_internal_token
 from backend.rag.intake import parse_exclusions
@@ -159,7 +159,12 @@ async def create_run(
             "那仍需整库重建。"
         ),
     ),
+    x_jizhi_corpus: str = Header("", alias="x-jizhi-corpus"),
 ) -> dict[str, Any]:
+    # classroom 已按机构归属核过这个头；这里再与 multipart 真值对照，避免桥核 A 写 B。
+    # 头为空保留内部维护脚本兼容性；面向浏览器的桥始终会发送。
+    if x_jizhi_corpus and x_jizhi_corpus != corpus:
+        raise HTTPException(status_code=400, detail="知识库归属与接入目标不一致。")
     given = [
         name
         for name, value in (("files", files), ("zip", archive), ("gitUrl", git_url.strip()))

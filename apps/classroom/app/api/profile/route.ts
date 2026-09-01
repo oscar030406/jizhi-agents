@@ -22,11 +22,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-import {
-  accountForSession,
-  readProfileEnvelope,
-  writeProfileEnvelope,
-} from '@/lib/accounts/store';
+import { accountForSession, readProfileEnvelope, writeProfileEnvelope } from '@/lib/accounts/store';
 import { SESSION_COOKIE } from '@/lib/accounts/session';
 import {
   activateProfile,
@@ -38,6 +34,8 @@ import {
 } from '@/lib/accounts/profiles';
 import { PREVIEW_CORPUS_COOKIE } from '@/app/api/admin/preview-corpus/route';
 import { createLogger } from '@/lib/logger';
+import { requireCorpusVisible } from '@/lib/server/corpus-access';
+import { corpusOf } from '@/lib/generation/learner-profile';
 
 const log = createLogger('Profile API');
 
@@ -74,11 +72,18 @@ export async function GET(req: NextRequest) {
   const preview = req.cookies.get(PREVIEW_CORPUS_COOKIE)?.value;
   const base = view(env);
   if (preview) {
+    const access = await requireCorpusVisible(preview);
+    if (!access.ok) return access.response;
     return NextResponse.json({
       ...base,
       fields: { ...(base.fields ?? {}), corpus: preview },
       previewCorpus: preview,
     });
+  }
+  const storedCorpus = corpusOf(base.fields);
+  if (storedCorpus) {
+    const access = await requireCorpusVisible(storedCorpus);
+    if (!access.ok) return access.response;
   }
   return NextResponse.json(base);
 }
@@ -107,6 +112,12 @@ export async function POST(req: NextRequest) {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: '请求体不是合法 JSON' }, { status: 400 });
+  }
+
+  const requestedCorpus = corpusOf(body.fields);
+  if (requestedCorpus) {
+    const access = await requireCorpusVisible(requestedCorpus);
+    if (!access.ok) return access.response;
   }
 
   const env = await readProfileEnvelope(account.id);

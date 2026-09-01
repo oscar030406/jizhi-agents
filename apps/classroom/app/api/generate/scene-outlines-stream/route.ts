@@ -53,6 +53,7 @@ import { resolveModelFromRequest } from '@/lib/server/resolve-model';
 import { sortDocumentImagesForVision } from '@/lib/document/bundle';
 import { isVocationalTaskEngineEnabled } from '@/lib/config/feature-flags';
 import { readDomainRegistry } from '@/lib/server/domain-registry';
+import { requireCorpusVisible } from '@/lib/server/corpus-access';
 const log = createLogger('Outlines Stream');
 
 export const maxDuration = 300;
@@ -335,6 +336,9 @@ export async function POST(req: NextRequest) {
       agents?: AgentInfo[];
     };
     requirementSnippet = requirements?.requirement?.substring(0, 60);
+    const effectiveCorpus = corpusOf(requirements.learnerProfile) ?? 'ai';
+    const access = await requireCorpusVisible(effectiveCorpus);
+    if (!access.ok) return access.response;
 
     // 换库生成的第一道闸：选了没建索引的库就在这里停住（大纲是整条生成链的第一步，
     // 拦在这里等于一个 token 都还没花）。没显式选库的照旧放行。
@@ -346,7 +350,6 @@ export async function POST(req: NextRequest) {
     // 域注册清单是自动路由的真源。只读接入时声明的结构元数据，绝不按域名
     // 手写课程内容或拿关键词猜安全属性。清单缺失时仍可由明确的实训需求触发。
     const domainRegistry = await readDomainRegistry();
-    const effectiveCorpus = corpusOf(requirements.learnerProfile) ?? 'ai';
 
     // Build user profile string for language inference context.
     // When a structured learner profile is present, the engine's diagnosis agent

@@ -4,6 +4,11 @@ import { proxyFetch } from '@/lib/server/proxy-fetch';
 import { resolveRenderServiceUrl } from '@/lib/server/render-service';
 import { capBodyStream } from '@/lib/server/capped-stream';
 import { createLogger } from '@/lib/logger';
+import {
+  isValidRenderJobId,
+  recordRenderJobOwner,
+  renderAccountId,
+} from '@/lib/server/render-job-owner-store';
 
 const log = createLogger('ExportVideo Render API');
 
@@ -70,6 +75,7 @@ export async function POST(req: NextRequest) {
   const capped = capBodyStream(req.body, MAX_UPLOAD_BYTES);
 
   try {
+    const ownerAccountId = await renderAccountId(req);
     // Long enough for the upload of a multi-MB ZIP; the render is async.
     const upstream = await proxyFetch(`${resolved.url}/render`, {
       method: 'POST',
@@ -78,7 +84,7 @@ export async function POST(req: NextRequest) {
       duplex: 'half',
       headers: {
         'content-type': contentType,
-        'x-openmaic-client': clientIdentity(req),
+        'x-openmaic-client': ownerAccountId ?? clientIdentity(req),
       },
       signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS),
     } as RequestInit);
@@ -96,7 +102,12 @@ export async function POST(req: NextRequest) {
       return apiError(code, status, 'Render service rejected the request', detail);
     }
 
-    return apiSuccess({ jobId: data.jobId, pollIntervalMs: 3000 }, 202);
+    const jobId = typeof data.jobId === 'string' ? data.jobId : '';
+    if (!isValidRenderJobId(jobId)) {
+      return apiError('UPSTREAM_ERROR', 502, 'Render service returned an invalid job id');
+    }
+    if (ownerAccountId) await recordRenderJobOwner(jobId, ownerAccountId);
+    return apiSuccess({ jobId, pollIntervalMs: 3000 }, 202);
   } catch (error) {
     // A cap trip aborts the forwarded stream, surfacing here as a fetch error.
     if (capped.exceeded()) {

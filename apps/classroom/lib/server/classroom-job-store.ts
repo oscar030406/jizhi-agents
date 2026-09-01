@@ -16,6 +16,8 @@ export type ClassroomGenerationJobStatus = 'queued' | 'running' | 'succeeded' | 
 
 export interface ClassroomGenerationJob {
   id: string;
+  ownerAccountId: string | null;
+  corpus: string;
   status: ClassroomGenerationJobStatus;
   step: ClassroomGenerationStep | 'queued' | 'failed';
   progress: number;
@@ -108,10 +110,12 @@ export function isValidClassroomJobId(jobId: string): boolean {
 export async function createClassroomGenerationJob(
   jobId: string,
   input: GenerateClassroomInput,
+  access: Pick<ClassroomGenerationJob, 'ownerAccountId' | 'corpus'>,
 ): Promise<ClassroomGenerationJob> {
   const now = new Date().toISOString();
   const job: ClassroomGenerationJob = {
     id: jobId,
+    ...access,
     status: 'queued',
     step: 'queued',
     progress: 0,

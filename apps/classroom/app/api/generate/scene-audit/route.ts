@@ -21,6 +21,7 @@ import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { buildAuditPanel } from '@/lib/server/audit-panel';
 import { llmApiError } from '@/lib/server/llm-error-response';
 import { resolveModelFromRequest } from '@/lib/server/resolve-model';
+import { requireCorpusVisible } from '@/lib/server/corpus-access';
 import type { SceneOutline } from '@/lib/types/generation';
 
 const log = createLogger('Scene Audit API');
@@ -43,6 +44,8 @@ export async function POST(req: NextRequest) {
     if (!outline || content == null) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'outline and content are required');
     }
+    const access = await requireCorpusVisible(corpus ?? 'ai');
+    if (!access.ok) return access.response;
     outlineTitle = outline.title;
 
     // Generator model (request-resolved) — used for the revision pass so the

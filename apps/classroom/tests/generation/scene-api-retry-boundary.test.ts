@@ -20,6 +20,10 @@ vi.mock('@/lib/server/resolve-model', () => ({
   resolveModelFromRequest: mocks.resolveModelFromRequest,
 }));
 
+vi.mock('@/lib/server/corpus-access', () => ({
+  requireCorpusVisible: vi.fn().mockResolvedValue({ ok: true }),
+}));
+
 vi.mock('@/lib/config/feature-flags', () => ({
   resolveVocationalActive: mocks.resolveVocationalActive,
 }));

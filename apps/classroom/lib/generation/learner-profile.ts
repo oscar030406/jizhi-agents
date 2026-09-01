@@ -116,8 +116,12 @@ export { domainLabel };
  * 没拿到这个值（客户端 `fetchSceneAudit` 从来不发画像），于是换库生成的课
  * 由 ai 语料的判官来评，正文与对照资料不是同一本书。
  */
-export function corpusOf(profile?: { corpus?: string; domain?: string }): string | undefined {
-  return profile?.corpus?.trim() || profile?.domain;
+export function corpusOf(
+  profile?: { corpus?: unknown; domain?: unknown } | null,
+): string | undefined {
+  const corpus = typeof profile?.corpus === 'string' ? profile.corpus.trim() : '';
+  const domain = typeof profile?.domain === 'string' ? profile.domain.trim() : '';
+  return corpus || domain || undefined;
 }
 
 /** Ask the engine's diagnosis agent for a plan. Null on any failure — never blocks generation. */
@@ -193,7 +197,10 @@ const SCAFFOLD_DIRECTIVE: Record<string, string> = {
  * 不会编程 → L1；会编程但无 AI 背景 → L2；有 Agent/RAG 实战或资深工程 → L3。
  * 画像缺维度时退回引擎推荐档（老行为）。
  */
-export function presentationTier(bp: LearnerBlueprint, profile: LearnerProfileInput): 'L1' | 'L2' | 'L3' {
+export function presentationTier(
+  bp: LearnerBlueprint,
+  profile: LearnerProfileInput,
+): 'L1' | 'L2' | 'L3' {
   const prog = profile.programming_level;
   if (typeof prog !== 'number') {
     const rec = bp.recommended_difficulty;
@@ -309,7 +316,8 @@ export function blueprintDirective(
     `- 学习者类型：${bp.blueprint?.learner_type ?? '未知'}；推荐难度档：${bp.recommended_difficulty}`,
     `- 薄弱概念（要重点补）：${bp.weak_concepts.slice(0, 4).join('、') || '无'}`,
   ];
-  if (profile.education) lines.push(`- 学历背景：${EDUCATION_LABEL[profile.education] ?? profile.education}`);
+  if (profile.education)
+    lines.push(`- 学历背景：${EDUCATION_LABEL[profile.education] ?? profile.education}`);
   if (profile.role) lines.push(`- 身份/来路：${profile.role}`);
 
   // 分档特征硬要求（2026-08-10，适配评测 2A 首测 44.4% 的定向修复）：

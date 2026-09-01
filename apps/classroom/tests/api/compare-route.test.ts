@@ -2,8 +2,8 @@
  * /api/compare 异步 job 流：POST 创建任务立即返回 jobId，
  * 引擎调用在 next/server after() 回调里后台跑，GET ?job= 轮询状态与结果。
  *
- * WO-D3 起 POST 要求登录（未登录 401），GET 保持只读不鉴权。
- * 这里把账户查询打桩：登录态由 `signedIn` 开关控制。
+ * POST 与 GET 都要求登录；job 只允许创建它的账户轮询。
+ * 这里把账户查询打桩：当前账户由 `currentAccountId` 控制。
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -25,11 +25,13 @@ vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
 }));
 
-let signedIn = true;
+let currentAccountId: string | null = 'acc_1';
 
 vi.mock('@/lib/accounts/store', () => ({
   accountForSession: vi.fn(async () =>
-    signedIn ? { id: 'acc_1', username: 'u', displayName: 'u', role: 'learner' } : null,
+    currentAccountId
+      ? { id: currentAccountId, username: 'u', displayName: 'u', role: 'learner' }
+      : null,
   ),
 }));
 
@@ -47,7 +49,9 @@ async function postCompare(body: unknown) {
 
 async function getCompare(jobId: string) {
   const { GET } = await import('@/app/api/compare/route');
-  const request = new Request(`http://localhost/api/compare?job=${jobId}`);
+  const request = new Request(`http://localhost/api/compare?job=${jobId}`, {
+    headers: { cookie: 'jizhi_session=t' },
+  });
   return GET(request as unknown as NextRequest);
 }
 
@@ -59,7 +63,7 @@ const VALID_BODY = {
 describe('/api/compare 异步 job 流', () => {
   beforeEach(() => {
     vi.resetModules();
-    signedIn = true;
+    currentAccountId = 'acc_1';
     afterCallbacks.length = 0;
     engineFetch.mockReset();
     vi.stubGlobal('fetch', engineFetch);
@@ -79,20 +83,26 @@ describe('/api/compare 异步 job 流', () => {
     expect(afterCallbacks).toHaveLength(0);
   });
 
-  it('未登录 POST 返回 401，不创建任务；GET 深链仍可读', async () => {
-    signedIn = false;
+  it('未登录不能创建或轮询，其他账户不能读取任务', async () => {
+    currentAccountId = null;
     const res = await postCompare(VALID_BODY);
     expect(res.status).toBe(401);
     // 语义是「没登录」不是「凭证错」——别退回 INVALID_CREDENTIALS
     expect((await res.json()).errorCode).toBe('UNAUTHORIZED');
     expect(afterCallbacks).toHaveLength(0);
-    // GET 不鉴权：先用登录态造一个 job，再以未登录身份轮询
-    signedIn = true;
+    currentAccountId = 'acc_1';
     const created = await (await postCompare(VALID_BODY)).json();
-    signedIn = false;
-    const poll = await getCompare(created.jobId);
-    expect(poll.status).toBe(200);
-    expect((await poll.json()).status).toBe('queued');
+
+    currentAccountId = null;
+    expect((await getCompare(created.jobId)).status).toBe(401);
+
+    currentAccountId = 'acc_2';
+    expect((await getCompare(created.jobId)).status).toBe(404);
+
+    currentAccountId = 'acc_1';
+    const ownPoll = await getCompare(created.jobId);
+    expect(ownPoll.status).toBe(200);
+    expect((await ownPoll.json()).status).toBe('queued');
   });
 
   it('缺 learningGoal 或 profiles 不足两个时返回 400', async () => {

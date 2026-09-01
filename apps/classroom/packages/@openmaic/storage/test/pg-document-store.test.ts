@@ -87,6 +87,78 @@ describe('PgDocumentStore Postgres behavior', () => {
       'document_scenes',
       'document_stages',
     ]);
+
+    const ownerColumns = await db.query<{ column_name: string }>(
+      `SELECT column_name
+         FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'document_stages'
+          AND column_name IN ('owner_account_id', 'owner_org_id')
+        ORDER BY column_name`,
+    );
+    expect(ownerColumns.rows.map((row) => row.column_name)).toEqual([
+      'owner_account_id',
+      'owner_org_id',
+    ]);
+  });
+
+  test('scopes documents to their creator and creator organization', async () => {
+    const author = new PgDocumentStore(db, {
+      ...transactionOptions(db),
+      access: { accountId: 'author-a', orgId: 'org-a' },
+    });
+    const orgPeer = new PgDocumentStore(db, {
+      ...transactionOptions(db),
+      access: { accountId: 'author-b', orgId: 'org-a' },
+    });
+    const outsider = new PgDocumentStore(db, {
+      ...transactionOptions(db),
+      access: { accountId: 'author-c', orgId: 'org-c' },
+    });
+
+    await author.saveDocument(makeDocument());
+
+    expect((await author.listDocuments()).map((document) => document.id)).toEqual(['stage-1']);
+    expect(await orgPeer.loadDocument('stage-1')).not.toBeNull();
+    expect(await outsider.loadDocument('stage-1')).toBeNull();
+    expect(await outsider.listDocuments()).toEqual([]);
+
+    const hijack = makeDocument();
+    hijack.stage.name = 'Hijacked';
+    await expect(outsider.saveDocument(hijack)).rejects.toBeInstanceOf(DocumentNotFoundError);
+    await outsider.deleteDocument('stage-1');
+    expect((await author.loadDocument('stage-1'))?.stage.name).not.toBe('Hijacked');
+
+    const sharedEdit = (await orgPeer.loadDocument('stage-1'))!.stage;
+    await orgPeer.putStage('stage-1', { ...sharedEdit, name: 'Shared edit' });
+    expect((await author.loadDocument('stage-1'))?.stage.name).toBe('Shared edit');
+  });
+
+  test('lets the first full save claim a legacy document without ownership columns', async () => {
+    await store.saveDocument(makeDocument());
+    const author = new PgDocumentStore(db, {
+      ...transactionOptions(db),
+      access: { accountId: 'author-a', orgId: 'org-a' },
+    });
+
+    expect(await author.loadDocument('stage-1')).toBeNull();
+    expect(await author.listDocuments()).toEqual([]);
+
+    const claimed = makeDocument();
+    claimed.stage.name = 'Claimed legacy document';
+    await author.saveDocument(claimed);
+
+    expect((await author.loadDocument('stage-1'))?.stage.name).toBe('Claimed legacy document');
+    await expect(
+      db.query<{ owner_account_id: string; owner_org_id: string }>(
+        `SELECT owner_account_id, owner_org_id
+           FROM document_stages
+          WHERE id = $1`,
+        ['stage-1'],
+      ),
+    ).resolves.toMatchObject({
+      rows: [{ owner_account_id: 'author-a', owner_org_id: 'org-a' }],
+    });
   });
 
   test('requires a transaction hook at construction time', () => {

@@ -100,6 +100,22 @@ def test_token_required(client):
     assert resp.status_code == 401
 
 
+def test_proxy_corpus_header_must_match_form(client):
+    c, seen = client
+    resp = c.post(
+        "/api/domain-intake/runs",
+        headers={
+            "x-internal-token": "probe-token",
+            "x-jizhi-corpus": "other-org-corpus",
+        },
+        files=[("files", ("a.md", b"# t", "text/markdown"))],
+        data={"corpus": "probe"},
+    )
+    assert resp.status_code == 400
+    assert "归属" in resp.json()["detail"]
+    assert "kind" not in seen
+
+
 def test_tier_definitions_land_in_run_options(client):
     """管理端表单里管理者用自己的话写的档位定义，要原样落进 run 记录。
 

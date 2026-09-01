@@ -19,8 +19,10 @@ import { cookies } from 'next/headers';
 import type { NextRequest } from 'next/server';
 
 import { accountForSession, accountsEnabled } from '@/lib/accounts/store';
+import { orgForAccount, setCorpusOrg } from '@/lib/accounts/org-store';
 import { SESSION_COOKIE } from '@/lib/accounts/session';
 import { API_ERROR_CODES, apiError, apiSuccess } from '@/lib/server/api-response';
+import { isValidCorpusName } from '@/lib/server/knowledge-center';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('IntakeRuns API');
@@ -39,13 +41,22 @@ export async function POST(req: NextRequest) {
     return apiError(API_ERROR_CODES.UNAUTHORIZED, 403, '发起接入 run 只对管理者账号开放。');
   }
 
+  const corpus = req.headers.get('x-jizhi-corpus')?.trim() ?? '';
+  if (!corpus || !isValidCorpusName(corpus)) {
+    return apiError(API_ERROR_CODES.INVALID_REQUEST, 400, '库名只能用小写字母数字与 -_。');
+  }
+
   const base = process.env.GROUNDING_URL;
   if (!base) {
-    return apiError(
-      API_ERROR_CODES.PROVIDER_DISABLED,
-      503,
-      '知识库接入服务暂不可用，请稍后重试。',
-    );
+    return apiError(API_ERROR_CODES.PROVIDER_DISABLED, 503, '知识库接入服务暂不可用，请稍后重试。');
+  }
+  const org = await orgForAccount(account.id);
+  if (!org || org.memberRole !== 'owner') {
+    return apiError(API_ERROR_CODES.UNAUTHORIZED, 403, '只有所属机构管理者可以接入知识库。');
+  }
+  const claimed = await setCorpusOrg(corpus, org.id, org.id);
+  if (!claimed.ok) {
+    return apiError(API_ERROR_CODES.UNAUTHORIZED, 403, claimed.message);
   }
 
   // **不解析 body，把请求流原样转给引擎。**
@@ -68,6 +79,8 @@ export async function POST(req: NextRequest) {
       method: 'POST',
       headers: {
         'x-internal-token': process.env.GROUNDING_TOKEN ?? '',
+        // 引擎用它核对 multipart 里的 corpus，防止归属闸检查 A 库、实际却写 B 库。
+        'x-jizhi-corpus': corpus,
         // multipart 边界在 content-type 里，不带过去引擎就认不出分段。
         ...(req.headers.get('content-type')
           ? { 'content-type': req.headers.get('content-type') as string }

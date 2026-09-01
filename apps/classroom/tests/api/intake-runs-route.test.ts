@@ -38,6 +38,16 @@ vi.mock('@/lib/accounts/store', () => ({
   ),
 }));
 
+const orgMocks = vi.hoisted(() => ({
+  orgForAccount: vi.fn(),
+  setCorpusOrg: vi.fn(),
+}));
+
+vi.mock('@/lib/accounts/org-store', () => ({
+  orgForAccount: orgMocks.orgForAccount,
+  setCorpusOrg: orgMocks.setCorpusOrg,
+}));
+
 const engineFetch = vi.fn();
 
 function request(fields: Record<string, string> = {}) {
@@ -46,6 +56,7 @@ function request(fields: Record<string, string> = {}) {
   for (const [k, v] of Object.entries(fields)) form.append(k, v);
   return new Request('http://localhost/api/knowledge/intake-runs', {
     method: 'POST',
+    headers: fields.corpus ? { 'x-jizhi-corpus': fields.corpus } : undefined,
     body: form,
   }) as unknown as NextRequest;
 }
@@ -61,6 +72,10 @@ describe('POST /api/knowledge/intake-runs', () => {
     process.env.GROUNDING_URL = 'http://engine.local';
     process.env.GROUNDING_TOKEN = 'probe-token';
     engineFetch.mockReset();
+    orgMocks.orgForAccount.mockReset();
+    orgMocks.setCorpusOrg.mockReset();
+    orgMocks.orgForAccount.mockResolvedValue({ id: 'org-a', memberRole: 'owner' });
+    orgMocks.setCorpusOrg.mockResolvedValue({ ok: true });
     engineFetch.mockResolvedValue(
       new Response(JSON.stringify({ run_id: '20260816T101010-abcdef' }), { status: 200 }),
     );
@@ -98,6 +113,7 @@ describe('POST /api/knowledge/intake-runs', () => {
     await post(request({ corpus: 'probe' }));
     const headers = (engineFetch.mock.calls[0][1] as RequestInit).headers as Record<string, string>;
     expect(headers['x-internal-token']).toBe('probe-token');
+    expect(headers['x-jizhi-corpus']).toBe('probe');
     // content-type 里带着 boundary=...，丢了引擎就切不出分段
     expect(headers['content-type']).toMatch(/multipart\/form-data;\s*boundary=/);
   });
@@ -110,11 +126,18 @@ describe('POST /api/knowledge/intake-runs', () => {
 
   it('引擎的报错原样透传，不在桥这层改写', async () => {
     engineFetch.mockResolvedValue(
-      new Response(JSON.stringify({ detail: '库名只能用小写字母数字与 -_' }), { status: 400 }),
+      new Response(JSON.stringify({ detail: '这份投料里没有任何可读文档' }), { status: 400 }),
     );
-    const resp = await post(request({ corpus: 'Bad Name' }));
+    const resp = await post(request({ corpus: 'probe' }));
     expect(resp.status).toBe(400);
-    expect(await resp.json()).toMatchObject({ error: '库名只能用小写字母数字与 -_' });
+    expect(await resp.json()).toMatchObject({ error: '这份投料里没有任何可读文档' });
+  });
+
+  it('他机构已认领的库在上传前拒绝', async () => {
+    orgMocks.setCorpusOrg.mockResolvedValue({ ok: false, message: '该知识库已归属其他机构' });
+    const resp = await post(request({ corpus: 'private-b' }));
+    expect(resp.status).toBe(403);
+    expect(engineFetch).not.toHaveBeenCalled();
   });
 
   it('引擎不可达时回 502 并说清没发起', async () => {
