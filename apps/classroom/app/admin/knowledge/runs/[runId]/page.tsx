@@ -11,9 +11,9 @@ import { notFound } from 'next/navigation';
 
 import { SiteHeader } from '@/components/site-header';
 import { IntakeRunView } from '@/components/admin/intake-run-view';
+import { orgForAccount } from '@/lib/accounts/org-store';
 import { isScratchCorpus } from '@/lib/knowledge/domain-registry';
 import { isValidRunId, readRunEvents } from '@/lib/server/intake-runs';
-import { corpusVisibilityFor } from '@/lib/accounts/org-store';
 
 import { Denied, managerAccount } from '../../guard';
 
@@ -31,9 +31,10 @@ export default async function IntakeRunPage({
   // 一次 run 的事件是十几到几十条，一次全取；超过 2000 条才截断，届时页面顶部会显示。
   const payload = await readRunEvents(runId, 0, 2000);
   if (!payload) notFound();
-  const visible = await corpusVisibilityFor(account.id);
+  const org = await orgForAccount(account.id);
   if (
-    !visible(payload.record.corpus) ||
+    !org ||
+    payload.record.owner_org_id !== org.id ||
     isScratchCorpus(payload.record.corpus) ||
     /(?:fullprobe|fullpath[-_]?probe|(?:^|[-_])probe(?:[-_]|$))/i.test(payload.record.corpus)
   )

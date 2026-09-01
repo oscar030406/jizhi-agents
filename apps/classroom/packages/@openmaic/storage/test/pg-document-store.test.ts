@@ -93,71 +93,83 @@ describe('PgDocumentStore Postgres behavior', () => {
          FROM information_schema.columns
         WHERE table_schema = 'public'
           AND table_name = 'document_stages'
-          AND column_name IN ('owner_account_id', 'owner_org_id')
+          AND column_name = 'owner_account_id'
         ORDER BY column_name`,
     );
-    expect(ownerColumns.rows.map((row) => row.column_name)).toEqual([
-      'owner_account_id',
-      'owner_org_id',
-    ]);
+    expect(ownerColumns.rows.map((row) => row.column_name)).toEqual(['owner_account_id']);
   });
 
-  test('scopes documents to their creator and creator organization', async () => {
+  test('scopes documents to their creator account only', async () => {
     const author = new PgDocumentStore(db, {
       ...transactionOptions(db),
-      access: { accountId: 'author-a', orgId: 'org-a' },
+      access: { accountId: 'author-a' },
     });
     const orgPeer = new PgDocumentStore(db, {
       ...transactionOptions(db),
-      access: { accountId: 'author-b', orgId: 'org-a' },
+      access: { accountId: 'author-b' },
     });
     const outsider = new PgDocumentStore(db, {
       ...transactionOptions(db),
-      access: { accountId: 'author-c', orgId: 'org-c' },
+      access: { accountId: 'author-c' },
     });
 
     await author.saveDocument(makeDocument());
 
     expect((await author.listDocuments()).map((document) => document.id)).toEqual(['stage-1']);
-    expect(await orgPeer.loadDocument('stage-1')).not.toBeNull();
+    expect(await orgPeer.loadDocument('stage-1')).toBeNull();
+    expect(await orgPeer.listDocuments()).toEqual([]);
     expect(await outsider.loadDocument('stage-1')).toBeNull();
     expect(await outsider.listDocuments()).toEqual([]);
+
+    const peerEdit = makeDocument();
+    peerEdit.stage.name = 'Peer edit';
+    await expect(orgPeer.saveDocument(peerEdit)).rejects.toBeInstanceOf(DocumentNotFoundError);
+    await expect(orgPeer.putStage('stage-1', peerEdit.stage)).rejects.toBeInstanceOf(
+      DocumentNotFoundError,
+    );
+    await orgPeer.deleteDocument('stage-1');
 
     const hijack = makeDocument();
     hijack.stage.name = 'Hijacked';
     await expect(outsider.saveDocument(hijack)).rejects.toBeInstanceOf(DocumentNotFoundError);
     await outsider.deleteDocument('stage-1');
-    expect((await author.loadDocument('stage-1'))?.stage.name).not.toBe('Hijacked');
-
-    const sharedEdit = (await orgPeer.loadDocument('stage-1'))!.stage;
-    await orgPeer.putStage('stage-1', { ...sharedEdit, name: 'Shared edit' });
-    expect((await author.loadDocument('stage-1'))?.stage.name).toBe('Shared edit');
+    expect((await author.loadDocument('stage-1'))?.stage.name).toBe('Intro Course');
   });
 
-  test('lets the first full save claim a legacy document without ownership columns', async () => {
+  test('denies tenant reads, writes, deletes, and listings for legacy unowned documents', async () => {
     await store.saveDocument(makeDocument());
     const author = new PgDocumentStore(db, {
       ...transactionOptions(db),
-      access: { accountId: 'author-a', orgId: 'org-a' },
+      access: { accountId: 'author-a' },
     });
 
+    const original = await store.loadDocument('stage-1');
     expect(await author.loadDocument('stage-1')).toBeNull();
+    expect(await author.getScene('stage-1', 'scene-a')).toBeNull();
     expect(await author.listDocuments()).toEqual([]);
 
-    const claimed = makeDocument();
-    claimed.stage.name = 'Claimed legacy document';
-    await author.saveDocument(claimed);
+    const replacement = makeDocument();
+    replacement.stage.name = 'Claimed legacy document';
+    replacement.scenes = [slideScene('stage-1', 'replacement', 0, 'Replacement')];
+    replacement.outline = { replaced: true };
+    await expect(author.saveDocument(replacement)).rejects.toBeInstanceOf(DocumentNotFoundError);
+    await expect(author.putStage('stage-1', replacement.stage)).rejects.toBeInstanceOf(
+      DocumentNotFoundError,
+    );
+    await expect(author.putScene('stage-1', replacement.scenes[0]!)).rejects.toBeInstanceOf(
+      DocumentNotFoundError,
+    );
+    await author.deleteScene('stage-1', 'scene-a');
+    await author.deleteDocument('stage-1');
 
-    expect((await author.loadDocument('stage-1'))?.stage.name).toBe('Claimed legacy document');
+    expect(await store.loadDocument('stage-1')).toEqual(original);
     await expect(
-      db.query<{ owner_account_id: string; owner_org_id: string }>(
-        `SELECT owner_account_id, owner_org_id
-           FROM document_stages
-          WHERE id = $1`,
+      db.query<{ owner_account_id: string | null }>(
+        `SELECT owner_account_id FROM document_stages WHERE id = $1`,
         ['stage-1'],
       ),
     ).resolves.toMatchObject({
-      rows: [{ owner_account_id: 'author-a', owner_org_id: 'org-a' }],
+      rows: [{ owner_account_id: null }],
     });
   });
 

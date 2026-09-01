@@ -13,7 +13,7 @@ import { cookies } from 'next/headers';
 import type { NextRequest } from 'next/server';
 
 import { accountForSession, accountsEnabled } from '@/lib/accounts/store';
-import { corpusVisibilityFor } from '@/lib/accounts/org-store';
+import { orgForAccount } from '@/lib/accounts/org-store';
 import { SESSION_COOKIE } from '@/lib/accounts/session';
 import { API_ERROR_CODES, apiError, apiSuccess } from '@/lib/server/api-response';
 import { isValidRunId, readRunEvents } from '@/lib/server/intake-runs';
@@ -37,8 +37,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ runI
   if (!payload) {
     return apiError(API_ERROR_CODES.INVALID_REQUEST, 404, `没有这个接入 run：${runId}`);
   }
-  const visible = await corpusVisibilityFor(account.id);
-  if (!visible(payload.record.corpus)) {
+  const org = await orgForAccount(account.id);
+  if (!org || payload.record.owner_org_id !== org.id) {
     return apiError(API_ERROR_CODES.INVALID_REQUEST, 404, `没有这个接入 run：${runId}`);
   }
   return apiSuccess(payload);

@@ -59,7 +59,8 @@ DRAFT_SYSTEM = """你是企业技能培训的实训设计师。下面给出一�
 3. 分级：starter（第一个上手项目，难度1-2星）、advanced（进阶，3-4星）、portfolio（作品级，4-5星）。\
 整组覆盖至少 starter 与 advanced 两档；总数不超过要求数。
 4. 不合适的候选（纯框架源码、无教学价值、与领域无关）直接不选，宁缺毋滥。
-5. 只输出 JSON：
+5. 每张卡必须给出 steps：3-6 条具体、可执行、按顺序排列的操作步骤，不能只写目标或口号。
+6. 只输出 JSON：
 {"projects": [{
   "repo": "owner/name",
   "name": "推荐卡标题（中文，一眼看出做什么）",
@@ -67,6 +68,7 @@ DRAFT_SYSTEM = """你是企业技能培训的实训设计师。下面给出一�
   "difficulty": 1-5 整数,
   "hours": "预估工时，如 10-20 小时",
   "prereq": "前置要求一句话",
+  "steps": ["具体步骤 1", "具体步骤 2", "具体步骤 3"],
   "cost": "成本口径（如：本地即可运行 / 需要一块 PLC 仿真环境）",
   "networkNote": "网络门槛（能访问 GitHub 即可 / ⚠需要...）",
   "why": "为什么值得做：练的是什么真实工作能力，2-3 句",
@@ -229,6 +231,12 @@ def draft_cards(
     seen_repo: set[str] = set()
     for p in parsed["projects"]:
         repo = str(p.get("repo") or "").strip()
+        raw_steps = p.get("steps")
+        steps = (
+            [step.strip() for step in raw_steps if isinstance(step, str) and step.strip()]
+            if isinstance(raw_steps, list)
+            else []
+        )
         reasons = []
         if repo not in by_name:
             reasons.append(f"仓库不在候选清单内：{repo!r}")
@@ -238,6 +246,8 @@ def draft_cards(
             reasons.append(f"level 非法：{p.get('level')!r}")
         if not all(str(p.get(k) or "").strip() for k in ("name", "why", "acceptance", "deliverable")):
             reasons.append("关键字段为空")
+        if len(steps) < 2:
+            reasons.append("可执行步骤少于 2 条")
         if reasons:
             dropped.append({"repo": repo, "name": p.get("name"), "reasons": reasons})
             continue
@@ -255,6 +265,7 @@ def draft_cards(
             "jobIds": [],
             "courseIds": [],
             "prereq": str(p.get("prereq") or "").strip(),
+            "steps": steps,
             "cost": str(p.get("cost") or "").strip(),
             "networkNote": str(p.get("networkNote") or "GitHub 可访问即可").strip(),
             "why": str(p["why"]).strip(),

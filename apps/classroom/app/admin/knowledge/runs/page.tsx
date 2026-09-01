@@ -14,11 +14,11 @@
 import Link from 'next/link';
 
 import { SiteHeader } from '@/components/site-header';
+import { orgForAccount } from '@/lib/accounts/org-store';
 import { isScratchCorpus } from '@/lib/knowledge/domain-registry';
 import { domainLabel, hasDomainLabel } from '@/lib/knowledge/domain-labels';
 import { redactCaliber } from '@/lib/metrics/redact-caliber';
 import { listRuns } from '@/lib/server/intake-runs';
-import { corpusVisibilityFor } from '@/lib/accounts/org-store';
 
 import { Denied, managerAccount } from '../guard';
 
@@ -46,16 +46,19 @@ function when(iso: string | null): string {
 export default async function IntakeRunsPage() {
   const account = await managerAccount();
   if (!account) return <Denied />;
-  const visible = await corpusVisibilityFor(account.id);
+  const org = await orgForAccount(account.id);
   // run 行的库名走 domainLabel，先灌域注册清单（同 admin 总览页的补法）
   const { readDomainRegistry } = await import('@/lib/server/domain-registry');
   await readDomainRegistry().catch(() => null);
-  const runs = (await listRuns(30)).filter(
-    (run) =>
-      !isScratchCorpus(run.corpus) &&
-      visible(run.corpus) &&
-      !/(?:fullprobe|fullpath[-_]?probe|(?:^|[-_])probe(?:[-_]|$))/i.test(run.corpus),
-  );
+  const runs = org
+    ? await listRuns(
+        30,
+        org.id,
+        (run) =>
+          !isScratchCorpus(run.corpus) &&
+          !/(?:fullprobe|fullpath[-_]?probe|(?:^|[-_])probe(?:[-_]|$))/i.test(run.corpus),
+      )
+    : [];
 
   return (
     <>

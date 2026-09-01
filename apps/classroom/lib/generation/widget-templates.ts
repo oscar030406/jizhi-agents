@@ -10,7 +10,7 @@
  */
 
 import { z } from 'zod';
-import type { TemplateWidgetConfig, WidgetTemplateId } from '@/lib/types/widgets';
+import type { CurveFamily, TemplateWidgetConfig, WidgetTemplateId } from '@/lib/types/widgets';
 import { parseJsonResponse } from './json-repair';
 
 // ==================== 模板目录（注入选择提示词） ====================
@@ -405,9 +405,151 @@ function formatZodError(error: z.ZodError): string {
   return error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ');
 }
 
+export type TemplateQualityRedLineCode = 'B1' | 'B2' | 'B3' | 'B4';
+
+export interface TemplateQualityRedLineHit {
+  code: TemplateQualityRedLineCode;
+  detail: string;
+}
+
+const CURVE_COEFFICIENTS: Record<CurveFamily, ReadonlyArray<'a' | 'b' | 'c'>> = {
+  linear: ['a', 'b'],
+  quadratic: ['a', 'b', 'c'],
+  power: ['a', 'b', 'c'],
+  exponential: ['a', 'b', 'c'],
+  logarithmic: ['a', 'b'],
+  logistic: ['a', 'b', 'c'],
+};
+
+function evalTemplateCurve(
+  curve: CurveFamily,
+  k: { a: number; b: number; c: number },
+  x: number,
+): number {
+  switch (curve) {
+    case 'linear':
+      return k.a * x + k.b;
+    case 'quadratic':
+      return k.a * x * x + k.b * x + k.c;
+    case 'power':
+      return k.a * Math.pow(x, k.b) + k.c;
+    case 'exponential':
+      return k.a * Math.exp(k.b * x) + k.c;
+    case 'logarithmic':
+      return k.a * Math.log(x) + k.b;
+    case 'logistic':
+      return k.a / (1 + Math.exp(-k.b * (x - k.c)));
+  }
+}
+
+/** 与 ParameterCurve 首屏同口径：121 点，丢弃非有限值和 1e15 以上的值。 */
+function finiteCurvePointCount(
+  curve: CurveFamily,
+  coefficients: { a: number; b: number; c: number },
+  xAxis: { min: number; max: number },
+): number {
+  let count = 0;
+  for (let i = 0; i < 121; i += 1) {
+    const x = xAxis.min + ((xAxis.max - xAxis.min) * i) / 120;
+    const y = evalTemplateCurve(curve, coefficients, x);
+    if (Number.isFinite(y) && Math.abs(y) < 1e15) count += 1;
+  }
+  return count;
+}
+
+const allSame = (items: readonly unknown[]) =>
+  items.length > 0 && items.every((item) => JSON.stringify(item) === JSON.stringify(items[0]));
+
+/** 生产生成与离线评测共用的 B1–B4 纯机械红线。 */
+export function checkTemplateQualityRedLines(
+  config: TemplateWidgetConfig,
+): TemplateQualityRedLineHit[] {
+  const hits: TemplateQualityRedLineHit[] = [];
+
+  switch (config.templateId) {
+    case 'process_stepper': {
+      const { steps } = config.params;
+      if (allSame(steps)) {
+        hits.push({ code: 'B1', detail: `${steps.length} 步内容逐字相同，按「下一步」只有步号在动` });
+      }
+      if (steps.every((step) => !step.carries)) {
+        hits.push({ code: 'B3', detail: '没有任何一步写了交给下一步的东西，流程退化成分段文字' });
+      }
+      break;
+    }
+    case 'bpe_merge_stepper': {
+      const { steps } = config.params;
+      if (allSame(steps)) {
+        hits.push({ code: 'B1', detail: `${steps.length} 步的分词状态完全相同，合并从未发生` });
+      }
+      break;
+    }
+    case 'attention_playground': {
+      const { scores } = config.params;
+      if (allSame(scores)) {
+        hits.push({ code: 'B2', detail: '相容性矩阵每一行都相同，点哪个 token 权重分布都不变' });
+      } else if (scores.every((row) => new Set(row).size === 1)) {
+        hits.push({
+          code: 'B2',
+          detail: '每行内部数值全相等，softmax 恒为均匀分布，温度滑块拖到头也没有形状变化',
+        });
+      }
+      break;
+    }
+    case 'temperature_sampler': {
+      const logits = config.params.candidates.map((candidate) => candidate.logit);
+      if (new Set(logits).size === 1) {
+        hits.push({ code: 'B2', detail: '所有候选词 logit 相同，任何温度下都是均匀分布，温度滑块无效' });
+      }
+      break;
+    }
+    case 'tradeoff_matrix': {
+      const { dimensions, options } = config.params;
+      const flat = dimensions.every(
+        (_, dimension) => new Set(options.map((option) => option.cells[dimension]?.rating)).size === 1,
+      );
+      if (flat) {
+        hits.push({ code: 'B2', detail: '每个维度下所有方案评分都一样，勾选任何维度组合排名都不会变' });
+      }
+      break;
+    }
+    case 'parameter_curve': {
+      const { curve, coefficients, sliders, xAxis } = config.params;
+      const used = CURVE_COEFFICIENTS[curve];
+      for (const slider of sliders) {
+        if (!used.includes(slider.key)) {
+          hits.push({
+            code: 'B2',
+            detail: `滑块「${slider.label}」绑在系数 ${slider.key} 上，而 ${curve} 族的公式只用到 ${used.join('/')}，拖它曲线不动`,
+          });
+        }
+      }
+      const count = finiteCurvePointCount(curve, coefficients, xAxis);
+      if (count < 2) {
+        hits.push({
+          code: 'B4',
+          detail: `默认系数下 121 个采样点里只有 ${count} 个能画，首屏是一副空坐标轴`,
+        });
+      }
+      break;
+    }
+    case 'layered_graph': {
+      const nodes = config.params.layers.flatMap((layer) => layer.nodes);
+      if (nodes.every((node) => !node.note)) {
+        hits.push({ code: 'B3', detail: `${nodes.length} 个节点没有一个带说明，点下去只有高亮，不出内容` });
+      }
+      break;
+    }
+    case 'rag_retrieval_playground':
+      break;
+  }
+
+  return hits;
+}
+
 type ValidateResult =
   | { ok: true; config: TemplateWidgetConfig }
-  | { ok: false; error: string };
+  | { ok: false; error: string; redLines?: TemplateQualityRedLineHit[] };
 
 /**
  * 按模板校验参数。结构校验交给 zod，跨字段一致性（方阵、等长）手工补。
@@ -431,6 +573,16 @@ export function validateTemplateParams(
     name: meta?.name?.trim() || template.label,
     ...(meta?.guide?.trim() ? { guide: meta.guide.trim() } : {}),
   };
+  const accept = (config: TemplateWidgetConfig): ValidateResult => {
+    const redLines = checkTemplateQualityRedLines(config);
+    return redLines.length === 0
+      ? { ok: true, config }
+      : {
+          ok: false,
+          error: redLines.map((hit) => `[${hit.code}] ${hit.detail}`).join('; '),
+          redLines,
+        };
+  };
 
   switch (template.id) {
     case 'attention_playground': {
@@ -443,7 +595,7 @@ export function validateTemplateParams(
       if (focusDefault !== undefined && focusDefault >= tokens.length) {
         return { ok: false, error: `focusDefault (${focusDefault}) out of range for ${tokens.length} tokens` };
       }
-      return { ok: true, config: { ...base, templateId: template.id, params: parsed.data } };
+      return accept({ ...base, templateId: template.id, params: parsed.data });
     }
     case 'bpe_merge_stepper': {
       const parsed = bpeSchema.safeParse(params);
@@ -451,17 +603,17 @@ export function validateTemplateParams(
       if (parsed.data.captions.length !== parsed.data.steps.length) {
         return { ok: false, error: `captions length (${parsed.data.captions.length}) must equal steps length (${parsed.data.steps.length})` };
       }
-      return { ok: true, config: { ...base, templateId: template.id, params: parsed.data } };
+      return accept({ ...base, templateId: template.id, params: parsed.data });
     }
     case 'temperature_sampler': {
       const parsed = temperatureSchema.safeParse(params);
       if (!parsed.success) return { ok: false, error: formatZodError(parsed.error) };
-      return { ok: true, config: { ...base, templateId: template.id, params: parsed.data } };
+      return accept({ ...base, templateId: template.id, params: parsed.data });
     }
     case 'rag_retrieval_playground': {
       const parsed = ragSchema.safeParse(params);
       if (!parsed.success) return { ok: false, error: formatZodError(parsed.error) };
-      return { ok: true, config: { ...base, templateId: template.id, params: parsed.data } };
+      return accept({ ...base, templateId: template.id, params: parsed.data });
     }
     case 'parameter_curve': {
       const parsed = curveSchema.safeParse(params);
@@ -492,12 +644,12 @@ export function validateTemplateParams(
       if (sliders.length === 2 && sliders[0].key === sliders[1].key) {
         return { ok: false, error: `two sliders bound to the same coefficient "${sliders[0].key}"` };
       }
-      return { ok: true, config: { ...base, templateId: template.id, params: parsed.data } };
+      return accept({ ...base, templateId: template.id, params: parsed.data });
     }
     case 'process_stepper': {
       const parsed = stepperSchema.safeParse(params);
       if (!parsed.success) return { ok: false, error: formatZodError(parsed.error) };
-      return { ok: true, config: { ...base, templateId: template.id, params: parsed.data } };
+      return accept({ ...base, templateId: template.id, params: parsed.data });
     }
     case 'tradeoff_matrix': {
       const parsed = tradeoffSchema.safeParse(params);
@@ -510,7 +662,7 @@ export function validateTemplateParams(
           error: `option "${bad.name}" has ${bad.cells.length} cells but there are ${dimensions.length} dimensions; every option needs exactly one cell per dimension, in the same order`,
         };
       }
-      return { ok: true, config: { ...base, templateId: template.id, params: parsed.data } };
+      return accept({ ...base, templateId: template.id, params: parsed.data });
     }
     case 'layered_graph': {
       const parsed = graphSchema.safeParse(params);
@@ -542,7 +694,7 @@ export function validateTemplateParams(
           return { ok: false, error: `edge "${e.from}" -> "${e.to}" joins two nodes in the same layer; edges must cross layers` };
         }
       }
-      return { ok: true, config: { ...base, templateId: template.id, params: parsed.data } };
+      return accept({ ...base, templateId: template.id, params: parsed.data });
     }
   }
 }

@@ -22,8 +22,10 @@ import {
   getServerTTSProviders,
   resolveImageApiKey,
   resolveImageBaseUrl,
+  resolveImageModel,
   resolveVideoApiKey,
   resolveVideoBaseUrl,
+  resolveVideoModel,
   resolveTTSApiKey,
   resolveTTSBaseUrl,
 } from '@/lib/server/provider-config';
@@ -100,7 +102,7 @@ export async function generateMediaForClassroom(
           log.warn(`No API key for image provider "${providerId}", skipping ${req.elementId}`);
           continue;
         }
-        const model = providerConfig?.models?.[0]?.id;
+        const model = resolveImageModel(providerId) ?? providerConfig?.models?.[0]?.id;
 
         const result = await generateImage(
           { providerId, apiKey, baseUrl: resolveImageBaseUrl(providerId), model },
@@ -141,7 +143,7 @@ export async function generateMediaForClassroom(
           continue;
         }
         const providerConfig = VIDEO_PROVIDERS[providerId];
-        const model = providerConfig?.models?.[0]?.id;
+        const model = resolveVideoModel(providerId) ?? providerConfig?.models?.[0]?.id;
 
         const normalized = normalizeVideoOptions(providerId, {
           prompt: req.prompt,

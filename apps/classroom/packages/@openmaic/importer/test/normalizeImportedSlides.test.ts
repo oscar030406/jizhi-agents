@@ -64,6 +64,49 @@ describe('normalizeImportedSlides', () => {
 });
 
 describe('parsedToSlides · normalize boundary', () => {
+  it('ignores a custom shape without a path instead of crashing', async () => {
+    const json = {
+      size: { width: 960, height: 540 },
+      themeColors: [],
+      slides: [
+        {
+          fill: { type: 'color', value: '#ffffff' },
+          note: '',
+          layoutElements: [],
+          elements: [
+            {
+              type: 'shape',
+              shapType: 'custom',
+              left: 0,
+              top: 0,
+              width: 100,
+              height: 100,
+              name: 'empty custom geometry',
+              order: 1,
+              rotate: 0,
+              content: '<div></div>',
+              borderWidth: 0,
+              borderColor: '#000000',
+              borderType: 'solid',
+              borderStrokeDasharray: '0',
+              vAlign: 'mid',
+              isFlipH: false,
+              isFlipV: false,
+            },
+          ],
+        },
+      ],
+    };
+
+    const slides = await parsedToSlides(json as unknown as Parameters<typeof parsedToSlides>[0]);
+    expect(slides).toHaveLength(1);
+    expect(slides[0].elements).toHaveLength(1);
+    expect(slides[0].elements[0]).toMatchObject({
+      type: 'shape',
+      path: expect.stringContaining('M 0 0'),
+    });
+  });
+
   it("keeps an unfilled shape transparent end to end — the boundary must not default the transform's fill: ''", async () => {
     const json = {
       size: { width: 960, height: 540 },

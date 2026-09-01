@@ -25,6 +25,8 @@ const mocks = vi.hoisted(() => ({
   callLLM: vi.fn(),
   fetchEvidence: vi.fn(),
   fetchLearnerBlueprint: vi.fn(),
+  corpusUnavailableReason: vi.fn(),
+  zeroEvidenceReason: vi.fn(),
 }));
 
 vi.mock('@/lib/server/resolve-model', () => ({ resolveModel: mocks.resolveModel }));
@@ -43,6 +45,9 @@ vi.mock('@/lib/generation/scene-generator', () => ({
 }));
 
 vi.mock('@/lib/server/classroom-storage', () => ({ persistClassroom: mocks.persistClassroom }));
+vi.mock('@/lib/server/knowledge-center', () => ({
+  corpusUnavailableReason: mocks.corpusUnavailableReason,
+}));
 
 // 只替换「出网」的那几个函数，其余（presentationTier / blueprintDirective / 计票口径）
 // 用真实现——这条测试要验的正是它们的输出，桩掉就什么都没验。
@@ -56,7 +61,7 @@ vi.mock('@/lib/server/classroom-storage', () => ({ persistClassroom: mocks.persi
 vi.mock('@/lib/generation/evidence-grounding', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/generation/evidence-grounding')>()),
   fetchEvidence: mocks.fetchEvidence,
-  zeroEvidenceReason: async () => null,
+  zeroEvidenceReason: mocks.zeroEvidenceReason,
 }));
 vi.mock('@/lib/generation/learner-profile', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/generation/learner-profile')>()),
@@ -135,8 +140,8 @@ async function generate(input: Record<string, unknown> = {}) {
  * 完课时再写一次完整版。`generation` 元数据只有完整版才有，所以断言必须看最后一次。
  * 原来写的是 `calls[0][0]`，那是单次落盘时代的写法，现在指向的是第一张半成品快照。
  */
-function lastPersisted(mocks: { persistClassroom: { mock: { calls: any[][] } } }) {
-  const calls = mocks.persistClassroom.mock.calls;
+function lastPersisted(source: Pick<typeof mocks, 'persistClassroom'>) {
+  const calls = source.persistClassroom.mock.calls;
   expect(calls.length).toBeGreaterThan(0);
   return calls[calls.length - 1][0];
 }
@@ -195,6 +200,8 @@ describe('生成期元数据落库', () => {
     mocks.generateSceneActions.mockResolvedValue([]);
     mocks.fetchEvidence.mockResolvedValue(null);
     mocks.fetchLearnerBlueprint.mockResolvedValue(null);
+    mocks.corpusUnavailableReason.mockResolvedValue(null);
+    mocks.zeroEvidenceReason.mockResolvedValue(null);
     mocks.createSceneWithActions.mockImplementation(
       (
         sceneOutline: { type: string; title: string; order: number },
@@ -235,6 +242,11 @@ describe('生成期元数据落库', () => {
 
     const result = await generate({ learnerProfile: profile });
 
+    expect(mocks.fetchLearnerBlueprint).toHaveBeenCalledTimes(1);
+    expect(mocks.generateSceneOutlinesFromRequirements.mock.calls[0][4]).toMatchObject({
+      learnerBlueprint: blueprint,
+    });
+
     // 场景级：k1 去重后只算一次 → rag 2 票、llm_basics 1 票，主概念 rag
     expect(result.scenes[0].concepts).toEqual({
       concept: 'rag',
@@ -261,6 +273,13 @@ describe('生成期元数据落库', () => {
         engineeringLevel: 3,
       },
     });
+  });
+
+  it('domain-only 画像的有效语料库同时进入 readiness 与零证据闸', async () => {
+    await generate({ learnerProfile: { domain: 'domain-only' } });
+
+    expect(mocks.corpusUnavailableReason).toHaveBeenCalledWith('domain-only');
+    expect(mocks.zeroEvidenceReason).toHaveBeenCalledWith('教会我 RAG', 'domain-only');
   });
 
   it('显式选了知识库就记进课级元数据；没选不占位', async () => {
@@ -348,6 +367,13 @@ describe('生成期元数据落库', () => {
     expect(calls[calls.length - 1].generating).toBeUndefined();
   });
 
+  it('机构归属贯穿骨架、增量快照和完课存档', async () => {
+    await generate({ ownerOrgId: 'org-a' });
+    const snapshots = mocks.persistClassroom.mock.calls.map((call) => call[0]);
+    expect(snapshots.length).toBeGreaterThan(1);
+    expect(snapshots.every((snapshot) => snapshot.ownerOrgId === 'org-a')).toBe(true);
+  });
+
   it('检索命中了但块上没有概念标签：同样整个字段不写', async () => {
     mocks.fetchEvidence.mockResolvedValue({
       chunks: [{ source_id: 'k9', title: 'C', content: 'c', concept_tags: [] }],
@@ -358,5 +384,15 @@ describe('生成期元数据落库', () => {
     const result = await generate();
 
     expect('concepts' in result.scenes[0]).toBe(false);
+  });
+
+  it('完课快照在教学契约复核前写入全课程事实终审，审核不可用时 fail closed', async () => {
+    await generate();
+
+    expect(lastPersisted(mocks).stage.courseAudit).toMatchObject({
+      verdict: 'flagged',
+      decision: 'block_pending_review',
+      totalClaims: 0,
+    });
   });
 });

@@ -73,6 +73,8 @@ export interface CourseGenerationMeta {
 
 export interface PersistedClassroomData {
   id: string;
+  /** 生成请求所属机构；有值时课程读取优先按机构隔离，不被公共知识库语义冲掉。 */
+  ownerOrgId?: string;
   stage: Stage;
   scenes: Scene[];
   createdAt: string;
@@ -125,6 +127,7 @@ export async function readClassroom(id: string): Promise<PersistedClassroomData 
 export async function persistClassroom(
   data: {
     id: string;
+    ownerOrgId?: string;
     stage: Stage;
     scenes: Scene[];
     generation?: CourseGenerationMeta;
@@ -144,6 +147,7 @@ export async function persistClassroom(
 ): Promise<PersistedClassroomData & { url: string }> {
   const classroomData: PersistedClassroomData = {
     id: data.id,
+    ...(data.ownerOrgId ? { ownerOrgId: data.ownerOrgId } : {}),
     stage: data.stage,
     scenes: data.scenes,
     createdAt: new Date().toISOString(),

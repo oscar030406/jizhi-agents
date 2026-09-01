@@ -23,15 +23,20 @@ describe('embedded persistence development authentication', () => {
     mockedAccountForSession.mockResolvedValue(null);
   });
 
-  it('accepts the configured bearer token and learner partition', async () => {
-    await expect(
-      authenticatePersistenceRequest(
-        request({
-          authorization: 'Bearer shared-secret',
-          'x-learner-key': 'anon:learner-1',
-        }),
-      ),
-    ).resolves.toEqual({ learnerKey: 'anon:learner-1' });
+  it('keeps anonymous subjects in a namespace that cannot impersonate account ids', async () => {
+    for (const [header, learnerKey] of [
+      ['anon:learner-1', 'anon:learner-1'],
+      ['acct_victim', 'anon:acct_victim'],
+    ]) {
+      await expect(
+        authenticatePersistenceRequest(
+          request({
+            authorization: 'Bearer shared-secret',
+            'x-learner-key': header,
+          }),
+        ),
+      ).resolves.toEqual({ learnerKey });
+    }
   });
 
   // 写路径鉴权不许放宽：有会话时 learnerKey 只能来自服务端会话。客户端

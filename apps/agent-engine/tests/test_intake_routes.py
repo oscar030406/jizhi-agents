@@ -56,7 +56,7 @@ def client(monkeypatch):
 def _post(client, data):
     return client.post(
         "/api/domain-intake/runs",
-        headers={"x-internal-token": "probe-token"},
+        headers={"x-internal-token": "probe-token", "x-jizhi-owner-org": "org-a"},
         files=[("files", ("a.md", "# t\n\n正文".encode("utf-8"), "text/markdown"))],
         data=data,
     )
@@ -68,6 +68,7 @@ def test_switches_default_off(client):
     assert seen["build_vector"] is False
     assert seen["extract_concepts"] is False
     assert seen["trial_run"] is False
+    assert seen["owner_org_id"] == "org-a"
 
 
 def test_switches_pass_through(client):

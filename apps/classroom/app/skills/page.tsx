@@ -517,7 +517,7 @@ export default function SkillsPage() {
   // 客户端那句只当降级——引擎还没答上来的头几百毫秒里，别让主域快照先糊到外域学员脸上。
   const serverEmpty = Boolean(data && !data.jobs?.length && data.reason);
   const clientForeign = Boolean(context?.domain) && !context?.isAi;
-  const foreignDomain = serverEmpty || clientForeign;
+  const foreignDomain = data ? serverEmpty : clientForeign;
   const totalSkills = data?.jobs.reduce((sum, job) => sum + job.skills.length, 0) ?? 0;
   const coveredSkills =
     data?.jobs.reduce((sum, job) => sum + job.skills.filter((skill) => skill.covered).length, 0) ??

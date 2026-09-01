@@ -103,3 +103,37 @@ def test_独立库的闭包不长出别域概念_主库仍走并集():
     assert sm, "智能制造有 66 个概念，取不到说明域过滤没接上"
     assert not (sm & ai), f"跨域串味：{sorted(sm & ai)[:5]}"
     assert sm <= known_concepts(), "域内概念必须是全域并集的子集"
+
+
+def test_curated_ai_path_only_moves_profile_cursor_without_inventing_concepts():
+    """AI 仍用既有策展拓扑；画像只标状态，不改节点、不另排一条路。"""
+    curated = {
+        "version": "test",
+        "tracks": [
+            {
+                "id": "main",
+                "title": "既有模块",
+                "nodeIds": ["base", "advanced", "project"],
+            }
+        ],
+        "nodes": [
+            {"id": "base", "title": "基础概念", "prereq": []},
+            {"id": "advanced", "title": "进阶概念", "prereq": ["base"]},
+            {"id": "project", "title": "应用项目", "prereq": ["advanced"]},
+        ],
+    }
+
+    path = build_domain_path(
+        "ai",
+        profile={"education": "本科", "conceptMastery": {"基础": 0.9}},
+        concept_mastery={"基础": 0.9},
+        curated_path=curated,
+    )
+    concepts = [concept for stage in path["stages"] for concept in stage["concepts"]]
+
+    assert path["source"] == "curated"
+    assert [concept["name"] for concept in concepts] == ["基础概念", "进阶概念", "应用项目"]
+    assert [concept["status"] for concept in concepts] == ["mastered", "current", "future"]
+    assert path["personalization"]["matched_mastery"] == 1
+    assert path["personalization"]["counts"] == {"mastered": 1, "current": 1, "future": 1}
+    assert path["personalization"]["current"] == ["进阶概念"]

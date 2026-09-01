@@ -8,6 +8,7 @@ import { buildRequestOrigin } from '@/lib/server/classroom-storage';
 import { corpusOf } from '@/lib/generation/learner-profile';
 import { requireCorpusVisible } from '@/lib/server/corpus-access';
 import { createLogger } from '@/lib/logger';
+import { orgForAccount } from '@/lib/accounts/org-store';
 
 const log = createLogger('GenerateClassroom API');
 
@@ -48,15 +49,20 @@ export async function POST(req: NextRequest) {
     const access = await requireCorpusVisible(corpus);
     if (!access.ok) return access.response;
 
+    const ownerOrgId = access.account ? (await orgForAccount(access.account.id))?.id : undefined;
+    const generationInput: GenerateClassroomInput = ownerOrgId
+      ? { ...body, ownerOrgId }
+      : body;
+
     const baseUrl = buildRequestOrigin(req);
     const jobId = nanoid(10);
-    const job = await createClassroomGenerationJob(jobId, body, {
+    const job = await createClassroomGenerationJob(jobId, generationInput, {
       ownerAccountId: access.account?.id ?? null,
       corpus,
     });
     const pollUrl = `${baseUrl}/api/generate-classroom/${jobId}`;
 
-    after(() => runClassroomGenerationJob(jobId, body, baseUrl));
+    after(() => runClassroomGenerationJob(jobId, generationInput, baseUrl));
 
     return apiSuccess(
       {

@@ -39,6 +39,7 @@ import {
   excerptDirective,
   injectExcerpts,
   type ExcerptPlacement,
+  type EvidenceChunk,
 } from '@/lib/generation/evidence-grounding';
 import {
   corpusOf,
@@ -47,7 +48,6 @@ import {
   excerptDifficultyCap,
   excerptCodeLineCap,
   presentationTier,
-  type LearnerBlueprint,
 } from '@/lib/generation/learner-profile';
 import {
   coherenceDirective,
@@ -59,7 +59,11 @@ import {
 } from '@/lib/generation/course-coherence';
 import { sceneConceptsFromChunks } from '@/lib/evidence/scene-concepts';
 import type { CourseGenerationMeta } from '@/lib/server/classroom-storage';
-import { auditSceneContent, extractTeachingText } from '@/lib/generation/hallucination-audit';
+import {
+  auditCourseContent,
+  auditSceneContent,
+  extractTeachingText,
+} from '@/lib/generation/hallucination-audit';
 import { extractContentVerifiables, verifyContent } from '@/lib/generation/content-verify';
 import { buildAuditPanel } from '@/lib/server/audit-panel';
 import {
@@ -84,6 +88,8 @@ const log = createLogger('Classroom');
 
 export interface GenerateClassroomInput {
   requirement: string;
+  /** 仅由服务端会话派生；HTTP 请求体里的同名字段不会被转发。 */
+  ownerOrgId?: string;
   pdfContent?: { text: string; images: string[] };
   enableWebSearch?: boolean;
   webSearchProviderId?: WebSearchProviderId;
@@ -254,9 +260,10 @@ async function generateClassroomInner(
   stageId: string,
 ): Promise<GenerateClassroomResult> {
   const { requirement, pdfContent } = input;
+  const effectiveCorpus = corpusOf(input.learnerProfile) ?? 'ai';
 
   // 与交互式路径同一道闸：显式选了没建索引的库，一开始就说清楚，不许跑到一半空手而归。
-  const corpusBlock = await corpusUnavailableReason(input.learnerProfile?.corpus);
+  const corpusBlock = await corpusUnavailableReason(effectiveCorpus);
   if (corpusBlock) throw new Error(corpusBlock);
 
   // 库建好了不等于查得到。这一道问的是「这条需求在这个库里有没有东西」——
@@ -264,7 +271,7 @@ async function generateClassroomInner(
   // 产品照样生成了三门通用课，证据块 0、所有屏 grounded:false。
   // 记录是诚实的，但学习者拿到的是一门看起来正常、却跟所选库毫无关系的课。
   // 探针只在「确实零命中」时拦车；没配检索或探针自身失败一律放行（见 zeroEvidenceReason）。
-  const zeroBlock = await zeroEvidenceReason(requirement, input.learnerProfile?.corpus);
+  const zeroBlock = await zeroEvidenceReason(requirement, effectiveCorpus);
   if (zeroBlock) throw new Error(zeroBlock);
 
   await options.onProgress?.({
@@ -368,10 +375,13 @@ async function generateClassroomInner(
     requirement,
     ...(input.learnerProfile ? { learnerProfile: input.learnerProfile } : {}),
   };
+  const courseBlueprint = requirements.learnerProfile
+    ? await fetchLearnerBlueprint(requirement, requirements.learnerProfile)
+    : null;
   const domainRegistry = await readDomainRegistry();
   const outlineRouting = resolveOutlineEngine(
     requirements,
-    domainRegistry.entries[corpusOf(requirements.learnerProfile) ?? 'ai'],
+    domainRegistry.entries[effectiveCorpus],
     { vocationalEnabled: isVocationalTaskEngineEnabled() },
   );
   const vocationalActive = outlineRouting.engine === 'task-engine';
@@ -454,6 +464,7 @@ async function generateClassroomInner(
       researchContext,
       // NO teacherContext — agents haven't been generated yet
       outlineEngine: outlineRouting.engine,
+      ...(courseBlueprint ? { learnerBlueprint: courseBlueprint } : {}),
       enforceLearningContract: true,
     },
   );
@@ -556,6 +567,7 @@ async function generateClassroomInner(
     await persistClassroom(
       {
         id: stageId,
+        ...(input.ownerOrgId ? { ownerOrgId: input.ownerOrgId } : {}),
         stage,
         scenes: [],
         generating: {
@@ -594,10 +606,8 @@ async function generateClassroomInner(
   let generatedScenes = 0;
   // 全课共享：同一段教材原文只整段贴一次，之后的场景换成一行回指
   const usedExcerpts = new Set<string>();
-  // 课级元数据的来源：整门课用同一份画像问蓝图，取第一次真的拿到的那份。
-  // 引擎离线 / 没有画像时它一直是 null，落库时整个 generation 字段不写。
-  let courseBlueprint: LearnerBlueprint | null = null;
-
+  // 全课终审复用逐屏检索到的批准材料；按 source_id 去重，不再发起第二套检索。
+  const courseEvidenceChunks = new Map<string, EvidenceChunk>();
   /** 第一段（串行）产出、第二段（并发审核）消费的中间态。 */
   type PreparedScene = {
     index: number;
@@ -843,6 +853,13 @@ async function generateClassroomInner(
         continue;
       }
 
+      // 只把真正进入最终课程的场景材料纳入终审；生成失败场景的候选资料不能反过来约束成品。
+      for (const chunk of sceneEvidence?.chunks ?? []) {
+        if (!courseEvidenceChunks.has(chunk.source_id)) {
+          courseEvidenceChunks.set(chunk.source_id, chunk);
+        }
+      }
+
       generatedScenes += 1;
 
       // 每落一屏就把课程文件写一次盘，带 `generating` 标记。
@@ -858,6 +875,7 @@ async function generateClassroomInner(
         await persistClassroom(
           {
             id: stageId,
+            ...(input.ownerOrgId ? { ownerOrgId: input.ownerOrgId } : {}),
             stage,
             scenes: store.getState().scenes,
             generating: {
@@ -910,9 +928,8 @@ async function generateClassroomInner(
       // one-size-fits-all scenes while the UI implied otherwise.
       // 显式选的知识库优先，否则沿用培训领域；未建的库返回空而不是拿别的领域
       // 语料顶上（见 fetchEvidence）。检索、审核标注共用这一个值。
-      const sceneCorpus = corpusOf(requirements.learnerProfile);
-      const [sceneEvidence, scenePlan] = await Promise.all([
-        fetchEvidence(
+      const sceneCorpus = effectiveCorpus;
+      const sceneEvidence = await fetchEvidence(
           `${courseTitle ?? ''} ${safeOutline.title} ${safeOutline.description ?? ''}`.trim(),
           sceneCorpus,
           undefined,
@@ -923,11 +940,8 @@ async function generateClassroomInner(
             : undefined,
           // 摘录代码形态也跟姿态档走：难度档管不住代码长度，零基础档限 5 行
           requirements.learnerProfile ? excerptCodeLineCap(requirements.learnerProfile) : undefined,
-        ),
-        requirements.learnerProfile
-          ? fetchLearnerBlueprint(requirement, requirements.learnerProfile)
-          : Promise.resolve(null),
-      ]);
+        );
+      const scenePlan = courseBlueprint;
       const assemblyMode = sceneEvidence != null && process.env.EXCERPT_ASSEMBLY !== '0';
       // 四段指令**只给正文生成器**，攒在这里，不往 `safeOutline.description` 上原地累加。
       //
@@ -949,7 +963,6 @@ async function generateClassroomInner(
         directives +=
           blueprintDirective(scenePlan, requirements.learnerProfile!) +
           (coherenceOn ? coherenceDirective(frame, progress) : '');
-        courseBlueprint ??= scenePlan;
       }
       // 正文生成用带指令的这一份；`safeOutline` 本身保持原样，讲稿与审核看到的是干净描述。
       const outlineForContent = directives
@@ -1166,6 +1179,46 @@ async function generateClassroomInner(
         }
       : undefined;
 
+  // 逐屏审核之后，再用同一判官团读取事实断言账本与 Action 可见语义。它只裁决跨页数字、定义、
+  // 互斥命题及与批准材料的冲突，不提供修订入口；未消解问题随 stage 落盘并卡住发布门。
+  if (isAuditGateEnabled()) {
+    const chunks = [...courseEvidenceChunks.values()];
+    const courseAudit = await auditCourseContent({
+      courseTitle: stage.name,
+      scenes: scenes.map((scene, index) => ({
+        id: scene.id,
+        outlineId: scene.outlineId,
+        title: scene.title?.trim() || `场景 ${index + 1}`,
+        type: scene.type,
+        content: scene.content,
+        actions: scene.actions,
+        audit: scene.audit,
+      })),
+      judgeCalls: auditPanel.judgeCalls,
+      ...(auditPanel.arbiterCall ? { arbiterCall: auditPanel.arbiterCall } : {}),
+      defendCall: auditPanel.defendCall,
+      judgeModel: auditPanel.judgeModel,
+      judgeModels: auditPanel.judgeModels,
+      ...(auditPanel.arbiterModel ? { arbiterModel: auditPanel.arbiterModel } : {}),
+      ...(chunks.length
+        ? {
+            evidence: evidenceForJudge({ chunks, matchedConcepts: [], summary: '' }),
+            evidenceCount: chunks.length,
+            sources: chunks.map((chunk) => ({
+              source_id: chunk.source_id,
+              title: chunk.title,
+            })),
+            ...(stage.origin?.corpus ? { corpus: stage.origin.corpus } : {}),
+          }
+        : { evidenceCount: 0 }),
+    });
+    stage.courseAudit = courseAudit;
+    log.info(
+      `Course fact review: ${courseAudit.verdict} / ${courseAudit.decision} ` +
+        `(${courseAudit.totalClaims} cross-scene issues)`,
+    );
+  }
+
   // Recheck the exact final scene payload immediately before persistence. A failed scene stays
   // absent and therefore keeps the course as a draft; this gate never fabricates replacement work.
   const contractFulfillment = validateLearningContractFulfillment(stage.learningContract, scenes);
@@ -1178,6 +1231,7 @@ async function generateClassroomInner(
   const persisted = await persistClassroom(
     {
       id: stageId,
+      ...(input.ownerOrgId ? { ownerOrgId: input.ownerOrgId } : {}),
       stage,
       scenes,
       ...(generation ? { generation } : {}),

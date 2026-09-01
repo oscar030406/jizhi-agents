@@ -108,17 +108,22 @@ describe('ParameterCurve', () => {
   });
 
   it('survives a curve whose values overflow to Infinity', () => {
-    const config = validateTemplateParams('parameter_curve', {
-      curve: 'exponential',
-      coefficients: { a: 1, b: 700, c: 0 },
-      sliders: [{ key: 'b', label: '增长率', min: 1, max: 900, step: 1 }],
-      xAxis: { label: 'x', min: 1, max: 5 },
-      yAxis: { label: 'y' },
-      observations: ['指数会爆', '爆了也不该白屏'],
+    // 生成门禁会拒绝这种空首屏；这里绕过门禁，只验证旧数据不会把渲染器炸白。
+    const config = configFor('parameter_curve') as Extract<
+      TemplateWidgetConfig,
+      { templateId: 'parameter_curve' }
+    >;
+    const w = mount({
+      ...config,
+      params: {
+        curve: 'exponential',
+        coefficients: { a: 1, b: 700, c: 0 },
+        sliders: [{ key: 'b', label: '增长率', min: 1, max: 900, step: 1 }],
+        xAxis: { label: 'x', min: 1, max: 5 },
+        yAxis: { label: 'y' },
+        observations: ['指数会爆', '爆了也不该白屏'],
+      },
     });
-    expect(config.ok).toBe(true);
-    if (!config.ok) return;
-    const w = mount(config.config);
     // e^3500 = Infinity，全部采样点被丢弃 → 不画线，但坐标轴与说明照常在
     expect(w.host.textContent).toContain('指数会爆');
     w.unmount();

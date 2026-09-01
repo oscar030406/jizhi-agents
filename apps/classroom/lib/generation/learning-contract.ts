@@ -3,6 +3,28 @@ import type { SceneOutline, UserRequirements } from '@/lib/types/generation';
 
 export type OutlineEngine = 'standard' | 'interactive' | 'task-engine';
 
+export const TEACHING_STRATEGIES = ['standard', 'ubd', 'feynman'] as const;
+export type TeachingStrategy = (typeof TEACHING_STRATEGIES)[number];
+
+export interface UbDStrategyEvidence {
+  essentialQuestion: string;
+  enduringUnderstanding: string;
+  performanceEvidence: string;
+  reflectionRevision: string;
+  transfer: string;
+}
+
+export interface FeynmanStrategyEvidence {
+  learnerExplanation: string;
+  gapDiagnosis: string;
+  diagnosedGapCount: 1 | 2;
+  plainLanguageRebuild: string;
+  analogyBoundary: string;
+  transfer: string;
+}
+
+export type TeachingStrategyEvidence = UbDStrategyEvidence | FeynmanStrategyEvidence;
+
 export interface OutlineEngineDecision {
   engine: OutlineEngine;
   reason: 'standard' | 'interactive' | 'request' | 'requirement' | 'domain-metadata';
@@ -19,6 +41,8 @@ export interface LearningObjectiveContract {
 }
 
 export interface LearningContract {
+  teachingStrategy: TeachingStrategy;
+  strategyEvidence?: TeachingStrategyEvidence;
   objectives: LearningObjectiveContract[];
   prerequisiteActivation: string[];
   demonstration: string[];
@@ -51,7 +75,9 @@ export type LearningContractPhase =
  * 知道原计划有哪些场景、各教学环节依赖哪些场景，才能发现生成途中被跳过或降级的页。
  */
 export interface LearningContractPlan {
-  version: 1;
+  version: 2;
+  teachingStrategy: TeachingStrategy;
+  strategyEvidence?: TeachingStrategyEvidence;
   plannedScenes: Array<{
     sceneId: string;
     type: SceneOutline['type'];
@@ -147,18 +173,144 @@ function normalizedStrings(value: unknown): string[] {
   return [...new Set(value.map(normalizedString).filter(Boolean))];
 }
 
+function isTeachingStrategy(value: string): value is TeachingStrategy {
+  return TEACHING_STRATEGIES.includes(value as TeachingStrategy);
+}
+
+function validateStrategyEvidence(
+  raw: unknown,
+  strategy: TeachingStrategy,
+  scenes: ReadonlyMap<string, { type: SceneOutline['type'] }>,
+  violations: string[],
+): TeachingStrategyEvidence | undefined {
+  if (strategy === 'standard') return undefined;
+  if (!isRecord(raw)) {
+    violations.push(`${strategy} strategyEvidence is missing`);
+    return undefined;
+  }
+
+  if (strategy === 'ubd') {
+    const evidence: UbDStrategyEvidence = {
+      essentialQuestion: normalizedString(raw.essentialQuestion),
+      enduringUnderstanding: normalizedString(raw.enduringUnderstanding),
+      performanceEvidence: normalizedString(raw.performanceEvidence),
+      reflectionRevision: normalizedString(raw.reflectionRevision),
+      transfer: normalizedString(raw.transfer),
+    };
+    if (!evidence.essentialQuestion) violations.push('ubd essentialQuestion is missing');
+    if (!evidence.enduringUnderstanding) violations.push('ubd enduringUnderstanding is missing');
+    for (const field of ['performanceEvidence', 'reflectionRevision', 'transfer'] as const) {
+      const sceneId = evidence[field];
+      if (!sceneId) violations.push(`ubd ${field} sceneId is missing`);
+      else if (!scenes.has(sceneId)) {
+        violations.push(`ubd ${field} references an unknown scene: ${sceneId}`);
+      }
+    }
+    for (const field of ['performanceEvidence', 'transfer'] as const) {
+      const sceneId = evidence[field];
+      if (sceneId && scenes.has(sceneId) && !isAssessmentScene(scenes.get(sceneId))) {
+        violations.push(`ubd ${field} must reference a quiz or pbl scene`);
+      }
+    }
+    const refs = [evidence.performanceEvidence, evidence.reflectionRevision, evidence.transfer];
+    const positions = new Map([...scenes.keys()].map((sceneId, index) => [sceneId, index]));
+    if (
+      refs.every((sceneId) => positions.has(sceneId)) &&
+      refs.some(
+        (sceneId, index) =>
+          index > 0 && positions.get(refs[index - 1]!)! >= positions.get(sceneId)!,
+      )
+    ) {
+      violations.push(
+        'ubd strategy scenes must be ordered: performanceEvidence -> reflectionRevision -> transfer',
+      );
+    }
+    return evidence;
+  }
+
+  const gapCount = raw.diagnosedGapCount;
+  const evidence = {
+    learnerExplanation: normalizedString(raw.learnerExplanation),
+    gapDiagnosis: normalizedString(raw.gapDiagnosis),
+    plainLanguageRebuild: normalizedString(raw.plainLanguageRebuild),
+    analogyBoundary: normalizedString(raw.analogyBoundary),
+    transfer: normalizedString(raw.transfer),
+  };
+  if (gapCount !== 1 && gapCount !== 2) {
+    violations.push('feynman diagnosedGapCount must be 1 or 2');
+  }
+  for (const field of [
+    'learnerExplanation',
+    'gapDiagnosis',
+    'plainLanguageRebuild',
+    'analogyBoundary',
+    'transfer',
+  ] as const) {
+    const sceneId = evidence[field];
+    if (!sceneId) violations.push(`feynman ${field} sceneId is missing`);
+    else if (!scenes.has(sceneId)) {
+      violations.push(`feynman ${field} references an unknown scene: ${sceneId}`);
+    }
+  }
+  for (const field of ['learnerExplanation', 'gapDiagnosis', 'plainLanguageRebuild'] as const) {
+    const sceneId = evidence[field];
+    if (sceneId && scenes.has(sceneId) && !isLearnerInputScene(scenes.get(sceneId))) {
+      violations.push(`feynman ${field} must reference an interactive or pbl scene`);
+    }
+  }
+  if (
+    evidence.transfer &&
+    scenes.has(evidence.transfer) &&
+    !isAssessmentScene(scenes.get(evidence.transfer))
+  ) {
+    violations.push('feynman transfer must reference a quiz or pbl scene');
+  }
+  const refs = [
+    evidence.learnerExplanation,
+    evidence.gapDiagnosis,
+    evidence.plainLanguageRebuild,
+    evidence.analogyBoundary,
+    evidence.transfer,
+  ];
+  const positions = new Map([...scenes.keys()].map((sceneId, index) => [sceneId, index]));
+  if (
+    refs.every((sceneId) => positions.has(sceneId)) &&
+    refs.some(
+      (sceneId, index) => index > 0 && positions.get(refs[index - 1]!)! >= positions.get(sceneId)!,
+    )
+  ) {
+    violations.push(
+      'feynman strategy scenes must be ordered: learnerExplanation -> gapDiagnosis -> plainLanguageRebuild -> analogyBoundary -> transfer',
+    );
+  }
+  return gapCount === 1 || gapCount === 2
+    ? { ...evidence, diagnosedGapCount: gapCount }
+    : undefined;
+}
+
+function strategySceneRefs(evidence: TeachingStrategyEvidence | undefined): string[] {
+  if (!evidence) return [];
+  return 'essentialQuestion' in evidence
+    ? [evidence.performanceEvidence, evidence.reflectionRevision, evidence.transfer]
+    : [
+        evidence.learnerExplanation,
+        evidence.gapDiagnosis,
+        evidence.plainLanguageRebuild,
+        evidence.analogyBoundary,
+        evidence.transfer,
+      ];
+}
+
 function sameStrings(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
-function isAssessmentScene(outline: SceneOutline | undefined): boolean {
-  return Boolean(
-    outline &&
-    (outline.type === 'quiz' ||
-      outline.type === 'pbl' ||
-      (outline.type === 'interactive' &&
-        (outline.widgetType === 'game' || outline.widgetType === 'procedural-skill'))),
-  );
+function isAssessmentScene(outline: { type: SceneOutline['type'] } | undefined): boolean {
+  return outline?.type === 'quiz' || outline?.type === 'pbl';
+}
+
+function isLearnerInputScene(outline: { type: SceneOutline['type'] } | undefined): boolean {
+  return outline?.type === 'interactive' || outline?.type === 'pbl';
 }
 
 function isActivityScene(outline: SceneOutline | undefined): boolean {
@@ -174,7 +326,9 @@ export function buildLearningContractPlan(
   outlines: readonly SceneOutline[],
 ): LearningContractPlan {
   return {
-    version: 1,
+    version: 2,
+    teachingStrategy: contract.teachingStrategy,
+    ...(contract.strategyEvidence ? { strategyEvidence: contract.strategyEvidence } : {}),
     plannedScenes: outlines.map((outline) => ({
       sceneId: outline.id,
       type: outline.type,
@@ -195,6 +349,34 @@ function actualWidgetType(scene: LearningContractActualScene): string {
   return isRecord(scene.content) ? normalizedString(scene.content.widgetType) : '';
 }
 
+function actualActivityContentIsNonEmpty(scene: LearningContractActualScene): boolean {
+  if (!isRecord(scene.content)) return false;
+  if (scene.type === 'quiz') {
+    return Array.isArray(scene.content.questions) && scene.content.questions.length > 0;
+  }
+  if (scene.type === 'interactive') {
+    return (
+      Boolean(normalizedString(scene.content.html)) ||
+      (isRecord(scene.content.widgetConfig) && Object.keys(scene.content.widgetConfig).length > 0)
+    );
+  }
+  if (scene.type === 'pbl') {
+    const projectConfig = isRecord(scene.content.projectConfig) ? scene.content.projectConfig : {};
+    const projectInfo = isRecord(projectConfig.projectInfo) ? projectConfig.projectInfo : {};
+    const issueboard = isRecord(projectConfig.issueboard) ? projectConfig.issueboard : {};
+    const projectV2 = isRecord(scene.content.projectV2) ? scene.content.projectV2 : {};
+    return Boolean(
+      normalizedString(projectInfo.title) ||
+      normalizedString(projectInfo.description) ||
+      (Array.isArray(issueboard.issues) && issueboard.issues.length > 0) ||
+      normalizedString(projectV2.title) ||
+      normalizedString(projectV2.description) ||
+      (Array.isArray(projectV2.milestones) && projectV2.milestones.length > 0),
+    );
+  }
+  return true;
+}
+
 function actualSceneMatchesPhase(
   phase: LearningContractPhase | 'assessment',
   scene: LearningContractActualScene,
@@ -204,11 +386,7 @@ function actualSceneMatchesPhase(
   if (phase === 'feedbackRetry' || phase === 'transferApplication') {
     return scene.type === 'interactive' || scene.type === 'pbl' || scene.type === 'quiz';
   }
-  return (
-    scene.type === 'quiz' ||
-    scene.type === 'pbl' ||
-    (scene.type === 'interactive' && ['game', 'procedural-skill'].includes(actualWidgetType(scene)))
-  );
+  return scene.type === 'quiz' || scene.type === 'pbl';
 }
 
 /**
@@ -218,8 +396,13 @@ function actualSceneMatchesPhase(
 export function validateLearningContractFulfillment(
   input: unknown,
   scenes: readonly LearningContractActualScene[],
+  options: { actualContentReady?: boolean } = {},
 ): LearningContractFulfillment {
-  if (!isRecord(input) || input.version !== 1 || !Array.isArray(input.plannedScenes)) {
+  if (
+    !isRecord(input) ||
+    (input.version !== 1 && input.version !== 2) ||
+    !Array.isArray(input.plannedScenes)
+  ) {
     return { fulfilled: false, violations: ['learning contract plan is missing or invalid'] };
   }
   if (!isRecord(input.required)) {
@@ -227,6 +410,20 @@ export function validateLearningContractFulfillment(
   }
 
   const violations: string[] = [];
+  const legacyV1 = input.version === 1;
+  const requestedTeachingStrategy = normalizedString(input.teachingStrategy);
+  const teachingStrategy: TeachingStrategy = legacyV1
+    ? 'standard'
+    : isTeachingStrategy(requestedTeachingStrategy)
+      ? requestedTeachingStrategy
+      : 'standard';
+  if (!legacyV1 && !isTeachingStrategy(requestedTeachingStrategy)) {
+    violations.push(
+      requestedTeachingStrategy
+        ? `teachingStrategy must be one of: ${TEACHING_STRATEGIES.join(', ')}`
+        : 'teachingStrategy is missing from learning contract v2',
+    );
+  }
   const planned = new Map<
     string,
     { sceneId: string; type: SceneOutline['type']; widgetType?: SceneOutline['widgetType'] }
@@ -281,6 +478,30 @@ export function validateLearningContractFulfillment(
       violations.push(
         `planned scene widget changed: ${sceneId} expected ${expected.widgetType} got ${actualWidgetType(scene) || 'missing'}`,
       );
+    }
+    if (
+      !legacyV1 &&
+      options.actualContentReady !== false &&
+      scene.type === expected.type &&
+      ['quiz', 'interactive', 'pbl'].includes(expected.type) &&
+      !actualActivityContentIsNonEmpty(scene)
+    ) {
+      const missing =
+        expected.type === 'quiz'
+          ? 'questions'
+          : expected.type === 'interactive'
+            ? 'html or widgetConfig'
+            : 'task content';
+      violations.push(`${expected.type} scene has no ${missing}: ${sceneId}`);
+    }
+  }
+
+  const strategyEvidence = legacyV1
+    ? undefined
+    : validateStrategyEvidence(input.strategyEvidence, teachingStrategy, planned, violations);
+  for (const sceneId of strategySceneRefs(strategyEvidence).filter(Boolean)) {
+    if (!actual.has(sceneId)) {
+      violations.push(`${teachingStrategy} strategy scene is missing: ${sceneId}`);
     }
   }
 
@@ -356,8 +577,23 @@ export function validateAndRepairLearningContract(
 
   const violations: string[] = [];
   let repaired = false;
+  const requestedTeachingStrategy = normalizedString(input.teachingStrategy);
+  const teachingStrategy = isTeachingStrategy(requestedTeachingStrategy)
+    ? requestedTeachingStrategy
+    : 'standard';
+  if (!requestedTeachingStrategy) {
+    violations.push('teachingStrategy is required: standard, ubd, or feynman');
+  } else if (!isTeachingStrategy(requestedTeachingStrategy)) {
+    violations.push(`teachingStrategy must be one of: ${TEACHING_STRATEGIES.join(', ')}`);
+  }
   const sceneById = new Map(outlines.map((outline) => [outline.id, outline] as const));
   const sceneIds = new Set(sceneById.keys());
+  const strategyEvidence = validateStrategyEvidence(
+    input.strategyEvidence,
+    teachingStrategy,
+    sceneById,
+    violations,
+  );
 
   const objectives: LearningObjectiveContract[] = [];
   const seenObjectiveIds = new Set<string>();
@@ -411,8 +647,8 @@ export function validateAndRepairLearningContract(
   if (feedback.refs.some((id) => !isActivityScene(sceneById.get(id)))) {
     violations.push('feedbackRetry must reference an interactive, pbl, or quiz scene');
   }
-  if (transfer.refs.some((id) => !isActivityScene(sceneById.get(id)))) {
-    violations.push('transferApplication must reference an interactive, pbl, or quiz scene');
+  if (transfer.refs.some((id) => !isAssessmentScene(sceneById.get(id)))) {
+    violations.push('transferApplication must reference a quiz or pbl scene');
   }
 
   const assessmentMap: LearningContract['assessmentMap'] = [];
@@ -442,7 +678,51 @@ export function validateAndRepairLearningContract(
     }
   }
   if (assessmentMap.some((mapping) => !isAssessmentScene(sceneById.get(mapping.sceneId)))) {
-    violations.push('assessmentMap must reference quiz, pbl, game, or procedural-skill scenes');
+    violations.push('assessmentMap must reference quiz or pbl scenes');
+  }
+
+  const positions = new Map(outlines.map((outline, index) => [outline.id, index]));
+  const objectiveForScene = (scene: SceneOutline | undefined): string => {
+    const explicit = scene?.teachingObjective?.trim() || '';
+    if (seenObjectiveIds.has(explicit)) return explicit;
+    return objectives.length === 1 ? objectives[0]!.id : '';
+  };
+  for (const practiceId of practice.refs) {
+    const practiceScene = sceneById.get(practiceId);
+    if (practiceScene?.type !== 'interactive') continue;
+    const objectiveId = objectiveForScene(practiceScene);
+    if (!objectiveId) {
+      violations.push(
+        `learnerPractice interactive ${practiceId} must name one objective id in teachingObjective`,
+      );
+      continue;
+    }
+    const laterFeedback = feedback.refs.filter((sceneId) => {
+      const scene = sceneById.get(sceneId);
+      return (
+        positions.get(sceneId)! > positions.get(practiceId)! &&
+        objectiveForScene(scene) === objectiveId
+      );
+    });
+    if (laterFeedback.length === 0) {
+      violations.push(
+        `learnerPractice interactive ${practiceId} needs a later same-objective feedbackRetry scene`,
+      );
+      continue;
+    }
+    const closesLoop = laterFeedback.some((feedbackId) =>
+      assessmentMap.some(
+        (mapping) =>
+          mapping.objectiveIds.includes(objectiveId) &&
+          isAssessmentScene(sceneById.get(mapping.sceneId)) &&
+          positions.get(mapping.sceneId)! > positions.get(feedbackId)!,
+      ),
+    );
+    if (!closesLoop) {
+      violations.push(
+        `learnerPractice interactive ${practiceId} needs a later same-objective quiz or pbl assessment after feedbackRetry`,
+      );
+    }
   }
 
   const rawGrounding = isRecord(input.grounding) ? input.grounding : {};
@@ -459,6 +739,8 @@ export function validateAndRepairLearningContract(
   if (rawGrounding.claimPolicy !== 'cite-or-mark-uncertain') repaired = true;
 
   const contract: LearningContract = {
+    teachingStrategy,
+    ...(strategyEvidence ? { strategyEvidence } : {}),
     objectives,
     prerequisiteActivation: prerequisite.refs,
     demonstration: demonstration.refs,

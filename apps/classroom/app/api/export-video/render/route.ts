@@ -5,9 +5,10 @@ import { resolveRenderServiceUrl } from '@/lib/server/render-service';
 import { capBodyStream } from '@/lib/server/capped-stream';
 import { createLogger } from '@/lib/logger';
 import {
+  createRenderJobPrincipal,
   isValidRenderJobId,
+  RENDER_ANON_COOKIE,
   recordRenderJobOwner,
-  renderAccountId,
 } from '@/lib/server/render-job-owner-store';
 
 const log = createLogger('ExportVideo Render API');
@@ -25,20 +26,10 @@ const MAX_UPLOAD_BYTES = 300 * 1024 * 1024;
 /** Upload-forwarding budget. Covers a large body over a slow link; the render is async. */
 const SUBMIT_TIMEOUT_MS = 300_000;
 
-/**
- * Derive a client identity for the render service's per-identity guard.
- *
- * `x-forwarded-for` / `x-real-ip` are only trustworthy when a trusted reverse
- * proxy sets them; if the app is exposed directly (as the default Compose does),
- * a client can rotate them to defeat the guard. So we only honor them when
- * `TRUST_PROXY_HEADERS=true` is set by the operator (who then must ensure a real
- * proxy overwrites the headers). Otherwise every caller collapses to a single
- * `direct` bucket — a conservative shared limit rather than a spoofable one.
- */
-function clientIdentity(req: NextRequest): string {
+function anonymousClientIdentity(req: NextRequest): string {
   if (process.env.TRUST_PROXY_HEADERS !== 'true') return 'direct';
-  const fwd = req.headers.get('x-forwarded-for');
-  if (fwd) return fwd.split(',')[0].trim() || 'anonymous';
+  const forwarded = req.headers.get('x-forwarded-for');
+  if (forwarded) return forwarded.split(',')[0].trim() || 'anonymous';
   return req.headers.get('x-real-ip')?.trim() || 'anonymous';
 }
 
@@ -75,7 +66,7 @@ export async function POST(req: NextRequest) {
   const capped = capBodyStream(req.body, MAX_UPLOAD_BYTES);
 
   try {
-    const ownerAccountId = await renderAccountId(req);
+    const owner = await createRenderJobPrincipal(req);
     // Long enough for the upload of a multi-MB ZIP; the render is async.
     const upstream = await proxyFetch(`${resolved.url}/render`, {
       method: 'POST',
@@ -84,7 +75,10 @@ export async function POST(req: NextRequest) {
       duplex: 'half',
       headers: {
         'content-type': contentType,
-        'x-openmaic-client': ownerAccountId ?? clientIdentity(req),
+        // 登录账户按账户限流；匿名者仍走可信代理/IP 的保守桶，避免清 Cookie 绕限流。
+        'x-openmaic-client': owner.principal.startsWith('account:')
+          ? owner.principal
+          : anonymousClientIdentity(req),
       },
       signal: AbortSignal.timeout(SUBMIT_TIMEOUT_MS),
     } as RequestInit);
@@ -106,8 +100,35 @@ export async function POST(req: NextRequest) {
     if (!isValidRenderJobId(jobId)) {
       return apiError('UPSTREAM_ERROR', 502, 'Render service returned an invalid job id');
     }
-    if (ownerAccountId) await recordRenderJobOwner(jobId, ownerAccountId);
-    return apiSuccess({ jobId, pollIntervalMs: 3000 }, 202);
+    try {
+      await recordRenderJobOwner(jobId, owner.principal);
+    } catch (ownerError) {
+      try {
+        const cancelled = await proxyFetch(
+          `${resolved.url}/render/${encodeURIComponent(jobId)}`,
+          { method: 'DELETE', signal: AbortSignal.timeout(15_000) },
+        );
+        if (!cancelled.ok && cancelled.status !== 404) {
+          log.error(`Failed to cancel ownerless render job ${jobId}: HTTP ${cancelled.status}`);
+        }
+      } catch (cancelError) {
+        log.error(`Failed to cancel ownerless render job ${jobId}:`, cancelError);
+      }
+      log.error(`Failed to record render job owner ${jobId}:`, ownerError);
+      return apiError('UPSTREAM_ERROR', 502, 'Failed to secure render job ownership');
+    }
+
+    const response = apiSuccess({ jobId, pollIntervalMs: 3000 }, 202);
+    if (owner.anonymousCookie) {
+      response.cookies.set(RENDER_ANON_COOKIE, owner.anonymousCookie, {
+        httpOnly: true,
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 30 * 24 * 60 * 60,
+        secure: process.env.NODE_ENV === 'production',
+      });
+    }
+    return response;
   } catch (error) {
     // A cap trip aborts the forwarded stream, surfacing here as a fetch error.
     if (capped.exceeded()) {

@@ -304,13 +304,25 @@ def pretest_grade(payload: dict[str, Any], x_trace_id: str | None = Header(defau
     return ApiResponse(data=pretest_grade_api(answers, self_levels), traceId=_trace_id(x_trace_id))
 
 
-@router.get("/domain-path/{corpus}", response_model=ApiResponse, dependencies=[Depends(verify_internal_token)])
-def domain_path(corpus: str, x_trace_id: str | None = Header(default=None)) -> ApiResponse:
-    """域级学习路径：该库的概念按前置图拓扑深度分阶。
+@router.post("/domain-path/{corpus}", response_model=ApiResponse, dependencies=[Depends(verify_internal_token)])
+def domain_path(
+    corpus: str,
+    payload: dict[str, Any],
+    x_trace_id: str | None = Header(default=None),
+) -> ApiResponse:
+    """域级学习路径：既有拓扑随当前账户画像移动学习游标。
 
     没跑过接入流水线的库返回 source="none" + reason，**不回退到 AI 域那份手工路径**——
     拿别的域的顺序冒充本域，学习者照着学完才发现全错。
     """
     from backend.services.domain_path import build_domain_path
 
-    return ApiResponse(data=build_domain_path(corpus), traceId=_trace_id(x_trace_id))
+    return ApiResponse(
+        data=build_domain_path(
+            corpus,
+            profile=payload.get("profile"),
+            concept_mastery=payload.get("conceptMastery"),
+            curated_path=payload.get("curatedPath"),
+        ),
+        traceId=_trace_id(x_trace_id),
+    )

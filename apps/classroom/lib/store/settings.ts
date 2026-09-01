@@ -1403,7 +1403,7 @@ export const useSettingsStore = create<SettingsState>()(
           try {
             const res = await fetch('/api/server-providers');
             if (!res.ok) return;
-            // Managed providers expose only their allowed model list (LLM/image)
+            // Managed providers expose only their allowed model list (LLM/image/video)
             // and presence (the "managed" flag) — never a base URL.
             const data = (await res.json()) as {
               providers: Record<string, { models?: string[] }>;
@@ -1413,7 +1413,7 @@ export const useSettingsStore = create<SettingsState>()(
               asr: Record<string, Record<string, never>>;
               pdf: Record<string, Record<string, never>>;
               image: Record<string, { models?: string[] }>;
-              video: Record<string, Record<string, never>>;
+              video: Record<string, { models?: string[] }>;
               webSearch: Record<string, Record<string, never>>;
               generation?: { parallelSceneConcurrency?: number };
             };
@@ -1548,12 +1548,18 @@ export const useSettingsStore = create<SettingsState>()(
                   };
                 }
               }
-              for (const pid of Object.keys(data.image)) {
+              for (const [pid, info] of Object.entries(data.image)) {
                 const key = pid as ImageProviderId;
                 if (newImageConfig[key]) {
                   newImageConfig[key] = {
                     ...newImageConfig[key],
                     isServerConfigured: true,
+                    ...(info.models?.length
+                      ? {
+                          customModels: info.models.map((id) => ({ id, name: id })),
+                          replaceBuiltInModels: true,
+                        }
+                      : {}),
                   };
                 }
               }
@@ -1570,12 +1576,18 @@ export const useSettingsStore = create<SettingsState>()(
                 }
               }
               if (data.video) {
-                for (const pid of Object.keys(data.video)) {
+                for (const [pid, info] of Object.entries(data.video)) {
                   const key = pid as VideoProviderId;
                   if (newVideoConfig[key]) {
                     newVideoConfig[key] = {
                       ...newVideoConfig[key],
                       isServerConfigured: true,
+                      ...(info.models?.length
+                        ? {
+                            customModels: info.models.map((id) => ({ id, name: id })),
+                            replaceBuiltInModels: true,
+                          }
+                        : {}),
                     };
                   }
                 }

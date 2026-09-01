@@ -25,6 +25,7 @@ import {
   type LearningContract,
   type OutlineEngine,
 } from './learning-contract';
+import { blueprintDirective, type LearnerBlueprint } from './learner-profile';
 const log = createLogger('Generation');
 
 /**
@@ -53,6 +54,7 @@ export async function generateSceneOutlinesFromRequirements(
     researchContext?: string;
     teacherContext?: string;
     outlineEngine?: OutlineEngine;
+    learnerBlueprint?: LearnerBlueprint;
     /** Production callers enable this to block structurally incomplete courses. */
     enforceLearningContract?: boolean;
   },
@@ -96,9 +98,15 @@ export async function generateSceneOutlinesFromRequirements(
   }
 
   // Build user profile string for prompt injection
+  const learnerDirective =
+    requirements.learnerProfile && options?.learnerBlueprint
+      ? blueprintDirective(options.learnerBlueprint, requirements.learnerProfile) +
+        `\n课程编排要求：难度档 ${options.learnerBlueprint.recommended_difficulty} 的学习者，` +
+        '场景序列必须覆盖讲解、实操、测验和反馈重试；薄弱概念要单独成场景补足。'
+      : '';
   const userProfileText =
-    requirements.userNickname || requirements.userBio
-      ? `## Student Profile\n\nStudent: ${requirements.userNickname || 'Unknown'}${requirements.userBio ? ` — ${requirements.userBio}` : ''}\n\nConsider this student's background when designing the course. Adapt difficulty, examples, and teaching approach accordingly.\n\n---`
+    requirements.userNickname || requirements.userBio || learnerDirective
+      ? `## Student Profile\n\nStudent: ${requirements.userNickname || '目标学习者'}${requirements.userBio ? ` — ${requirements.userBio}` : ''}\n\nConsider this student's background when designing the course. Adapt difficulty, examples, and teaching approach accordingly.${learnerDirective}\n\n---`
       : '';
 
   // Build media snippet conditions based on enabled flags.

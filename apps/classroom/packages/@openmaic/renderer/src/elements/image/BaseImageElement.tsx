@@ -95,6 +95,8 @@ export function BaseImageElement({ elementInfo, renderImage }: BaseImageElementP
                   src={src}
                   draggable={false}
                   data-soft-edge={softEdge || undefined}
+                  loading="lazy"
+                  decoding="async"
                   style={{
                     position: 'absolute',
                     top: imgPosition.top,

@@ -122,6 +122,12 @@ export async function slideToPng(
       root!.render(createElement(SlideCanvas, { slide, chrome: false }));
     });
 
+    // The snapshot tree is permanently off-screen, so override the renderer's
+    // lazy image loading before waiting for image completion.
+    container.querySelectorAll('img').forEach((img) => {
+      img.loading = 'eager';
+    });
+
     // Give the SlideCanvas's ResizeObserver-driven `useViewportSize` a few
     // frames to fire and write `fitScale`. Default state already paints at
     // 1:1, but waiting avoids a flash of unscaled content when the slide
@@ -196,7 +202,6 @@ export async function slideToPng(
     );
 
     if (process.env.NODE_ENV !== 'production') {
-      // eslint-disable-next-line no-console
       console.debug('[slideToPng] container ready', {
         innerHTMLLength: container.innerHTML.length,
         imgCount: container.querySelectorAll('img').length,

@@ -8,6 +8,8 @@
  * point is not only to control hallucination but to make the control visible.
  */
 
+import { createHash } from 'node:crypto';
+
 import { judgeRole } from '@/components/agents/judge-labels';
 import { isIncrementalReauditEnabled } from '@/lib/config/feature-flags';
 import { parseJsonResponse } from '@/lib/generation/json-repair';
@@ -15,6 +17,7 @@ import { mergeNumericBypass } from './numeric-claims';
 import { isNumericBypassEnabled } from '@/lib/config/feature-flags';
 
 export type ClaimVerdict = 'supported' | 'uncertain' | 'incorrect';
+export type AuditScope = 'scene' | 'course';
 
 export interface AuditClaim {
   claim: string;
@@ -96,8 +99,7 @@ export interface SceneAudit {
   corpus?: string;
   evidenceCount: number;
   /**
-   * 送审前被 MAX_CONTENT_CHARS 截掉的教学文本字数。>0 表示这一屏的尾段
-   * 没进断言分母——账单必须能看出「审的不是全文」，否则有据率被动虚高。
+   * 送审前被预算截掉的可审文本字数。>0 表示审核输入不完整，账单必须显式记录。
    */
   truncatedChars?: number;
   /**
@@ -119,19 +121,14 @@ export interface SceneAudit {
    * they mean the corpus really does not cover that claim.
    */
   rescued?: RescueRecord[];
+  /** 双判官课程终审是否完整收到两份合法判词。 */
+  panelComplete?: boolean;
+  /** 终审对应的最终场景载荷哈希；发布门据此识别审核后的改动。 */
+  courseContentHash?: string;
 }
 
 /** Publish floor shared with the engine's ArbitrationAgent (backend/agents/arbitration_agent.py). */
 const PUBLISH_FLOOR = 0.62;
-
-/**
- * 幻觉率天花板已停用（保留常量供报表引用）。
- *
- * 停用原因：断言数 <10 时，只要 1 条 incorrect 就必然 1/9=0.111 > 0.1，
- * 天花板对短场景是恒真的拦截条件——它误杀的是 factuality 0.89 的场景。
- * 判据换成绝对数（见 ABSOLUTE_INCORRECT_LIMIT）。
- */
-const HALLUCINATION_CEILING = 0.1;
 
 /**
  * 判官出错的绝对条数上限。超过它才认为「这页问题成片」而不是「个别判错」。
@@ -202,8 +199,6 @@ function ruleOnClaims(
   const supported = claims.filter((c) => c.verdict === 'supported').length;
   const incorrect = claims.filter((c) => c.verdict === 'incorrect').length;
   const factuality = supported / total;
-  const hallucinationRate = incorrect / total;
-
   if (incorrect === 0) {
     const uncertain = total - supported;
     return {
@@ -256,8 +251,8 @@ export type AiCall = (system: string, user: string) => Promise<string>;
 // 截掉的部分不进断言分母——所以必须入账（truncatedChars），不许静默变好看
 // （2026-08-28 清查 M4）。
 const MAX_CONTENT_CHARS = 9000;
-// 防御性遍历上限：单屏内容极端膨胀（几十 KB 教具 HTML）时也别无界拼接。
-const WALK_HARD_CEILING = 60000;
+// 全课终审给逐屏断言账本与 Action 可见语义的总预算。
+const COURSE_TOTAL_TEXT_BUDGET = 45000;
 
 //: 管道字段，不是教学内容。判官看见它们只会被噪声干扰。
 //:
@@ -343,26 +338,22 @@ export function isAuditableLine(text: string): boolean {
  */
 export function dropNonClaimSentences(text: string): string {
   if (isAuditableLine(text)) return text;
-  const kept = text
-    .split(/(?<=[。；！？）」\n])/)
-    .filter((s) => s.trim() && isAuditableLine(s));
+  const kept = text.split(/(?<=[。；！？）」\n])/).filter((s) => s.trim() && isAuditableLine(s));
   return kept.join('').trim();
 }
 
-export function extractTeachingText(content: unknown): string {
-  return extractTeachingTextMeta(content).text;
-}
-
-/** 带截断账目的版本：审核链用它，把截掉的字数写进审核结果而不是吞掉。 */
-export function extractTeachingTextMeta(content: unknown): {
-  text: string;
-  truncatedChars: number;
-} {
+function collectTeachingTextWithin(
+  content: unknown,
+  captureLimit: number,
+): { text: string; totalChars: number } {
   const parts: string[] = [];
-  let collected = 0;
+  let captured = 0;
+  let totalChars = 0;
+  let partCount = 0;
+  const limit = Math.max(0, Math.floor(captureLimit));
   const seen = new Set<unknown>();
   const walk = (node: unknown): void => {
-    if (!node || collected > WALK_HARD_CEILING) return;
+    if (!node) return;
     if (typeof node === 'string') {
       const text = node.trim();
       // Skip ids/urls/colors/enum-ish tokens — audit prose, not plumbing.
@@ -374,8 +365,14 @@ export function extractTeachingTextMeta(content: unknown): {
         // 逐句摘，不整段扔——整段扔会让一句提示词回声把整屏带走。
         const kept = dropNonClaimSentences(text);
         if (kept) {
-          parts.push(kept);
-          collected += kept.length;
+          const fragment = `${partCount > 0 ? '\n' : ''}${kept}`;
+          partCount += 1;
+          totalChars += fragment.length;
+          if (captured < limit) {
+            const clipped = fragment.slice(0, limit - captured);
+            parts.push(clipped);
+            captured += clipped.length;
+          }
         }
       }
       return;
@@ -411,10 +408,22 @@ export function extractTeachingTextMeta(content: unknown): {
     }
   };
   walk(content);
-  const full = parts.join('\n');
+  return { text: parts.join(''), totalChars };
+}
+
+export function extractTeachingText(content: unknown): string {
+  return extractTeachingTextMeta(content).text;
+}
+
+/** 带截断账目的版本：审核链用它，把截掉的字数写进审核结果而不是吞掉。 */
+export function extractTeachingTextMeta(content: unknown): {
+  text: string;
+  truncatedChars: number;
+} {
+  const collected = collectTeachingTextWithin(content, MAX_CONTENT_CHARS);
   return {
-    text: full.slice(0, MAX_CONTENT_CHARS),
-    truncatedChars: Math.max(0, full.length - MAX_CONTENT_CHARS),
+    text: collected.text,
+    truncatedChars: Math.max(0, collected.totalChars - collected.text.length),
   };
 }
 
@@ -438,6 +447,20 @@ const JUDGE_SYSTEM = `你是独立的教学内容事实审核员。你审核的�
 只输出一个 JSON 对象，不要围栏不要解释：
 {"claims": [{"claim": "断言原文（截断到 80 字内）", "verdict": "supported|uncertain|incorrect", "reason": "一句话理由", "fix": "verdict 为 incorrect 时的修正表述"}]}
 若文本中没有事实性断言，输出 {"claims": []}。`;
+
+const COURSE_REVIEW_ADDENDUM = `
+
+【全课程事实终审模式】
+输入按 <scene> 分块，包含各场景逐屏审核留下的事实断言账本，以及 Action DSL 中学习者
+能读到或听到的语义；参考资料是本课程获准使用的材料。
+逐场景事实已经审过，本轮**只报告**下列课程级高风险问题：
+1. 同一条件下的同一数字、单位、版本或安全阈值在不同场景互不相容；
+2. 同一术语、状态或机制在不同场景被赋予互斥定义；
+3. 最终内容与参考资料直接冲突；
+4. 两个跨页命题在相同前提下不可能同时成立。
+明确冲突判 incorrect；因条件缺失而无法消解判 uncertain。每条 claim 必须同时点明相关场景与冲突双方。
+不要把不同工况、递进讲解、近似取整、示例参数或详略差异误判为冲突；不要重复输出无冲突的 supported 事实。
+没有上述问题时输出 {"claims": []}。本轮只裁决，不改写课程内容。`;
 
 const RESCUE_SYSTEM = `你是事实审核员。上一轮审核时，因为参考资料没有覆盖，你把某条断言判成了"存疑"。
 现在系统**用这条断言本身作为查询词**重新检索了知识库，找到了下面这些新资料。
@@ -498,14 +521,25 @@ function parseSourceIds(raw: unknown): string[] {
   ];
 }
 
-function parseClaims(raw: string): AuditClaim[] | null {
+function parseClaims(raw: string, strict = false): AuditClaim[] | null {
   const parsed = parseJsonLoose(raw) as { claims?: unknown } | null;
   if (!parsed || !Array.isArray(parsed.claims)) return null;
   const verdicts = new Set<string>(['supported', 'uncertain', 'incorrect']);
+  const valid = (claim: unknown): claim is Record<string, unknown> =>
+    !!claim &&
+    typeof claim === 'object' &&
+    typeof (claim as Record<string, unknown>).claim === 'string' &&
+    Boolean(String((claim as Record<string, unknown>).claim).trim()) &&
+    typeof (claim as Record<string, unknown>).reason === 'string' &&
+    verdicts.has(String((claim as Record<string, unknown>).verdict));
+  if (strict && parsed.claims.some((claim) => !valid(claim))) return null;
   return parsed.claims
-    .filter(
-      (c): c is Record<string, unknown> =>
-        !!c && typeof c === 'object' && verdicts.has(String((c as { verdict?: unknown }).verdict)),
+    .filter((claim): claim is Record<string, unknown> =>
+      strict
+        ? valid(claim)
+        : !!claim &&
+          typeof claim === 'object' &&
+          verdicts.has(String((claim as Record<string, unknown>).verdict)),
     )
     .map((c) => {
       const sourceIds = parseSourceIds(c.sourceIds ?? c.source_ids);
@@ -537,9 +571,11 @@ async function runJudge(
   teachingText: string,
   evidence?: string,
   sceneType?: string,
+  scope: AuditScope = 'scene',
 ): Promise<AuditClaim[] | null> {
   const system =
     JUDGE_SYSTEM +
+    (scope === 'course' ? COURSE_REVIEW_ADDENDUM : '') +
     (evidence ? EVIDENCE_ADDENDUM : '') +
     (sceneType === 'quiz' ? QUIZ_ADDENDUM : '');
   const user =
@@ -547,7 +583,7 @@ async function runJudge(
     (evidence ? `参考资料：\n${evidence}\n\n` : '') +
     `教学文本：\n${teachingText}`;
   const raw = await judgeCall(system, user);
-  const judged = parseClaims(raw);
+  const judged = parseClaims(raw, scope === 'course');
   if (!judged) return null;
 
   // 正则旁路（`lib/generation/numeric-claims.ts`）：判官漏抽的带单位数字机械补进池。
@@ -557,7 +593,8 @@ async function runJudge(
   // 不知道它对不对；查无对照就弃权，判错会触发修订环去改一个可能本来正确的参数。
   // 消融开关：`NUMERIC_BYPASS=0` 时判官抽到什么就是什么，不补漏也不弃权。
   // 关掉等于让带单位的数字回到「没人看过」的状态——这正是要量的那一档。
-  if (!isNumericBypassEnabled()) return judged;
+  // 全课终审只找跨页冲突；把每个孤立数字机械补成 uncertain 会让任何含参数的正常课都误拦。
+  if (scope === 'course' || !isNumericBypassEnabled()) return judged;
   return mergeNumericBypass(judged, teachingText, evidence, (claim, reason) => ({
     claim,
     verdict: 'uncertain' as ClaimVerdict,
@@ -853,6 +890,12 @@ async function adjudicate(
 export interface AuditOptions {
   sceneTitle: string;
   content: unknown;
+  /** 课程级终审复用同一审核器，只切换断言筛选口径。 */
+  scope?: AuditScope;
+  /** 已按场景聚合好的断言账本与 Action 可见语义。 */
+  preExtractedTeachingText?: string;
+  /** 聚合阶段因单屏/课程预算省略的可审文字数；必须随审核账单落盘。 */
+  preExtractedTruncatedChars?: number;
   /** Single judge (legacy/batch path). Ignored when `judgeCalls` is non-empty. */
   judgeCall?: AiCall;
   /**
@@ -931,6 +974,7 @@ export async function auditSceneContent(
   let rounds = 0;
   let debate: DebateRound[] | undefined;
   let rescued: RescueRecord[] | undefined;
+  let panelComplete = options.scope === 'course' ? false : undefined;
   /**
    * Binding pool for cited ids. Starts as the scene-level evidence and grows
    * with whatever claim-level retrieval surfaces, so a rescued claim's citation
@@ -1084,14 +1128,15 @@ export async function auditSceneContent(
       ...(options.arbiterModel ? { arbiterModel: options.arbiterModel } : {}),
       ...(sourcePool.length ? { sources: sourcePool } : {}),
       ...(rescued ? { rescued } : {}),
+      ...(panelComplete !== undefined ? { panelComplete } : {}),
     };
   };
 
   /**
    * One audit round. A single judge is today's path verbatim; two judges get
    * cross-validated, and only the claims they split on cost a defense +
-   * arbitration call. A judge that fails to answer degrades the round to the
-   * other judge's verdicts (and no debate trail) rather than failing the audit.
+   * arbitration call. Scene audits retain the surviving-judge fallback; course
+   * audits require both configured judges and fail closed when either answer is missing or invalid.
    *
    * The returned trail describes exactly the returned claim list, so a re-audit
    * *replaces* the previous round's trail instead of appending to it — otherwise
@@ -1108,12 +1153,24 @@ export async function auditSceneContent(
     if (textOverride !== undefined) {
       text = textOverride;
     } else {
-      const meta = extractTeachingTextMeta(content);
-      text = meta.text;
-      truncatedChars = meta.truncatedChars;
+      if (options.preExtractedTeachingText !== undefined) {
+        text = options.preExtractedTeachingText;
+        truncatedChars = Math.max(0, options.preExtractedTruncatedChars ?? 0);
+      } else {
+        const meta = extractTeachingTextMeta(content);
+        text = meta.text;
+        truncatedChars = meta.truncatedChars;
+      }
     }
     if (judges.length === 1) {
-      const claims = await runJudge(judges[0], sceneTitle, text, evidence, sceneType);
+      const claims = await runJudge(
+        judges[0],
+        sceneTitle,
+        text,
+        evidence,
+        sceneType,
+        options.scope,
+      );
       return claims && { claims };
     }
     // A throwing judge (429/timeout — judge calls run with maxRetries: 0) must not
@@ -1123,13 +1180,17 @@ export async function auditSceneContent(
     const [a, b] = await Promise.all(
       judges
         .slice(0, 2)
-        .map((j) => runJudge(j, sceneTitle, text, evidence, sceneType).catch(() => null)),
+        .map((j) =>
+          runJudge(j, sceneTitle, text, evidence, sceneType, options.scope).catch(() => null),
+        ),
     );
-    // Degraded to one judge: no cross-validation happened, so no trail is claimed.
+    // 场景级保留既有降级语义；课程终审必须拿到两份合法判词，不能把单判官冒充交叉验证。
     if (a === null || b === null) {
+      if (options.scope === 'course') return null;
       const solo = a ?? b;
       return solo && { claims: solo };
     }
+    if (options.scope === 'course') panelComplete = true;
     const { claims, disputes } = crossValidate(a, b);
     // panel ran and agreed — an empty trail, not a missing one
     if (disputes.length === 0) return { claims, debate: [] };
@@ -1267,4 +1328,202 @@ export async function auditSceneContent(
   } catch {
     return { audit: finish('flagged', []), content: options.content };
   }
+}
+
+export interface CourseAuditScene {
+  id?: string;
+  outlineId?: string;
+  title: string;
+  type?: string;
+  content: unknown;
+  actions?: unknown;
+  audit?: SceneAudit | null;
+}
+
+export type CourseAuditOptions = Omit<
+  AuditOptions,
+  | 'sceneTitle'
+  | 'content'
+  | 'scope'
+  | 'preExtractedTeachingText'
+  | 'preExtractedTruncatedChars'
+  | 'reviseCall'
+  | 'sceneType'
+> & {
+  courseTitle: string;
+  scenes: readonly CourseAuditScene[];
+};
+
+type CourseHashScene = Pick<
+  CourseAuditScene,
+  'id' | 'outlineId' | 'type' | 'content' | 'actions'
+> & { title?: string };
+
+function canonicalizeForHash(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalizeForHash);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([, child]) => child !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([key, child]) => [key, canonicalizeForHash(child)]),
+  );
+}
+
+/** Hash exactly the final scene fields whose post-audit mutation invalidates publication. */
+export function hashCourseScenes(scenes: readonly CourseHashScene[]): string {
+  const payload = scenes.map(({ id, outlineId, title, type, content, actions }) => ({
+    id,
+    outlineId,
+    title,
+    type,
+    content,
+    actions,
+  }));
+  return createHash('sha256')
+    .update(JSON.stringify(canonicalizeForHash(payload)))
+    .digest('hex');
+}
+
+function textField(value: unknown, html = false): string[] {
+  if (typeof value !== 'string' || !value.trim()) return [];
+  const text = html ? stripHtmlToText(value) : value.trim();
+  return text ? [text] : [];
+}
+
+function visibleScalars(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(visibleScalars);
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+    ? [String(value)]
+    : [];
+}
+
+/** Only fields a learner can read or hear; layout coordinates, colors and ids never enter review. */
+function visibleActionTexts(actions: unknown): string[] {
+  if (!Array.isArray(actions)) return [];
+  return actions.flatMap((action) => {
+    if (!action || typeof action !== 'object') return [];
+    const record = action as Record<string, unknown>;
+    switch (record.type) {
+      case 'speech':
+        return textField(record.text);
+      case 'discussion':
+        return [...textField(record.topic), ...textField(record.prompt)];
+      case 'wb_draw_text':
+        return textField(record.content, true);
+      case 'wb_draw_code':
+        return textField(record.code);
+      case 'wb_edit_code':
+        return textField(record.content);
+      case 'wb_draw_latex':
+        return textField(record.latex);
+      case 'wb_draw_table':
+        return visibleScalars(record.data);
+      case 'wb_draw_chart': {
+        const data =
+          record.data && typeof record.data === 'object'
+            ? (record.data as Record<string, unknown>)
+            : {};
+        return [
+          ...visibleScalars(data.labels),
+          ...visibleScalars(data.legends),
+          ...visibleScalars(data.series),
+        ];
+      }
+      case 'widget_annotation':
+      case 'widget_highlight':
+      case 'widget_reveal':
+      case 'widget_setState':
+        return textField(record.content);
+      default:
+        return [];
+    }
+  });
+}
+
+function buildCourseTeachingText(scenes: readonly CourseAuditScene[]): {
+  text: string;
+  truncatedChars: number;
+} {
+  let sceneTruncatedChars = 0;
+  const full = scenes
+    .map((scene, index) => {
+      const title = scene.title.trim() || `场景 ${index + 1}`;
+      const teaching = extractTeachingTextMeta(scene.content);
+      sceneTruncatedChars += teaching.truncatedChars;
+      const claimLedger = (scene.audit?.claims ?? []).map((claim) => `- ${claim.claim}`).join('\n');
+      const actionLedger = visibleActionTexts(scene.actions)
+        .map((text) => `- ${text}`)
+        .join('\n');
+      return (
+        `<scene index="${index + 1}" title="${title.replace(/"/g, '&quot;')}">\n` +
+        `【最终可见正文】\n${teaching.text || '（无可见正文）'}\n` +
+        `【逐屏事实断言账本】\n${claimLedger || '（无事实断言）'}\n` +
+        `【Action 可见语义】\n${actionLedger || '（无可见动作语义）'}\n` +
+        `</scene>`
+      );
+    })
+    .join('\n\n');
+
+  return {
+    text: full.slice(0, COURSE_TOTAL_TEXT_BUDGET),
+    truncatedChars:
+      sceneTruncatedChars + Math.max(0, full.length - COURSE_TOTAL_TEXT_BUDGET),
+  };
+}
+
+/**
+ * 复用逐屏判官团对断言账本与 Action 可见语义做一次全课终审。它只裁决跨页冲突，不提供修订入口；
+ * 冲突未消解、与批准材料冲突或审核基础设施失败时一律进入发布闸。
+ */
+export async function auditCourseContent(options: CourseAuditOptions): Promise<SceneAudit> {
+  const teaching = buildCourseTeachingText(options.scenes);
+  const courseContentHash = hashCourseScenes(options.scenes);
+
+  const { audit } = await auditSceneContent({
+    sceneTitle: `全课程终审：${options.courseTitle}`,
+    content: teaching.text,
+    scope: 'course',
+    preExtractedTeachingText: teaching.text,
+    preExtractedTruncatedChars: teaching.truncatedChars,
+    judgeCall: options.judgeCall,
+    judgeCalls: options.judgeCalls,
+    arbiterCall: options.arbiterCall,
+    defendCall: options.defendCall,
+    judgeModel: options.judgeModel,
+    judgeModels: options.judgeModels,
+    arbiterModel: options.arbiterModel,
+    sources: options.sources,
+    evidence: options.evidence,
+    corpus: options.corpus,
+    retrieveForClaim: options.retrieveForClaim,
+    evidenceCount: options.evidenceCount,
+    // 故意不传 reviseCall：全课终审只裁决，不能静默重写已逐屏批准的最终内容。
+  });
+
+  const unresolved = audit.debate?.some((round) => round.arbiterVerdict === 'unresolved') ?? false;
+  const issues = audit.claims.filter((claim) => claim.verdict !== 'supported');
+  const infrastructureFailed = audit.verdict === 'flagged' && audit.totalClaims === 0;
+  const incompleteReview = (audit.truncatedChars ?? 0) > 0;
+  const panelIncomplete = audit.panelComplete !== true;
+  const blocked =
+    incompleteReview || panelIncomplete || infrastructureFailed || unresolved || issues.length > 0;
+
+  return {
+    ...audit,
+    courseContentHash,
+    verdict: blocked ? 'flagged' : 'pass',
+    decision: blocked ? 'block_pending_review' : 'publish',
+    rationale: incompleteReview
+      ? `课程有 ${audit.truncatedChars} 字最终正文、断言账本或可见动作语义超出完整终审范围，课程保持草稿。`
+      : panelIncomplete
+        ? '全课程事实终审未取得两份合法判词，课程保持草稿。'
+        : infrastructureFailed
+        ? '全课程事实终审未能完成，课程保持草稿。'
+        : unresolved
+          ? '跨页事实分歧未能完成仲裁，课程保持草稿。'
+          : issues.length > 0
+            ? `全课程终审发现 ${issues.length} 处跨页或材料冲突，课程保持草稿。`
+            : '全课程最终正文、逐屏断言与可见动作语义未发现高风险跨页冲突。',
+  };
 }

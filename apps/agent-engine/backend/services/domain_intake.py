@@ -174,7 +174,14 @@ class StageSkipped(RuntimeError):
 
 
 class IntakeRun:
-    def __init__(self, run_id: str, corpus: str, scope: str, options: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        run_id: str,
+        corpus: str,
+        scope: str,
+        options: dict[str, Any],
+        owner_org_id: str = "",
+    ) -> None:
         self.run_id = run_id
         self.corpus = corpus
         self.dir = RUNS_DIR / run_id
@@ -218,6 +225,9 @@ class IntakeRun:
             "warnings": [],
             "error": "",
         }
+        if owner_org_id:
+            # 创建时固化；后续阶段只更新状态与产物，不根据知识库当前归属重算。
+            self.record["owner_org_id"] = owner_org_id
         self._started = time.perf_counter()
 
     # ---------------- 事件
@@ -2617,6 +2627,7 @@ def _new_run(
     hands_on_safety: bool = False,
     append: bool = False,
     exclude: list[str] | str | None = None,
+    owner_org_id: str = "",
 ) -> IntakeRun:
     """建库那条路的共同开头：库名过闸 + 空 run 对象。投料形态在这之后各走各的。
 
@@ -2645,6 +2656,7 @@ def _new_run(
             "append": bool(append),
             "exclude": parse_exclusions(exclude),
         },
+        owner_org_id,
     )
     run.docs_dir.mkdir(parents=True, exist_ok=True)
     return run
@@ -2849,6 +2861,7 @@ def create_run_deferred(
     append: bool = False,
     # 疆域的「范围」：明确不教的路径前缀。留空则沿用这个库上一次接入时声明的那份。
     exclude: list[str] | str | None = None,
+    owner_org_id: str = "",
 ) -> IntakeRun:
     """**只建 run，不碰投料内容。** 解压与收集留给接收站①在后台做。
 
@@ -2865,7 +2878,7 @@ def create_run_deferred(
     """
     run = _new_run(
         corpus, scope, tier_range, build_vector, extract_concepts, trial_run, hands_on_safety,
-        append, exclude,
+        append, exclude, owner_org_id,
     )
     run.record["inbox"] = {"kind": inbox_kind, "ref": inbox_ref}
     # 文件清单这时还不知道——接收站①收完才填。留空数组而不是不写这个键，

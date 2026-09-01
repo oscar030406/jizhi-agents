@@ -34,7 +34,7 @@ describe('非 AI 域的岗位技能页空态', () => {
   });
 
   it('引擎给了原因就用引擎的原话', () => {
-    const reason = '该领域尚未登记岗位要求数据（接入时未提供岗位/技能清单）';
+    const reason = '本机构管理者在接入该领域时未提供岗位/技能清单';
     const out = html('智能制造', reason);
     expect(out).toContain(reason);
   });

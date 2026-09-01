@@ -15,7 +15,6 @@ import { useStageStore } from '@/lib/store/stage';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
 import { getEnabledProvidersWithVoices } from '@/lib/audio/voice-resolver';
-import { isTTSProviderEnabled } from '@/lib/audio/provider-enablement';
 import { useVoxCPMVoiceProfiles } from '@/lib/audio/voxcpm-voices';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import {
@@ -42,7 +41,7 @@ import {
 } from '@/lib/document/bundle';
 import { buildVideoManifestFromOutlines } from '@/lib/media/video-manifest';
 import { nanoid } from 'nanoid';
-import type { Scene, Stage } from '@/lib/types/stage';
+import type { Stage } from '@/lib/types/stage';
 import type {
   SceneOutline,
   PdfImage,
@@ -1040,17 +1039,22 @@ function GenerationPreviewContent() {
         throw new Error(sceneGenerationErrorMessage(contentData));
       }
 
-      // 审核异步后置（2026-08-04 提速批二段，与主循环同口径）：首屏不再等判官
-      // ~31s，场景先进课堂，徽章/修订稿经 updateScene 后到。质量门未删。
-      const auditPromise = fetchSceneAudit(
+      // First-screen durability barrier: the final scene must already contain the
+      // reviewed body, verdict and executable verification before navigation.
+      const auditData = await fetchSceneAudit(
         {
-          outline: firstOutline,
+          outline: contentData.effectiveOutline || firstOutline,
           content: contentData.content,
           stageId: stage.id,
           courseTitle: stageInfo.name,
         },
         signal,
       );
+      if (!auditData.success || !auditData.audit || auditData.content == null) {
+        throw new Error(auditData.error || '首屏事实审核未完成，课程已保留在生成页');
+      }
+      const a = auditData.audit;
+      setLastAudit({ totalClaims: a.totalClaims, flaggedCount: a.flaggedCount });
 
       // Generate actions (activate actions step indicator)
       const actionsStepIdx = activeSteps.findIndex((s) => s.id === 'actions');
@@ -1060,7 +1064,7 @@ function GenerationPreviewContent() {
         {
           outline: contentData.effectiveOutline || firstOutline,
           allOutlines: outlines,
-          content: contentData.content,
+          content: auditData.content,
           stageId: stage.id,
           agents,
           previousSpeeches: [],
@@ -1075,40 +1079,14 @@ function GenerationPreviewContent() {
         throw new Error(sceneGenerationErrorMessage(data));
       }
       const firstScene = data.scene;
+      firstScene.audit = a;
+      if (auditData.verification) firstScene.verification = auditData.verification;
 
       // TTS 已砍出生成主线（2026-08-04：语音与教具/导学同列最后可选项）。
 
       // Add scene to store and navigate
       store.addScene(firstScene);
       store.setCurrentSceneId(firstScene.id);
-
-      // 判官结论后台落地（进课堂后徽章浮现；换课/丢场景时静默放弃）。
-      // ⚠ 修订稿是生成层内容（无 type 壳），不能整包塞 scene.content——
-      // slide 只回填 canvas.elements，其他类型只挂徽章（与主循环同口径，
-      // 塞整包会让持久化校验拒收进入无限重试，2026-08-04 实测炸过）。
-      void auditPromise
-        .then((auditData) => {
-          if (!auditData.success || !auditData.audit) return;
-          const a = auditData.audit;
-          setLastAudit({ totalClaims: a.totalClaims, flaggedCount: a.flaggedCount });
-          const st = useStageStore.getState();
-          const cur = st.scenes.find((s) => s.id === firstScene.id);
-          if (!cur) return;
-          const revised = auditData.content as { elements?: unknown[] } | null;
-          const mergedContent =
-            cur.content.type === 'slide' && revised && Array.isArray(revised.elements)
-              ? ({
-                  ...cur.content,
-                  canvas: { ...cur.content.canvas, elements: revised.elements },
-                } as Scene['content'])
-              : null;
-          st.updateScene(firstScene.id, {
-            audit: a,
-            ...(auditData.verification ? { verification: auditData.verification } : {}),
-            ...(mergedContent ? { content: mergedContent } : {}),
-          });
-        })
-        .catch(() => {});
 
       // Set remaining outlines as skeleton placeholders
       const remaining = outlines.filter((o) => o.order !== firstScene.order);
@@ -1126,21 +1104,6 @@ function GenerationPreviewContent() {
       );
 
       sessionStorage.removeItem('generationSession');
-
-      // 落盘前给首屏审计一个有界的等待窗。
-      //
-      // 判官结论是 `void auditPromise.then(…)` 后台跑的，而落盘紧接着就执行——
-      // 审计要十几秒（判官 + 可能的仲裁 + 修订），**落盘的那一份没有 audit 字段**，
-      // 跳走之后 `updateScene` 只改了内存，课堂页从盘上读回来首屏就是无审计的
-      // （2026-08-23 线上实锤：PLC 课屏 1 完全无审计记录，其余屏都有——
-      // 那几屏在课堂页主循环里生成，那条路 await 了审计再落盘）。
-      //
-      // **不无限等**：判官挂了不该把「课已经生成好了」一起拖住。
-      // 超时就照常落盘，审计结论留在内存里，课堂页下一次保存会带上。
-      await Promise.race([
-        auditPromise.catch(() => null),
-        new Promise((r) => setTimeout(r, AUDIT_SETTLE_MS)),
-      ]);
 
       // **落盘失败必须让人看见。** `saveToStorage()` 失败时返回 false 并只 log.error，
       // 而这里原本不看返回值直接跳课堂——课在内存里能正常看，关掉标签页就没了，
@@ -1672,9 +1635,6 @@ function GenerationPreviewContent() {
     </div>
   );
 }
-
-/** 落盘前等首屏审计的上限。判官正常十几秒，给 20 秒；超了照常落盘不拖住课程。 */
-const AUDIT_SETTLE_MS = 20_000;
 
 export default function GenerationPreviewPage() {
   return (

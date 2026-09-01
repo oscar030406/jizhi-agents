@@ -11,12 +11,10 @@
  *
  * ## 为什么不复用 fetchEvidence
  *
- * `fetchEvidence` 把四种情况**全返回 `null`**：没配 `GROUNDING_URL`、请求失败、
- * 零命中、引擎判「证据不足」。对生成主路径这样是对的（四种都该降级成裸生成、别拦车），
- * 但开跑前的判断必须把「本机没配检索」和「这个库真查不到」分开——
- * 前者拦车会让本地开发跑不动，后者不拦车就产出零据课。
+ * 开跑前的判断必须把「本机没配检索」和「已配置的检索桥失败」分开——
+ * 前者拦车会让本地开发跑不动，后者静默放行就会产出零据课。
  *
- * 下面钉的就是这条分界：**只有确实零命中才拦**，其余一律放行。
+ * 下面钉的就是这条分界：未配置保持本地开发语义；一旦配置，零命中或桥失败都拦。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -70,14 +68,18 @@ describe('开跑前的零命中闸', () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it('探针自身失败放行，不因一次网络抖动挡住生成', async () => {
+  it('已配置时探针异常必须明确拦车', async () => {
     mockFetch.mockRejectedValue(new TypeError('fetch failed'));
-    expect(await zeroEvidenceReason('检索增强怎么减少幻觉', 'ai')).toBeNull();
+    const reason = await zeroEvidenceReason('检索增强怎么减少幻觉', 'ai');
+    expect(reason).toContain('检索服务调用异常');
+    expect(reason).toContain('本次生成已停止');
   });
 
-  it('探针拿到非 200 也放行——拦车的理由必须是「查过、确实没有」', async () => {
+  it('已配置时探针拿到非 200 必须明确拦车', async () => {
     mockFetch.mockResolvedValue({ ok: false, status: 503, json: async () => ({}) });
-    expect(await zeroEvidenceReason('检索增强怎么减少幻觉', 'ai')).toBeNull();
+    const reason = await zeroEvidenceReason('检索增强怎么减少幻觉', 'ai');
+    expect(reason).toContain('HTTP 503');
+    expect(reason).toContain('本次生成已停止');
   });
 
   it('空需求不探，直接放行', async () => {
@@ -87,7 +89,7 @@ describe('开跑前的零命中闸', () => {
   });
 });
 
-describe('拦车的理由必须是「查过、确实没有」', () => {
+describe('已配置检索桥的响应契约', () => {
   beforeEach(() => {
     mockFetch.mockReset();
     vi.stubGlobal('fetch', mockFetch);
@@ -100,20 +102,20 @@ describe('拦车的理由必须是「查过、确实没有」', () => {
     else process.env.GROUNDING_URL = OLD_URL;
   });
 
-  it('回包里没有 data.chunks 这个键就放行——读不懂 ≠ 零命中', async () => {
-    // 一版写成 `chunks?.length ?? 0`，把缺字段当零命中，
-    // 当场误拦了一条只想验元数据落库的用例。误拦的代价是用户生成不了。
+  it('回包里没有 data.chunks 时按非法响应拦车', async () => {
     mockFetch.mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
-    expect(await zeroEvidenceReason('教会我 RAG', 'ai')).toBeNull();
+    const reason = await zeroEvidenceReason('教会我 RAG', 'ai');
+    expect(reason).toContain('响应格式无效');
+    expect(reason).toContain('本次生成已停止');
   });
 
-  it('data 在但 chunks 不是数组也放行', async () => {
+  it('data 在但 chunks 不是数组时按非法响应拦车', async () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
       json: async () => ({ data: { chunks: null } }),
     });
-    expect(await zeroEvidenceReason('教会我 RAG', 'ai')).toBeNull();
+    expect(await zeroEvidenceReason('教会我 RAG', 'ai')).toContain('响应格式无效');
   });
 
   it('明确拿到空数组才拦', async () => {

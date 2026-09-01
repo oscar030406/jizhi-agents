@@ -15,12 +15,49 @@ const outlines: SceneOutline[] = [
   {
     id: 'practice',
     type: 'interactive',
-    title: '练习并反馈重试',
-    description: '完成练习并根据反馈修正。',
-    keyPoints: ['练习', '反馈', '重试'],
+    title: '先独立练习',
+    description: '学习者先完成一次可观察练习。',
+    keyPoints: ['练习', '提交', '目标 O1'],
     order: 1,
+    teachingObjective: 'O1',
     widgetType: 'game',
     widgetOutline: { gameType: 'strategy', challenge: '完成练习' },
+  },
+  {
+    id: 'feedback',
+    type: 'interactive',
+    title: '根据反馈重试',
+    description: '查看错误反馈，修改答案后再次提交。',
+    keyPoints: ['反馈', '修订', '重试'],
+    order: 2,
+    teachingObjective: 'O1',
+    widgetType: 'game',
+    widgetOutline: { gameType: 'strategy', challenge: '根据反馈完成第二次尝试' },
+  },
+  {
+    id: 'performance',
+    type: 'pbl',
+    title: '提交表现证据',
+    description: '在完整任务中提交可验收的表现证据。',
+    keyPoints: ['任务', '证据', '标准'],
+    order: 3,
+    teachingObjective: 'O1',
+    pblConfig: {
+      projectTopic: '表现任务',
+      projectDescription: '完成一项可按标准验收的任务。',
+      targetSkills: ['应用', '验证'],
+    },
+  },
+  {
+    id: 'reflection',
+    type: 'interactive',
+    title: '反思并修订',
+    description: '对照表现标准修订自己的方案。',
+    keyPoints: ['反思', '修订', '标准'],
+    order: 4,
+    teachingObjective: 'O1',
+    widgetType: 'game',
+    widgetOutline: { gameType: 'strategy', challenge: '找出证据缺口并修订' },
   },
   {
     id: 'assessment',
@@ -28,19 +65,28 @@ const outlines: SceneOutline[] = [
     title: '迁移测验',
     description: '在新情境中验收。',
     keyPoints: ['迁移', '测验', '验收'],
-    order: 2,
+    order: 5,
+    teachingObjective: 'O1',
     quizConfig: { questionCount: 1, difficulty: 'medium', questionTypes: ['text'] },
   },
 ];
 
 const contract: LearningContract = {
+  teachingStrategy: 'ubd',
+  strategyEvidence: {
+    essentialQuestion: '怎样把练习迁移到新情境？',
+    enduringUnderstanding: '反馈后的修订是迁移能力的一部分。',
+    performanceEvidence: 'performance',
+    reflectionRevision: 'reflection',
+    transfer: 'assessment',
+  },
   objectives: [
     { id: 'O1', action: '完成任务', condition: '给定新情境', successCriterion: '通过测验' },
   ],
   prerequisiteActivation: ['practice'],
   demonstration: ['practice'],
   learnerPractice: ['practice'],
-  feedbackRetry: ['practice'],
+  feedbackRetry: ['feedback'],
   transferApplication: ['assessment'],
   assessmentMap: [{ sceneId: 'assessment', objectiveIds: ['O1'] }],
   grounding: { sourceRefs: ['corpus:ai'], claimPolicy: 'cite-or-mark-uncertain' },
@@ -57,8 +103,14 @@ describe('generation-preview 教学契约 session', () => {
     const result = learningContractPlanFromDoneEvent({ outlines, learningContract: contract }, []);
 
     expect(result.outlines).toEqual(outlines);
+    expect(result.learningContractPlan.version).toBe(2);
+    expect(result.learningContractPlan.teachingStrategy).toBe('ubd');
+    expect(result.learningContractPlan.strategyEvidence).toEqual(contract.strategyEvidence);
     expect(result.learningContractPlan.plannedScenes).toEqual([
       { sceneId: 'practice', type: 'interactive', widgetType: 'game' },
+      { sceneId: 'feedback', type: 'interactive', widgetType: 'game' },
+      { sceneId: 'performance', type: 'pbl' },
+      { sceneId: 'reflection', type: 'interactive', widgetType: 'game' },
       { sceneId: 'assessment', type: 'quiz' },
     ]);
     expect(JSON.stringify(result.learningContractPlan)).not.toContain('objectives');
@@ -74,9 +126,36 @@ describe('generation-preview 教学契约 session', () => {
     );
 
     const rebuilt = rebuildLearningContractPlan(original, edited);
-    expect(rebuilt.plannedScenes.map((scene) => scene.sceneId)).toEqual(['practice', 'assessment']);
+    expect(rebuilt.plannedScenes.map((scene) => scene.sceneId)).toEqual([
+      'practice',
+      'feedback',
+      'performance',
+      'reflection',
+      'assessment',
+    ]);
+    expect(rebuilt.version).toBe(2);
+    expect(rebuilt.teachingStrategy).toBe('ubd');
+    expect(rebuilt.strategyEvidence).toEqual(original.strategyEvidence);
     expect(rebuilt.required).toEqual(original.required);
     expect(validateLearningContractPlan(rebuilt, edited)).toEqual(rebuilt);
+  });
+
+  it('旧 v1 session plan 重建为 standard v2，不要求补造策略证据', () => {
+    const current = learningContractPlanFromDoneEvent(
+      { outlines, learningContract: contract },
+      [],
+    ).learningContractPlan;
+    const legacy = {
+      version: 1 as const,
+      plannedScenes: current.plannedScenes,
+      required: current.required,
+    };
+
+    const rebuilt = rebuildLearningContractPlan(legacy, outlines);
+    expect(rebuilt.version).toBe(2);
+    expect(rebuilt.teachingStrategy).toBe('standard');
+    expect(rebuilt.strategyEvidence).toBeUndefined();
+    expect(validateLearningContractPlan(legacy, outlines)).toEqual(rebuilt);
   });
 
   it('人工删除必需场景或把反馈练习降成讲解页时明确要求重新验证', () => {

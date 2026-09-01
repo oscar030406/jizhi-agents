@@ -16,8 +16,11 @@
 
 import type { NextRequest } from 'next/server';
 
+import curatedPath from '@/data/learning-path.json';
+import { readProfile } from '@/lib/accounts/store';
 import { API_ERROR_CODES, apiError, apiSuccess } from '@/lib/server/api-response';
 import { requireCorpusVisible } from '@/lib/server/corpus-access';
+import { PATH_HOME_DOMAIN } from '@/lib/server/course-domains';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('DomainPath API');
@@ -39,10 +42,31 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ cor
     return apiError(API_ERROR_CODES.PROVIDER_DISABLED, 503, '学习路径服务尚未启用。');
   }
   try {
+    const storedProfile = access.account ? await readProfile(access.account.id) : null;
+    const profile: Record<string, unknown> =
+      storedProfile && typeof storedProfile === 'object' && !Array.isArray(storedProfile)
+        ? { ...(storedProfile as Record<string, unknown>), domain: corpus, corpus }
+        : { domain: corpus, corpus };
+    const conceptMastery =
+      profile.conceptMastery &&
+      typeof profile.conceptMastery === 'object' &&
+      !Array.isArray(profile.conceptMastery)
+        ? profile.conceptMastery
+        : {};
     const resp = await fetch(
       `${base.replace(/\/$/, '')}/internal/v1/personalize/domain-path/${encodeURIComponent(corpus)}`,
       {
-        headers: { 'x-internal-token': process.env.GROUNDING_TOKEN ?? '' },
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-internal-token': process.env.GROUNDING_TOKEN ?? '',
+        },
+        body: JSON.stringify({
+          corpus,
+          profile,
+          conceptMastery,
+          ...(corpus === PATH_HOME_DOMAIN ? { curatedPath } : {}),
+        }),
         signal: AbortSignal.timeout(TIMEOUT_MS),
         cache: 'no-store',
       },

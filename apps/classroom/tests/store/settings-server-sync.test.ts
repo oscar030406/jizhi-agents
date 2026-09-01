@@ -188,8 +188,8 @@ interface MockServerResponse {
   tts?: Record<string, { baseUrl?: string; disabled?: boolean }>;
   asr?: Record<string, { baseUrl?: string }>;
   pdf?: Record<string, { baseUrl?: string }>;
-  image?: Record<string, { baseUrl?: string }>;
-  video?: Record<string, { baseUrl?: string }>;
+  image?: Record<string, { models?: string[]; baseUrl?: string }>;
+  video?: Record<string, { models?: string[]; baseUrl?: string }>;
   webSearch?: Record<string, { baseUrl?: string }>;
 }
 
@@ -1030,6 +1030,18 @@ describe('fetchServerProviders — Image stale selection', () => {
     expect(store.getState().imageModelId).toBe('doubao-seedream-5-0-260128');
   });
 
+  it('replaces built-in image models with the server-pinned list', async () => {
+    const store = await getStore();
+
+    mockServerResponse({ image: { seedream: { models: ['server-image-model'] } } });
+    await store.getState().fetchServerProviders();
+
+    const config = store.getState().imageProvidersConfig.seedream;
+    expect(config.customModels).toEqual([{ id: 'server-image-model', name: 'server-image-model' }]);
+    expect(config.replaceBuiltInModels).toBe(true);
+    expect(store.getState().imageModelId).toBe('server-image-model');
+  });
+
   it('does not force-enable when provider is already set but generation was disabled', async () => {
     const store = await getStore();
 
@@ -1138,6 +1150,18 @@ describe('fetchServerProviders — Video stale selection', () => {
     expect(store.getState().videoModelId).toBe('doubao-seedance-2-0-260128');
     // Provider recovered but generation stays off — user enables manually
     expect(store.getState().videoGenerationEnabled).toBe(false);
+  });
+
+  it('replaces built-in video models with the server-pinned list', async () => {
+    const store = await getStore();
+
+    mockServerResponse({ video: { seedance: { models: ['server-video-model'] } } });
+    await store.getState().fetchServerProviders();
+
+    const config = store.getState().videoProvidersConfig.seedance;
+    expect(config.customModels).toEqual([{ id: 'server-video-model', name: 'server-video-model' }]);
+    expect(config.replaceBuiltInModels).toBe(true);
+    expect(store.getState().videoModelId).toBe('server-video-model');
   });
 });
 

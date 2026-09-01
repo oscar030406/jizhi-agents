@@ -102,4 +102,56 @@ describe('知识库视角预览', () => {
     expect(mocks.requireCorpusVisible).toHaveBeenCalledWith('private-b');
     expect(mocks.writeProfileEnvelope).not.toHaveBeenCalled();
   });
+
+  it('切换到不可见知识库的既有档案时拒绝且不落盘', async () => {
+    mocks.readProfileEnvelope.mockResolvedValue({
+      ...structuredClone(envelope),
+      profiles: [
+        ...structuredClone(envelope.profiles),
+        {
+          id: 'p2',
+          name: '私有档案',
+          createdAt: 2,
+          updatedAt: 2,
+          fields: { domain: 'private-b' },
+        },
+      ],
+    });
+    const denied = new Response(JSON.stringify({ success: false }), { status: 403 });
+    mocks.requireCorpusVisible.mockResolvedValue({ ok: false, response: denied });
+    const { POST } = await import('@/app/api/profile/route');
+    const res = await POST(request({ session: 't' }, { action: 'activate', id: 'p2' }));
+
+    expect(res).toBe(denied);
+    expect(mocks.requireCorpusVisible).toHaveBeenCalledWith('private-b');
+    expect(mocks.writeProfileEnvelope).not.toHaveBeenCalled();
+  });
+
+  it('更新非活动档案时也校验目标档案的知识库', async () => {
+    mocks.readProfileEnvelope.mockResolvedValue({
+      ...structuredClone(envelope),
+      profiles: [
+        ...structuredClone(envelope.profiles),
+        {
+          id: 'p2',
+          name: '备用档案',
+          createdAt: 2,
+          updatedAt: 2,
+          fields: { corpus: 'ai' },
+        },
+      ],
+    });
+    const denied = new Response(JSON.stringify({ success: false }), { status: 403 });
+    mocks.requireCorpusVisible.mockImplementation(async (corpus: string) =>
+      corpus === 'private-b' ? { ok: false, response: denied } : { ok: true },
+    );
+    const { POST } = await import('@/app/api/profile/route');
+    const res = await POST(
+      request({ session: 't' }, { action: 'update', id: 'p2', fields: { corpus: 'private-b' } }),
+    );
+
+    expect(res).toBe(denied);
+    expect(mocks.requireCorpusVisible).toHaveBeenCalledWith('private-b');
+    expect(mocks.writeProfileEnvelope).not.toHaveBeenCalled();
+  });
 });

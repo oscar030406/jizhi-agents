@@ -15,20 +15,19 @@
 import { readFileSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { validateTemplateParams } from '@/lib/generation/widget-templates';
-import { evalCurve } from '@/components/widgets/ParameterCurve';
-import type { CurveFamily, TemplateWidgetConfig } from '@/lib/types/widgets';
+import {
+  checkTemplateQualityRedLines,
+  validateTemplateParams,
+  type TemplateQualityRedLineCode,
+  type TemplateQualityRedLineHit,
+} from '@/lib/generation/widget-templates';
+import type { TemplateWidgetConfig } from '@/lib/types/widgets';
 
 // ==================== 用例形状 ====================
 
 /** 红线码。含义见 rubric.md，与 PBL planner 那套 B 码不同名不同义，别串。 */
-export type RedLineCode = 'B1' | 'B2' | 'B3' | 'B4';
-
-export interface RedLineHit {
-  code: RedLineCode;
-  /** 一句话说清是哪里犯的，报告里直接给人看 */
-  detail: string;
-}
+export type RedLineCode = TemplateQualityRedLineCode;
+export type RedLineHit = TemplateQualityRedLineHit;
 
 export interface WidgetScenario {
   id: string;
@@ -49,140 +48,7 @@ export interface WidgetScenario {
 
 // ==================== 模板教具：读 config 判 ====================
 
-/** 各曲线族公式里真正用到的系数。滑块绑到不在这张表里的字母 = 死滑块。
- * 与 ParameterCurve.evalCurve 的分支一一对应，那边加族这边要补。 */
-const CURVE_COEFFICIENTS: Record<CurveFamily, ReadonlyArray<'a' | 'b' | 'c'>> = {
-  linear: ['a', 'b'],
-  quadratic: ['a', 'b', 'c'],
-  power: ['a', 'b', 'c'],
-  exponential: ['a', 'b', 'c'],
-  logarithmic: ['a', 'b'],
-  logistic: ['a', 'b', 'c'],
-};
-
-/** 与组件同参数的采样：121 点、丢掉非有限与 1e15 以上的值。
- * 常数抄自 ParameterCurve（那两个是组件内部常量，没导出，这里跟着写死；
- * 改那边的量级上限要回来同步，不然评测会和画面不一致）。 */
-function finitePointCount(
-  curve: CurveFamily,
-  k: { a: number; b: number; c: number },
-  xAxis: { min: number; max: number },
-): number {
-  let n = 0;
-  for (let i = 0; i < 121; i += 1) {
-    const x = xAxis.min + ((xAxis.max - xAxis.min) * i) / 120;
-    const y = evalCurve(curve, k, x);
-    if (Number.isFinite(y) && Math.abs(y) < 1e15) n += 1;
-  }
-  return n;
-}
-
-const allSame = (xs: unknown[]) => xs.every((x) => JSON.stringify(x) === JSON.stringify(xs[0]));
-
-export function checkTemplateConfig(config: TemplateWidgetConfig): RedLineHit[] {
-  const hits: RedLineHit[] = [];
-
-  switch (config.templateId) {
-    case 'process_stepper': {
-      const steps = config.params.steps;
-      if (allSame(steps)) {
-        hits.push({
-          code: 'B1',
-          detail: `${steps.length} 步内容逐字相同，按「下一步」只有步号在动`,
-        });
-      }
-      if (steps.every((s) => !s.carries)) {
-        hits.push({ code: 'B3', detail: '没有任何一步写了交给下一步的东西，流程退化成分段文字' });
-      }
-      break;
-    }
-
-    case 'bpe_merge_stepper': {
-      const steps = config.params.steps;
-      if (allSame(steps)) {
-        hits.push({ code: 'B1', detail: `${steps.length} 步的分词状态完全相同，合并从未发生` });
-      }
-      break;
-    }
-
-    case 'attention_playground': {
-      const { scores } = config.params;
-      if (allSame(scores)) {
-        hits.push({ code: 'B2', detail: '相容性矩阵每一行都相同，点哪个 token 权重分布都不变' });
-      } else if (scores.every((row) => new Set(row).size === 1)) {
-        hits.push({
-          code: 'B2',
-          detail: '每行内部数值全相等，softmax 恒为均匀分布，温度滑块拖到头也没有形状变化',
-        });
-      }
-      break;
-    }
-
-    case 'temperature_sampler': {
-      const logits = config.params.candidates.map((c) => c.logit);
-      if (new Set(logits).size === 1) {
-        hits.push({
-          code: 'B2',
-          detail: '所有候选词 logit 相同，任何温度下都是均匀分布，温度滑块无效',
-        });
-      }
-      break;
-    }
-
-    case 'tradeoff_matrix': {
-      const { dimensions, options } = config.params;
-      const flatDims = dimensions.every(
-        (_, d) => new Set(options.map((o) => o.cells[d]?.rating)).size === 1,
-      );
-      if (flatDims) {
-        hits.push({
-          code: 'B2',
-          detail: '每个维度下所有方案评分都一样，勾选任何维度组合排名都不会变',
-        });
-      }
-      break;
-    }
-
-    case 'parameter_curve': {
-      const { curve, coefficients, sliders, xAxis } = config.params;
-      const used = CURVE_COEFFICIENTS[curve];
-      for (const s of sliders) {
-        if (!used.includes(s.key)) {
-          hits.push({
-            code: 'B2',
-            detail: `滑块「${s.label}」绑在系数 ${s.key} 上，而 ${curve} 族的公式只用到 ${used.join('/')}，拖它曲线不动`,
-          });
-        }
-      }
-      const n = finitePointCount(curve, coefficients, xAxis);
-      if (n < 2) {
-        hits.push({
-          code: 'B4',
-          detail: `默认系数下 121 个采样点里只有 ${n} 个能画，首屏是一副空坐标轴`,
-        });
-      }
-      break;
-    }
-
-    case 'layered_graph': {
-      const nodes = config.params.layers.flatMap((l) => l.nodes);
-      if (nodes.every((n) => !n.note)) {
-        hits.push({
-          code: 'B3',
-          detail: `${nodes.length} 个节点没有一个带说明，点下去只有高亮，不出内容`,
-        });
-      }
-      break;
-    }
-
-    case 'rag_retrieval_playground':
-      // 这个模板的空转判定要重算一遍组件里的 Dice 打分才做得准，
-      // 那个函数没导出，抄一份会漂移——留给 VLM 看多帧召回排名有没有变。
-      break;
-  }
-
-  return hits;
-}
+export const checkTemplateConfig = checkTemplateQualityRedLines;
 
 // ==================== 自由 HTML 教具：扫源码判 ====================
 
@@ -248,9 +114,13 @@ export function checkScenario(s: WidgetScenario): { schemaError?: string; hits: 
   // 说明它跑不到渲染，红线判定无从谈起——这一步等于给用例集上锁。
   const { templateId, params, name, guide } = s.widgetConfig;
   const validated = validateTemplateParams(templateId, params, { name, guide });
-  if (!validated.ok) return { schemaError: validated.error, hits: [] };
+  if (!validated.ok) {
+    return validated.redLines
+      ? { hits: validated.redLines }
+      : { schemaError: validated.error, hits: [] };
+  }
 
-  return { hits: checkTemplateConfig(validated.config) };
+  return { hits: [] };
 }
 
 // ==================== 命令行 ====================

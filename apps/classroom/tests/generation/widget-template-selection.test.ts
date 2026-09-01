@@ -203,7 +203,13 @@ describe('validateTemplateParams — tradeoff_matrix', () => {
       dimensions: ['快', '省'],
       options: [
         { name: 'A', cells: cells(2) },
-        { name: 'B', cells: cells(2) },
+        {
+          name: 'B',
+          cells: [
+            { text: '更快', rating: 4 },
+            { text: '更贵', rating: 2 },
+          ],
+        },
       ],
     });
     expect(r.ok).toBe(true);
@@ -246,8 +252,8 @@ describe('validateTemplateParams — tradeoff_matrix', () => {
 describe('validateTemplateParams — layered_graph', () => {
   const graph = (over: Record<string, unknown> = {}) => ({
     layers: [
-      { title: '上游', nodes: [{ id: 'a', label: '入口' }] },
-      { title: '下游', nodes: [{ id: 'b', label: '出口' }] },
+      { title: '上游', nodes: [{ id: 'a', label: '入口', note: '接收请求。' }] },
+      { title: '下游', nodes: [{ id: 'b', label: '出口', note: '返回结果。' }] },
     ],
     edges: [{ from: 'a', to: 'b' }],
     ...over,
@@ -331,7 +337,11 @@ describe('validateTemplateParams — layered_graph', () => {
     const full = (count: number) =>
       Array.from({ length: count }, (_, li) => ({
         title: `L${li}`,
-        nodes: [0, 1, 2, 3].map((ni) => ({ id: `n${li}${ni}`, label: `节点${ni}` })),
+        nodes: [0, 1, 2, 3].map((ni) => ({
+          id: `n${li}${ni}`,
+          label: `节点${ni}`,
+          note: `第 ${li} 层第 ${ni} 个节点。`,
+        })),
       }));
     const edges = [{ from: 'n00', to: 'n10' }];
 
@@ -339,6 +349,67 @@ describe('validateTemplateParams — layered_graph', () => {
     const r = validateTemplateParams('layered_graph', { layers: full(4), edges }); // 16 超顶
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain('12 nodes or fewer');
+  });
+});
+
+describe('validateTemplateParams — teaching red lines', () => {
+  const cases: Array<{ name: string; code: string; templateId: string; params: unknown }> = [
+    {
+      name: 'B1 复读步骤',
+      code: 'B1',
+      templateId: 'process_stepper',
+      params: {
+        steps: Array.from({ length: 3 }, () => ({
+          title: '训练',
+          detail: '训练模型并优化参数。',
+          carries: '模型',
+        })),
+      },
+    },
+    {
+      name: 'B2 死滑块',
+      code: 'B2',
+      templateId: 'parameter_curve',
+      params: {
+        curve: 'logarithmic',
+        coefficients: { a: 2, b: 1, c: 5 },
+        sliders: [{ key: 'c', label: '无效系数', min: 0, max: 10, step: 1 }],
+        xAxis: { label: 'x', min: 1, max: 10 },
+        yAxis: { label: 'y' },
+        observations: ['拖动系数观察曲线。', '比较变化。'],
+      },
+    },
+    {
+      name: 'B3 空详情',
+      code: 'B3',
+      templateId: 'layered_graph',
+      params: {
+        layers: [
+          { title: '上游', nodes: [{ id: 'a', label: '入口' }] },
+          { title: '下游', nodes: [{ id: 'b', label: '出口' }] },
+        ],
+        edges: [{ from: 'a', to: 'b' }],
+      },
+    },
+    {
+      name: 'B4 空首屏',
+      code: 'B4',
+      templateId: 'parameter_curve',
+      params: {
+        curve: 'exponential',
+        coefficients: { a: 1, b: 100, c: 0 },
+        sliders: [{ key: 'b', label: '增长指数', min: 1, max: 100, step: 1 }],
+        xAxis: { label: 'x', min: 1, max: 10 },
+        yAxis: { label: 'y' },
+        observations: ['观察指数增长。', '比较曲线变化。'],
+      },
+    },
+  ];
+
+  it.each(cases)('rejects $name', ({ code, templateId, params }) => {
+    const result = validateTemplateParams(templateId, params);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain(`[${code}]`);
   });
 });
 

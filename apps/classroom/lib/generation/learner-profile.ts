@@ -9,8 +9,9 @@
  * each item carrying a because-chain back to a profile dimension.
  *
  * That plan is folded into the outline/scene prompts through the same
- * description-append channel evidence uses: zero schema intrusion, and any
- * failure degrades silently to ungrounded generation.
+ * description-append channel evidence uses: zero schema intrusion. When the
+ * bridge is configured, failures are explicit so a personalized request cannot
+ * quietly turn into a generic course.
  */
 
 import { createLogger } from '@/lib/logger';
@@ -124,7 +125,7 @@ export function corpusOf(
   return corpus || domain || undefined;
 }
 
-/** Ask the engine's diagnosis agent for a plan. Null on any failure — never blocks generation. */
+/** Ask the engine's diagnosis agent for a plan. Missing configuration is optional; configured failures block. */
 export async function fetchLearnerBlueprint(
   learningGoal: string,
   profile: LearnerProfileInput,
@@ -167,15 +168,19 @@ export async function fetchLearnerBlueprint(
       cache: 'no-store',
     });
     if (!resp.ok) {
-      onFailure?.(`学情诊断桥返回 HTTP ${resp.status}`);
-      return null;
+      throw new Error(`学情诊断桥返回 HTTP ${resp.status}`);
     }
     const payload = (await resp.json()) as { data?: LearnerBlueprint };
-    return payload.data ?? null;
+    if (!payload.data) throw new Error('学情诊断桥没有返回学习方案');
+    return payload.data;
   } catch (err) {
-    log.warn(`Blueprint fetch failed (falling back to generic generation): ${String(err)}`);
-    onFailure?.(`学情诊断桥不可达（${err instanceof Error ? err.name : 'error'}）`);
-    return null;
+    const message =
+      err instanceof Error && err.message.startsWith('学情诊断桥')
+        ? err.message
+        : `学情诊断桥不可达（${err instanceof Error ? err.name : 'error'}）`;
+    log.warn(`Blueprint fetch failed: ${String(err)}`);
+    onFailure?.(message);
+    throw new Error(message, { cause: err });
   }
 }
 

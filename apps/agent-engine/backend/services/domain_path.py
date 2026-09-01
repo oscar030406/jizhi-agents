@@ -38,6 +38,8 @@
 from __future__ import annotations
 
 import json
+import math
+import re
 from typing import Any
 
 from backend.rag.ingest import read_index_rows
@@ -54,6 +56,7 @@ SECTIONS_PER_CONCEPT = 3
 THIN_CONCEPTS = 6
 #: 索引标注路径的分阶数。没有深度可分，只能按覆盖厚度切三档。
 TAG_STAGES = 3
+MASTERY_THRESHOLD = 0.7
 
 CALIBER = (
     "阶段由前置图拓扑深度分档，边来自接入流水线的成对分类器，"
@@ -66,9 +69,17 @@ TAG_CALIBER = (
 )
 
 
-def build_domain_path(corpus: str) -> dict[str, Any]:
+def build_domain_path(
+    corpus: str,
+    profile: Any = None,
+    concept_mastery: Any = None,
+    curated_path: Any = None,
+) -> dict[str, Any]:
     """某个域的学习路径。查不到就如实返回 source="none" + reason，不编。"""
     name = (corpus or "").strip()
+    if name == "ai" and isinstance(curated_path, dict):
+        return _personalize(_curated_path(name, curated_path), profile, concept_mastery)
+
     readiness = read_json_dict(KB_DIR / f"{name}_intake" / "readiness.json") if name else {}
     produced = readiness.get("produced_by") or {}
     out: dict[str, Any] = {
@@ -90,7 +101,7 @@ def build_domain_path(corpus: str) -> dict[str, Any]:
             "该领域尚未生成可用的学习路径：知识库未完成接入，"
             "或接入报告当前不可用。请由所属机构的管理者完成知识库接入后重试"
         )
-        return out
+        return _personalize(out, profile, concept_mastery)
 
     meta = {
         str(c["concept"]): c
@@ -129,14 +140,14 @@ def build_domain_path(corpus: str) -> dict[str, Any]:
                     },
                 }
             )
-            return out
+            return _personalize(out, profile, concept_mastery)
     if not order:
         note = str(readiness.get("vocabulary_note") or "").strip()
         out["reason"] = (
             "这个库的概念表是空的，语料索引里也没有概念标注"
             + (f"：{note}" if note else "，接入报告里也没写原因")
         )
-        return out
+        return _personalize(out, profile, concept_mastery)
 
     universe = set(order)
     prereq: dict[str, list[str]] = {}
@@ -206,7 +217,177 @@ def build_domain_path(corpus: str) -> dict[str, Any]:
             "cycles_broken": cycles_broken,
         }
     )
-    return out
+    return _personalize(out, profile, concept_mastery)
+
+
+def _curated_path(corpus: str, data: dict[str, Any]) -> dict[str, Any]:
+    """把 AI 既有 tracks/nodes 适配成同一返回形状；顺序和概念一字不造。"""
+    nodes = {
+        str(node.get("id")): node
+        for node in data.get("nodes") or []
+        if isinstance(node, dict) and node.get("id")
+    }
+    order = [
+        str(node_id)
+        for track in data.get("tracks") or []
+        if isinstance(track, dict)
+        for node_id in track.get("nodeIds") or []
+        if str(node_id) in nodes
+    ]
+    prereq = {
+        node_id: [str(item) for item in nodes[node_id].get("prereq") or [] if str(item) in nodes]
+        for node_id in order
+    }
+    depth, cycles_broken = _depths(order, prereq)
+    stages: list[dict[str, Any]] = []
+    for index, track in enumerate(data.get("tracks") or [], start=1):
+        if not isinstance(track, dict):
+            continue
+        concepts: list[dict[str, Any]] = []
+        for raw_id in track.get("nodeIds") or []:
+            node_id = str(raw_id)
+            node = nodes.get(node_id)
+            if not node:
+                continue
+            title = str(node.get("title") or node_id)
+            concepts.append(
+                {
+                    "id": node_id,
+                    "name": title,
+                    "depth": depth.get(node_id, 0),
+                    "prereq": [str(nodes[item].get("title") or item) for item in prereq[node_id]],
+                    "confidence": None,
+                    "because": "沿用 AI 主域既有策展路径",
+                    "sections": [str(node["textbookRef"])] if node.get("textbookRef") else [],
+                    **({"courseId": node.get("courseId")} if "courseId" in node else {}),
+                    **({"audience": node.get("audience")} if node.get("audience") else {}),
+                    **({"difficulty": node.get("difficulty")} if node.get("difficulty") else {}),
+                }
+            )
+        if concepts:
+            stages.append(
+                {
+                    "index": index,
+                    "title": str(track.get("title") or f"第 {index} 组"),
+                    "hint": str(track.get("hint") or ""),
+                    "concepts": concepts,
+                }
+            )
+    return {
+        "corpus": corpus,
+        "label": _label(corpus),
+        "source": "curated",
+        "version": data.get("version"),
+        "generated_at": None,
+        "run_id": None,
+        "concept_count": len(order),
+        "edge_count": sum(len(items) for items in prereq.values()),
+        "stages": stages,
+        "cycles_broken": cycles_broken,
+        "reason": None,
+        "caliber": "AI 主域沿用既有策展路径；掌握度只改变状态标记，不改概念与顺序",
+    }
+
+
+def _personalize(path: dict[str, Any], profile: Any, explicit_mastery: Any) -> dict[str, Any]:
+    """只在既有节点上移动游标：已掌握 → 当前可学 → 后续。"""
+    profile_dict = profile if isinstance(profile, dict) else {}
+    raw = explicit_mastery if isinstance(explicit_mastery, dict) else profile_dict.get("conceptMastery")
+    mastery = {
+        _norm(str(key)): float(value)
+        for key, value in (raw.items() if isinstance(raw, dict) else [])
+        if _norm(str(key))
+        and isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+        and 0 <= float(value) <= 1
+    }
+    concepts = [
+        concept
+        for stage in path.get("stages") or []
+        if isinstance(stage, dict)
+        for concept in stage.get("concepts") or []
+        if isinstance(concept, dict)
+    ]
+    matched = 0
+    mastered_aliases: set[str] = set()
+    for concept in concepts:
+        score = _mastery_for(concept, mastery)
+        if score is not None:
+            matched += 1
+            concept["mastery"] = score
+        if score is not None and score >= MASTERY_THRESHOLD:
+            concept["status"] = "mastered"
+            mastered_aliases.update(
+                token for token in (_norm(str(concept.get("id") or "")), _norm(str(concept.get("name") or ""))) if token
+            )
+        else:
+            concept["status"] = "future"
+
+    if path.get("source") == "index-tags":
+        current_stage = next(
+            (
+                stage
+                for stage in path.get("stages") or []
+                if any(concept.get("status") != "mastered" for concept in stage.get("concepts") or [])
+            ),
+            None,
+        )
+        if current_stage:
+            for concept in current_stage.get("concepts") or []:
+                if concept.get("status") != "mastered":
+                    concept["status"] = "current"
+    else:
+        for concept in concepts:
+            if concept.get("status") == "mastered":
+                continue
+            prereq = [_norm(str(item)) for item in concept.get("prereq") or [] if _norm(str(item))]
+            if all(item in mastered_aliases for item in prereq):
+                concept["status"] = "current"
+
+    counts = {"mastered": 0, "current": 0, "future": 0}
+    current: list[str] = []
+    for concept in concepts:
+        status = str(concept.get("status") or "future")
+        counts[status] += 1
+        if status == "current":
+            current.append(str(concept.get("name") or ""))
+    for stage in path.get("stages") or []:
+        statuses = [str(concept.get("status") or "future") for concept in stage.get("concepts") or []]
+        stage["status"] = (
+            "mastered"
+            if statuses and all(status == "mastered" for status in statuses)
+            else "current"
+            if "current" in statuses
+            else "future"
+        )
+    path["personalization"] = {
+        "profile_present": bool(profile_dict),
+        "mastery_entries": len(mastery),
+        "matched_mastery": matched,
+        "mastery_threshold": MASTERY_THRESHOLD,
+        "counts": counts,
+        "current": current,
+    }
+    return path
+
+
+def _norm(value: str) -> str:
+    return re.sub(r"[\W_]+", "", value.casefold())
+
+
+def _mastery_for(concept: dict[str, Any], mastery: dict[str, float]) -> float | None:
+    aliases = [_norm(str(concept.get("id") or "")), _norm(str(concept.get("name") or ""))]
+    for alias in aliases:
+        if alias in mastery:
+            return mastery[alias]
+    matches: list[tuple[int, float]] = []
+    for alias in aliases:
+        for key, score in mastery.items():
+            enough = len(key) >= (2 if any(ord(char) > 127 for char in key) else 3)
+            if enough and alias and (key in alias or alias in key):
+                matches.append((len(key), score))
+    return max(matches)[1] if matches else None
 
 
 def _depths(order: list[str], prereq: dict[str, list[str]]) -> tuple[dict[str, int], list[str]]:

@@ -160,6 +160,7 @@ async def create_run(
         ),
     ),
     x_jizhi_corpus: str = Header("", alias="x-jizhi-corpus"),
+    x_jizhi_owner_org: str = Header("", alias="x-jizhi-owner-org"),
 ) -> dict[str, Any]:
     # classroom 已按机构归属核过这个头；这里再与 multipart 真值对照，避免桥核 A 写 B。
     # 头为空保留内部维护脚本兼容性；面向浏览器的桥始终会发送。
@@ -201,6 +202,8 @@ async def create_run(
         "extract_concepts": extract_concepts,
         "trial_run": trial_run,
         "append": append,
+        # 仅内部桥发送；由 IntakeRun 首次落盘，历史授权不再随知识库归属变化。
+        "owner_org_id": x_jizhi_owner_org.strip(),
     }
     # **请求路径只落盘，不解压、不遍历。**
     #

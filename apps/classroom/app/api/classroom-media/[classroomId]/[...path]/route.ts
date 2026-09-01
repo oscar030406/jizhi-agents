@@ -1,10 +1,11 @@
-import { promises as fs, createReadStream } from 'fs';
+import { promises as fs, createReadStream, type ReadStream } from 'fs';
 import path from 'path';
 import { NextRequest, NextResponse } from 'next/server';
 import { corpusOwnership } from '@/lib/accounts/org-store';
 import { isCourseLearnerReleased } from '@/lib/generation/learner-release';
 import { courseVisibleToOrg, viewerOrgId } from '@/lib/server/course-access';
 import { CLASSROOMS_DIR, isValidClassroomId, readClassroom } from '@/lib/server/classroom-storage';
+import { parseRangeHeader } from '@/lib/server/http-range';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('ClassroomMedia');
@@ -31,6 +32,20 @@ const MIME_TYPES: Record<string, string> = {
   '.ogg': 'audio/ogg',
   '.aac': 'audio/aac',
 };
+
+/** Bridge a fs ReadStream into a web ReadableStream, propagating errors and cancel. */
+function toWebStream(stream: ReadStream): ReadableStream {
+  return new ReadableStream({
+    start(controller) {
+      stream.on('data', (chunk: Buffer | string) => controller.enqueue(chunk));
+      stream.on('end', () => controller.close());
+      stream.on('error', (err) => controller.error(err));
+    },
+    cancel() {
+      stream.destroy();
+    },
+  });
+}
 
 export async function GET(
   req: NextRequest,
@@ -88,24 +103,41 @@ export async function GET(
     const ext = path.extname(realPath).toLowerCase();
     const contentType = MIME_TYPES[ext] || 'application/octet-stream';
 
-    // Stream the file to avoid loading large videos into memory
-    const stream = createReadStream(realPath);
-    const webStream = new ReadableStream({
-      start(controller) {
-        stream.on('data', (chunk: Buffer | string) => controller.enqueue(chunk));
-        stream.on('end', () => controller.close());
-        stream.on('error', (err) => controller.error(err));
-      },
-      cancel() {
-        stream.destroy();
-      },
-    });
+    const range = parseRangeHeader(req.headers.get('range'), stat.size);
 
-    return new NextResponse(webStream, {
+    if (range.kind === 'unsatisfiable') {
+      return new NextResponse(null, {
+        status: 416,
+        headers: {
+          'Cache-Control': 'no-store',
+          'Content-Range': `bytes */${stat.size}`,
+        },
+      });
+    }
+
+    if (range.kind === 'range') {
+      return new NextResponse(
+        toWebStream(createReadStream(realPath, { start: range.start, end: range.end })),
+        {
+          status: 206,
+          headers: {
+            'Content-Type': contentType,
+            'Content-Length': String(range.end - range.start + 1),
+            'Content-Range': `bytes ${range.start}-${range.end}/${stat.size}`,
+            'Accept-Ranges': 'bytes',
+            'Cache-Control': cacheControl,
+          },
+        },
+      );
+    }
+
+    // Stream the file to avoid loading large videos into memory
+    return new NextResponse(toWebStream(createReadStream(realPath)), {
       status: 200,
       headers: {
         'Content-Type': contentType,
         'Content-Length': String(stat.size),
+        'Accept-Ranges': 'bytes',
         'Cache-Control': cacheControl,
       },
     });

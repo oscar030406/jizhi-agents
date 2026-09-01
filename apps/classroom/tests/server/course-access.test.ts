@@ -5,8 +5,10 @@ import { courseVisibleToOrg } from '@/lib/server/course-access';
 function course(
   origin?: { corpus?: string; domain?: string },
   profile?: { corpus?: string; domain?: string },
+  ownerOrgId?: string,
 ) {
   return {
+    ...(ownerOrgId ? { ownerOrgId } : {}),
     stage: { origin },
     generation: profile ? { profile } : undefined,
   };
@@ -21,6 +23,13 @@ describe('courseVisibleToOrg', () => {
   it('keeps legacy and unowned courses public', () => {
     expect(courseVisibleToOrg(course(), null, ownership)).toBe(true);
     expect(courseVisibleToOrg(course({ corpus: 'public-corpus' }), null, ownership)).toBe(true);
+  });
+
+  it('prioritizes persisted course organization over public corpus semantics', () => {
+    const owned = course({ corpus: 'public-corpus' }, undefined, 'org-a');
+    expect(courseVisibleToOrg(owned, null, ownership)).toBe(false);
+    expect(courseVisibleToOrg(owned, 'org-b', ownership)).toBe(false);
+    expect(courseVisibleToOrg(owned, 'org-a', ownership)).toBe(true);
   });
 
   it('allows a private course only inside its owning organization', () => {

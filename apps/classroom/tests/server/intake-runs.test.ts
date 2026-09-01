@@ -171,6 +171,7 @@ function slot(
 
 const OK_RECORD = {
   run_id: OK_RUN,
+  owner_org_id: 'org-a',
   corpus: 'llm-serving-demo',
   scope: '能把大模型部署上线并做容量规划的工程师',
   status: 'done',
@@ -198,6 +199,7 @@ const OK_RECORD = {
 const BAD_RECORD = {
   ...OK_RECORD,
   run_id: BAD_RUN,
+  owner_org_id: 'org-b',
   corpus: 'broken-demo',
   status: 'failed',
   duration_ms: 15,
@@ -250,6 +252,29 @@ describe('接入 run 读取层', () => {
     expect(ok.stageCounts.pending).toBe(2);
     expect(ok.stageCounts.skipped).toBe(1);
     expect(rows[0].error).toBe(FAIL_REASON);
+  });
+
+  it('机构过滤先于 limit，其他机构的新记录不会挤掉本机构记录', async () => {
+    const rows = await listRuns(1, 'org-a');
+    expect(rows.map((row) => row.runId)).toEqual([OK_RUN]);
+    expect(rows[0].ownerOrgId).toBe('org-a');
+  });
+
+  it('显示过滤先于 limit，探针记录不会挤掉正常记录', async () => {
+    const probeRun = '99991231T235959-fullprobe';
+    const dir = path.join(dataDir, 'knowledge_base', 'intake_runs', probeRun);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, 'run.json'),
+      JSON.stringify({ ...OK_RECORD, run_id: probeRun, corpus: 'fullprobe' }),
+      'utf-8',
+    );
+    try {
+      const rows = await listRuns(1, 'org-a', (run) => run.corpus !== 'fullprobe');
+      expect(rows.map((row) => row.runId)).toEqual([OK_RUN]);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('增量拉取按 seq 续上，不重不漏', async () => {

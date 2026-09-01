@@ -23,6 +23,7 @@ interface ScoutProject {
   difficulty: number;
   hours: string;
   prereq: string;
+  steps?: string[];
   cost: string;
   networkNote: string;
   why: string;
@@ -223,6 +224,16 @@ export function PracticeScoutPanel({ corpus }: { readonly corpus: string }) {
                     </span>
                   </div>
                   <p>{p.why}</p>
+                  {p.steps && p.steps.length > 0 && (
+                    <div>
+                      <p className="font-medium">操作步骤：</p>
+                      <ol className="mt-1 list-decimal space-y-1 pl-5">
+                        {p.steps.map((step, index) => (
+                          <li key={`${index}-${step}`}>{step}</li>
+                        ))}
+                      </ol>
+                    </div>
+                  )}
                   <p className="text-muted-foreground">
                     <span className="font-medium">验收：</span>
                     {p.acceptance} · <span className="font-medium">产出：</span>

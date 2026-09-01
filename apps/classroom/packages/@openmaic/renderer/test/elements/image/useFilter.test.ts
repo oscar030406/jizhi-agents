@@ -28,7 +28,7 @@ describe('imageFiltersToCss', () => {
     ).toBe('blur(2px) contrast(90%) brightness(120%) hue-rotate(15deg)');
   });
 
-  it('renders legacy filter units safely through the package image element', () => {
+  it('renders legacy filter units with native lazy image loading', () => {
     const image = {
       id: 'image-1',
       type: 'image',
@@ -49,5 +49,7 @@ describe('imageFiltersToCss', () => {
     expect(markup).toContain('filter:blur(2px) contrast(90%)');
     expect(markup).not.toContain('pxpx');
     expect(markup).not.toContain('%%');
+    expect(markup).toContain('loading="lazy"');
+    expect(markup).toContain('decoding="async"');
   });
 });

@@ -3,8 +3,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { fetchEvidence } from '@/lib/generation/evidence-grounding';
 import { fetchLearnerBlueprint } from '@/lib/generation/learner-profile';
 
-// 四桥显式告警的语义锁：onFailure 只在「配置了但调用真失败」时触发。
-// 未配置（GROUNDING_URL 缺）与正常空结果不算失败——那是设计内降级，不是事故。
+// 四桥显式告警的语义锁：未配置可以降级；配置后失败必须显式抛出。
 
 const ENV_KEY = 'GROUNDING_URL';
 
@@ -41,8 +40,15 @@ describe('bridge onFailure semantics', () => {
   test('网络异常：触发 onFailure 且返回 null', async () => {
     global.fetch = vi.fn().mockRejectedValue(new TypeError('fetch failed'));
     const onFailure = vi.fn();
-    expect(await fetchLearnerBlueprint('goal', {}, onFailure)).toBeNull();
+    await expect(fetchLearnerBlueprint('goal', {}, onFailure)).rejects.toThrow('学情诊断桥不可达');
     expect(onFailure).toHaveBeenCalledTimes(1);
+  });
+
+  test('学情诊断桥 HTTP 失败：不得静默生成通用课程', async () => {
+    global.fetch = vi.fn().mockResolvedValue(new Response('boom', { status: 503 }));
+    const onFailure = vi.fn();
+    await expect(fetchLearnerBlueprint('goal', {}, onFailure)).rejects.toThrow('HTTP 503');
+    expect(onFailure).toHaveBeenCalledWith(expect.stringContaining('503'));
   });
 
   // 证据桥屏级重试（WO-L1 根因修复的一半）：引擎按域检索器冷启动 3.4~13.2s 实测，

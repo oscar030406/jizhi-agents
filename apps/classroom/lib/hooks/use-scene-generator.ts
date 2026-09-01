@@ -1,6 +1,7 @@
 'use client';
 
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
+import { toast } from 'sonner';
 import { useStageStore } from '@/lib/store/stage';
 import { isSceneEditLocked } from '@/lib/edit/regen-lock';
 import { getCurrentModelConfig } from '@/lib/utils/model-config';
@@ -16,17 +17,17 @@ import type {
 } from '@/lib/types/generation';
 import { useWorkshopStore } from '@/lib/store/workshop';
 import { useLectureDraftStore } from '@/lib/store/lecture-draft';
-import type { SceneAudit } from '@/lib/generation/hallucination-audit';
+import { hashCourseScenes, type SceneAudit } from '@/lib/generation/hallucination-audit';
+import { decideCourseLearnerRelease } from '@/lib/generation/learner-release';
 import type { AgentInfo } from '@/lib/generation/generation-pipeline';
 import type { Scene } from '@/lib/types/stage';
 import type { SpeechAction } from '@/lib/types/action';
-import { splitLongSpeechActions } from '@/lib/audio/tts-utils';
 import { measureAudioDuration } from '@/lib/audio/audio-duration';
 import { isTTSProviderEnabled } from '@/lib/audio/provider-enablement';
 import { resolveAgentVoiceOptions, pickNarratorAgent } from '@/lib/audio/agent-voice';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
 import { generateMediaForOutlines } from '@/lib/media/media-orchestrator';
-import { lazyBoundedMap, mapWithConcurrency } from '@/lib/utils/concurrency';
+import { lazyBoundedMap } from '@/lib/utils/concurrency';
 import { createLogger } from '@/lib/logger';
 import { redactCaliber } from '@/lib/metrics/redact-caliber';
 import {
@@ -433,9 +434,15 @@ interface SceneAuditResult {
   error?: string;
 }
 
+interface CourseAuditResult {
+  success: boolean;
+  audit?: SceneAudit;
+  error?: string;
+}
+
 /** Call POST /api/generate/scene-audit (between content and actions).
- * Failure degrades to "no audit" — the gate's infrastructure must never be
- * less reliable than the generator it audits.
+ * A failed response is returned explicitly; generation callers keep that scene
+ * out of the completed course until the audit succeeds.
  *
  * 画像在这里就地读，不走参数：正文那一路靠 `requirements.learnerProfile` 传语料库名，
  * 判官这一路六个调用点没有一个传过，于是判官永远读默认（ai）语料——换库生成的课
@@ -466,6 +473,32 @@ export async function fetchSceneAudit(
   } catch (error) {
     if (isAbortError(error)) throw error;
     return { success: false, error: messageFromError(error, 'Scene audit failed') };
+  }
+}
+
+export async function fetchCourseAudit(
+  params: { courseTitle: string; corpus?: string; scenes: Scene[] },
+  signal?: AbortSignal,
+): Promise<CourseAuditResult> {
+  try {
+    const stored = readStoredLearnerProfile();
+    const response = await fetch('/api/generate/course-audit', {
+      method: 'POST',
+      headers: getApiHeaders(),
+      body: JSON.stringify(
+        withThinkingConfig({
+          ...params,
+          corpus: params.corpus || stored?.corpus || 'ai',
+        }),
+      ),
+      signal,
+    });
+    const data = await readJsonResponse(response);
+    if (!response.ok) throw createHttpError(response, data, 'Course audit request failed');
+    return data as unknown as CourseAuditResult;
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    return { success: false, error: messageFromError(error, 'Course audit failed') };
   }
 }
 
@@ -544,8 +577,8 @@ export function mergeAudits(content: SceneAudit | undefined, speech: SceneAudit)
 /**
  * Audit an assembled scene's spoken script. Rewrites action texts in place when
  * the station returns a clean revision, so TTS speaks the corrected words.
- * Returns null when disabled, when the scene has no narration, or when the audit
- * itself was unusable (degrade, never block).
+ * Returns null only when disabled or when the scene has no narration. A required
+ * speech audit that fails is an error: callers must keep the course as a draft.
  */
 async function auditSceneSpeech(
   scene: Scene,
@@ -572,7 +605,9 @@ async function auditSceneSpeech(
     },
     signal,
   );
-  if (!result.success || !result.audit) return null;
+  if (!result.success || !result.audit) {
+    throw new Error(result.error || `讲稿审核未完成：${outline.title}`);
+  }
 
   // Accept a revision only on an exact round-trip (same count, all non-empty
   // strings); anything else keeps the original script.
@@ -739,74 +774,6 @@ export async function generateAndStoreTTS(
   });
 }
 
-/** Generate TTS for all speech actions in a scene. Returns result. */
-async function generateTTSForScene(
-  scene: Scene,
-  language?: string,
-  signal?: AbortSignal,
-): Promise<{ success: boolean; failedCount: number; error?: string }> {
-  const providerId = useSettingsStore.getState().ttsProviderId;
-  scene.actions = splitLongSpeechActions(scene.actions || [], providerId);
-  const speechActions = scene.actions.filter(
-    (a): a is SpeechAction => a.type === 'speech' && !!a.text,
-  );
-  if (speechActions.length === 0) return { success: true, failedCount: 0 };
-
-  let failedCount = 0;
-  let lastError: string | undefined;
-
-  // Use scene order to make audio IDs unique across scenes
-  // This prevents audio collision when action IDs are sequential (e.g., action_1, action_2)
-  const sceneOrder = scene.order;
-
-  // Generate + store one action's audio. Failures are counted, not thrown, so
-  // one bad clip never aborts the rest of the scene.
-  const generateOne = async (action: SpeechAction) => {
-    // Include scene order in audioId to prevent collision across scenes
-    const audioId = `tts_s${sceneOrder}_${action.id}`;
-    action.audioId = audioId;
-    try {
-      await generateAndStoreTTS(audioId, action.text, language, signal);
-    } catch (error) {
-      if (isAbortError(error)) throw error;
-
-      failedCount++;
-      lastError = error instanceof Error ? error.message : `TTS failed for action ${action.id}`;
-      log.warn('TTS generation failed:', {
-        providerId,
-        actionId: action.id,
-        sceneOrder,
-        audioId,
-        textLength: action.text.length,
-        error: lastError,
-      });
-    }
-  };
-
-  // #660 follow-up: speech actions within a scene are independent — each renders
-  // its own audio under its own audioId, with no cross-action ordering — so when
-  // the server opts into parallel generation, render them with bounded
-  // concurrency (reusing the PARALLEL_SCENE_CONCURRENCY knob) instead of one at a
-  // time. Default (0 / unset) keeps the original strictly-serial behaviour.
-  const ttsConcurrency = Math.max(
-    0,
-    Math.floor(useSettingsStore.getState().parallelSceneConcurrency ?? 0),
-  );
-  if (ttsConcurrency > 1 && speechActions.length > 1) {
-    await mapWithConcurrency(speechActions, ttsConcurrency, generateOne);
-  } else {
-    for (const action of speechActions) {
-      await generateOne(action);
-    }
-  }
-
-  return {
-    success: failedCount === 0,
-    failedCount,
-    error: lastError,
-  };
-}
-
 export interface UseSceneGeneratorOptions {
   onSceneGenerated?: (scene: Scene, index: number) => void;
   onSceneFailed?: (outline: SceneOutline, error: string) => void;
@@ -847,8 +814,90 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
   const fetchAbortRef = useRef<AbortController | null>(null);
   const lastParamsRef = useRef<GenerationParams | null>(null);
   const generateRemainingRef = useRef<((params: GenerationParams) => Promise<void>) | null>(null);
+  const courseAuditPromiseRef = useRef<Promise<boolean> | null>(null);
 
   const store = useStageStore;
+
+  const finalizeCourse = useCallback(
+    (signal?: AbortSignal): Promise<boolean> => {
+      if (courseAuditPromiseRef.current) return courseAuditPromiseRef.current;
+
+      const run = (async () => {
+        const state = store.getState();
+        const stage = state.stage;
+        if (!stage || state.scenes.length === 0) return false;
+
+        const result = await fetchCourseAudit(
+          {
+            courseTitle: stage.name,
+            corpus: stage.origin?.corpus,
+            scenes: state.scenes,
+          },
+          signal,
+        );
+        const current = store.getState();
+        if (current.stage?.id !== stage.id) return false;
+        if (current.scenes !== state.scenes) {
+          useStageStore.setState({ generationComplete: false, generationStatus: 'paused' });
+          toast.error('终审期间课程内容发生变化，课程已保留为草稿');
+          return false;
+        }
+
+        if (!result.success || !result.audit) {
+          useStageStore.setState({ generationComplete: false, generationStatus: 'paused' });
+          await store.getState().saveToStorage();
+          const message = `全课程终审未完成，课程已保留为草稿：${result.error || '审核服务未返回结果'}`;
+          useWorkshopStore.getState().push('全课程终审', `⛔ ${message}`, 'red');
+          toast.error(message);
+          return false;
+        }
+
+        const currentStage = current.stage;
+        const release = decideCourseLearnerRelease({
+          scenes: state.scenes,
+          generating: false,
+          stage: { ...currentStage, courseAudit: result.audit },
+        });
+        const released = release.eligible;
+        useStageStore.setState({
+          stage: { ...currentStage, courseAudit: result.audit, updatedAt: Date.now() },
+          generationComplete: released,
+          generationStatus: released ? 'completed' : 'paused',
+          generatingOutlines: [],
+        });
+
+        const saved = await store.getState().saveToStorage();
+        if (!saved) {
+          useStageStore.setState({ generationComplete: false, generationStatus: 'paused' });
+          toast.error('全课程终审结果未能保存，课程已保留为草稿');
+          return false;
+        }
+
+        if (!released) {
+          const reason = [
+            ...release.courseReasons,
+            ...release.contractViolations,
+            ...release.blockedScenes.flatMap((scene) => scene.reasons),
+          ].join('、');
+          useWorkshopStore.getState().push('全课程终审', `⛔ 未发布：${reason}`, 'red');
+          toast.error(`课程终审未通过，已保留为草稿：${reason}`);
+          return false;
+        }
+
+        reportAudit('全课程终审', result.audit);
+        useWorkshopStore.getState().push('全课程终审', '✅ 终审通过，课程已完成', 'green');
+        return true;
+      })();
+
+      courseAuditPromiseRef.current = run;
+      const clear = () => {
+        if (courseAuditPromiseRef.current === run) courseAuditPromiseRef.current = null;
+      };
+      void run.then(clear, clear);
+      return run;
+    },
+    [store],
+  );
 
   const generateRemaining = useCallback(
     async (params: GenerationParams) => {
@@ -883,10 +932,8 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
         .sort((a, b) => a.order - b.order);
 
       if (pending.length === 0) {
-        store.getState().setGenerationStatus('completed');
-        store.getState().setGeneratingOutlines([]);
-        store.getState().setGenerationComplete(true);
-        options.onComplete?.();
+        const released = await finalizeCourse(signal);
+        if (released) options.onComplete?.();
         generatingRef.current = false;
         return;
       }
@@ -1025,36 +1072,7 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
             contentResult = await fetchContent(outline);
           }
 
-          // 教具失败降级（2026-08-04 主线收尾）：交互场景生成失败改出讲义页
-          // 讲同一主题——教具质量是独立课题（已搁置），但**课必须能走完**。
-          // 实测：diagram 类教具反复吐 markdown 抽不出 HTML，一个场景能把整门课
-          // 卡在重试马拉松里。降级页走讲义主路径，审核/验算照常。
-          let effectiveOutlineForScene: SceneOutline = outline;
-          if (
-            (!contentResult.success || !contentResult.content) &&
-            outline.type === 'interactive'
-          ) {
-            if (abortRef.current || store.getState().generationEpoch !== startEpoch) {
-              pausedByFailureOrAbort = true;
-              break;
-            }
-            useWorkshopStore
-              .getState()
-              .push(outline.title, '⚠️ 教具生成失败，本页降级为讲义', 'yellow');
-            log.warn(`Interactive widget failed for "${outline.title}", degrading to lecture page`);
-            const slideOutline: SceneOutline = {
-              ...outline,
-              type: 'slide',
-              widgetType: undefined,
-              widgetOutline: undefined,
-            };
-            options.onPhaseChange?.('content', slideOutline);
-            const degraded = await fetchContent(slideOutline);
-            if (degraded.success && degraded.content) {
-              contentResult = degraded;
-              effectiveOutlineForScene = slideOutline;
-            }
-          }
+          const effectiveOutlineForScene = contentResult.effectiveOutline || outline;
 
           if (!contentResult.success || !contentResult.content) {
             if (abortRef.current || store.getState().generationEpoch !== startEpoch) {
@@ -1086,19 +1104,11 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
           // 车间面板：诊断/检索/拼装/生成各阶段的真实结果，一次成型推入事件流。
           reportPipeline(outline.title, contentResult.pipeline);
 
-          // Step 1.5+2（2026-08-04 提速批二段）：**审核异步后置**——判官不再挡
-          // actions 与进课堂，场景先组装上台，审核结论/修订稿落地时经
-          // updateScene 补写（徽章后到）。生产先例与依据见
-          // docs/04-research/generation_latency_research_20260804.md 第 1 条
-          // （Braintrust/Arize 在线评估模式：先展示、异步打分、低分打标）。
-          //
-          // 质量门一条没删：block_pending_review 照旧留痕（13.6% 判决翻转率
-          // 决定了概率层只标注不删内容，见 arXiv:2606.13685）、修订稿照旧替换
-          // 正文（讲义视图随 store 重渲）。风险注记：speech 现在基于未审正文
-          // 生成——苏格拉底口径的 speech 不复述正文事实（slide-actions 提示词
-          // 铁律），错位风险可控。
-          options.onPhaseChange?.('actions', outline);
-          const auditPromise = fetchSceneAudit(
+          // Step 1.5: audit the generated content before actions consume it. Content
+          // prefetch for later scenes and media generation still run concurrently;
+          // the scene itself only enters the store once content and speech audits settle.
+          options.onPhaseChange?.('audit', outline);
+          const auditResult = await fetchSceneAudit(
             {
               outline: effectiveOutlineForScene,
               content: contentResult.content,
@@ -1107,13 +1117,31 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
             },
             signal,
           );
+          if (!auditResult.success || !auditResult.audit || auditResult.content == null) {
+            reportAuditUnavailable(outline.title);
+            store.getState().addFailedOutline(outline);
+            options.onSceneFailed?.(outline, auditResult.error || 'Scene audit failed');
+            hadContentFailure = true;
+            removeGeneratingOutline(outline.id);
+            if (!contentPromises) {
+              store.getState().setGenerationStatus('paused');
+              pausedByFailureOrAbort = true;
+              break;
+            }
+            continue;
+          }
+          reportAudit(outline.title, auditResult.audit);
+          if (auditResult.audit.decision === 'block_pending_review') {
+            store.getState().recordBlockedScene(outline.title, auditResult.audit);
+          }
 
-          // Step 2: Generate actions + assemble scene（与审核并行）
+          // Step 2: Generate actions from the revised, audited content.
+          options.onPhaseChange?.('actions', outline);
           const actionsResult = await fetchSceneActions(
             {
               outline: contentResult.effectiveOutline || effectiveOutlineForScene,
               allOutlines: outlines,
-              content: contentResult.content,
+              content: auditResult.content,
               stageId: stage.id,
               agents: params.agents,
               previousSpeeches,
@@ -1126,68 +1154,40 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
 
           if (actionsResult.success && actionsResult.scene) {
             const scene = actionsResult.scene;
+            scene.audit = auditResult.audit;
+            if (auditResult.verification) scene.verification = auditResult.verification;
 
-            // 审核结论异步落地器：内容审/讲稿审谁先到谁先并（mergeAudits 交换
-            // 安全：verdict/decision 取重、计数累加）。场景可能已被换课丢弃或
-            // 重生成——按 epoch + 在场校验后经 updateScene 写回，触发重渲。
-            //
-            // ⚠ 修订稿是**生成层**内容（{elements,background,remark}，无 type 壳）
-            // ——不能整包塞 scene.content（塞了 type 变 undefined，持久化校验
-            // 拒收后 0.5s 无限重试，2026-08-04 实测炸过）。slide 只回填
-            // canvas.elements；其他类型修订不落正文，结论徽章照挂（修订细节
-            // 在 audit.claims 面板可见）。
-            const mergeRevisedContent = (
-              cur: Scene['content'],
-              revised: unknown,
-            ): Scene['content'] | null => {
-              const r = revised as { elements?: unknown[] } | null;
-              if (cur.type === 'slide' && r && typeof r === 'object' && Array.isArray(r.elements)) {
-                return {
-                  ...cur,
-                  canvas: { ...cur.canvas, elements: r.elements },
-                } as Scene['content'];
-              }
-              return null;
-            };
-            const applyAuditAsync = (
-              audit: SceneAudit,
-              revisedContent?: unknown,
-              verification?: ScenePipelineMeta['verification'],
-            ) => {
-              if (store.getState().generationEpoch !== startEpoch) return;
-              const cur = store.getState().scenes.find((s) => s.id === scene.id);
-              if (!cur) return;
-              const mergedContent =
-                revisedContent != null ? mergeRevisedContent(cur.content, revisedContent) : null;
-              store.getState().updateScene(scene.id, {
-                audit: cur.audit ? mergeAudits(cur.audit, audit) : audit,
-                ...(verification ? { verification } : {}),
-                ...(mergedContent ? { content: mergedContent } : {}),
-              });
-            };
-
-            // Step 2.5: 讲稿审核（后置）。语音功能已砍出生成主线（2026-08-04
-            // 用户裁决：与教具/导学同列最后可选项），不再有「修订稿必须赶在
-            // TTS 合成前」的串行约束。
-            const runSpeechAudit = async () => {
-              const speechAudit = await auditSceneSpeech(
+            // Step 2.5: speech audit settles before this scene enters the store.
+            let speechAudit: SceneAudit | null;
+            try {
+              speechAudit = await auditSceneSpeech(
                 scene,
                 effectiveOutlineForScene,
                 stage.id,
                 params.stageInfo?.name,
                 signal,
               );
-              if (!speechAudit) return null;
+            } catch (error) {
+              const message = messageFromError(error, 'Speech audit failed');
+              reportFailure(outline.title, '讲稿审核', message);
+              store.getState().addFailedOutline(outline);
+              options.onSceneFailed?.(outline, message);
+              hadContentFailure = true;
+              removeGeneratingOutline(outline.id);
+              if (!contentPromises) {
+                store.getState().setGenerationStatus('paused');
+                pausedByFailureOrAbort = true;
+                break;
+              }
+              continue;
+            }
+            if (speechAudit) {
               reportAudit(outline.title, speechAudit, '讲稿审核');
-              // 讲稿门不丢场景（13.6% 判决翻转率，扔成品代价大于收益）
+              scene.audit = mergeAudits(scene.audit, speechAudit);
               if (speechAudit.decision === 'block_pending_review') {
-                log.warn(
-                  `Scene "${outline.title}" speech flagged for human review (kept): ${speechAudit.rationale}`,
-                );
                 store.getState().recordBlockedScene(`${outline.title}（讲稿）`, speechAudit);
               }
-              return speechAudit;
-            };
+            }
 
             // Epoch changed — stage switched, discard this scene
             if (store.getState().generationEpoch !== startEpoch) {
@@ -1199,41 +1199,9 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
             store.getState().addScene(scene);
             useWorkshopStore.getState().push(outline.title, '✅ 场景完成，进入课堂', 'green');
             options.onSceneGenerated?.(scene, outline.order);
-            previousSpeeches = actionsResult.previousSpeeches || [];
-
-            // 内容审核落地（后台）：徽章/修订稿后到，车间黄行照发
-            void auditPromise
-              .then((auditResult) => {
-                if (auditResult.success && auditResult.audit) {
-                  reportAudit(outline.title, auditResult.audit);
-                  if (auditResult.audit.decision === 'block_pending_review') {
-                    log.warn(
-                      `Scene "${outline.title}" flagged for human review (content kept): ${auditResult.audit.rationale}`,
-                    );
-                    store.getState().recordBlockedScene(outline.title, auditResult.audit);
-                  }
-                  applyAuditAsync(
-                    auditResult.audit,
-                    auditResult.content ?? undefined,
-                    auditResult.verification,
-                  );
-                } else if (!auditResult.success) {
-                  reportAuditUnavailable(outline.title);
-                }
-              })
-              .catch(() => reportAuditUnavailable(outline.title));
-
-            // 讲稿审核落地（后台）：修订稿原地改 speech 文本，
-            // 重写 actions 引用触发持久化与重渲
-            void runSpeechAudit()
-              .then((speechAudit) => {
-                if (!speechAudit) return;
-                applyAuditAsync(speechAudit);
-                if (store.getState().generationEpoch === startEpoch) {
-                  store.getState().updateScene(scene.id, { actions: [...(scene.actions || [])] });
-                }
-              })
-              .catch(() => {});
+            previousSpeeches = (scene.actions || [])
+              .filter((action): action is SpeechAction => action.type === 'speech')
+              .map((action) => action.text);
           } else {
             if (abortRef.current || store.getState().generationEpoch !== startEpoch) {
               pausedByFailureOrAbort = true;
@@ -1254,10 +1222,8 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
             // surface them for retry instead of signalling a clean completion.
             store.getState().setGenerationStatus('paused');
           } else {
-            store.getState().setGenerationStatus('completed');
-            store.getState().setGeneratingOutlines([]);
-            store.getState().setGenerationComplete(true);
-            options.onComplete?.();
+            const released = await finalizeCourse(signal);
+            if (released) options.onComplete?.();
           }
         }
       } catch (err: unknown) {
@@ -1273,7 +1239,7 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
         fetchAbortRef.current = null;
       }
     },
-    [options, store],
+    [finalizeCourse, options, store],
   );
 
   // Keep ref in sync so retrySingleOutline can call it
@@ -1370,13 +1336,21 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
         );
         if (auditResult.success && auditResult.audit) {
           reportAudit(outline.title, auditResult.audit);
-        } else if (!auditResult.success) {
+        } else {
           reportAuditUnavailable(outline.title);
+          store.getState().addFailedOutline(outline);
+          removeGeneratingOutline();
+          store.getState().setGenerationStatus('paused');
+          return;
         }
-        const auditedContent =
-          auditResult.success && auditResult.content != null
-            ? auditResult.content
-            : contentResult.content;
+        if (auditResult.content == null) {
+          reportAuditUnavailable(outline.title);
+          store.getState().addFailedOutline(outline);
+          removeGeneratingOutline();
+          store.getState().setGenerationStatus('paused');
+          return;
+        }
+        const auditedContent = auditResult.content;
 
         // 重试路径同样不丢内容——而且这里原来还有个更糟的问题：只 addFailedOutline
         // 就 return，既没 removeGeneratingOutline 也没复位 generationStatus，
@@ -1453,20 +1427,49 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
         if (store.getState().generatingOutlines.length > 0 && lastParamsRef.current) {
           generateRemainingRef.current?.(lastParamsRef.current);
         } else {
-          // This retry may have materialized the final outstanding slide. The
-          // generateRemaining completion path is not reached on the retry flow,
-          // so mark completion here too — otherwise a later delete would treat
-          // the orphaned outline as pending and regenerate it.
-          store.getState().markGenerationCompleteIfDone();
+          const released = await finalizeCourse(signal);
+          if (released) options.onComplete?.();
         }
       } catch (err) {
         if (!isAbortError(err)) {
+          reportFailure(outline.title, '审核或生成', messageFromError(err, 'Generation failed'));
           store.getState().addFailedOutline(outline);
+          removeGeneratingOutline();
+          store.getState().setGenerationStatus('paused');
         }
       }
     },
-    [store],
+    [finalizeCourse, options, store],
   );
+
+  useEffect(() => {
+    const backfillMissingCourseAudit = () => {
+      const state = store.getState();
+      const contract = state.stage?.learningContract as { version?: unknown } | undefined;
+      if (
+        generatingRef.current ||
+        courseAuditPromiseRef.current ||
+        contract?.version !== 2 ||
+        state.outlines.length === 0 ||
+        state.scenes.length === 0 ||
+        state.failedOutlines.length > 0
+      ) {
+        return;
+      }
+      const completedOrders = new Set(state.scenes.map((scene) => scene.order));
+      if (state.outlines.some((outline) => !completedOrders.has(outline.order))) return;
+      if (state.stage?.courseAudit?.courseContentHash === hashCourseScenes(state.scenes)) return;
+
+      useStageStore.setState({ generationComplete: false, generationStatus: 'generating' });
+      void finalizeCourse().then((released) => {
+        if (released) options.onComplete?.();
+      });
+    };
+
+    const unsubscribe = store.subscribe(backfillMissingCourseAudit);
+    backfillMissingCourseAudit();
+    return unsubscribe;
+  }, [finalizeCourse, options, store]);
 
   return { generateRemaining, retrySingleOutline, stop, isGenerating };
 }

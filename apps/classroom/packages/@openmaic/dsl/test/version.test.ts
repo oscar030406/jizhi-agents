@@ -289,6 +289,68 @@ describe('needsMigration', () => {
   });
 });
 
+describe('0.2.0 -> 0.3.0 legacy line geometry migration', () => {
+  const legacyLine = {
+    id: 'line-1',
+    type: 'line',
+    left: 10,
+    top: 20,
+    width: 100,
+    start: [0, 0],
+    end: [100, 0],
+    rotate: 45,
+    height: 30,
+  };
+
+  it('cleans line elements on a slide canvas', () => {
+    const input = {
+      [DSL_VERSION_KEY]: '0.2.0',
+      stage: { id: 'stage-1' },
+      scenes: [
+        {
+          content: {
+            type: 'slide',
+            canvas: { elements: [legacyLine] },
+          },
+        },
+      ],
+    };
+
+    const out = migrate(input) as typeof input;
+    expect(out[DSL_VERSION_KEY]).toBe('0.3.0');
+    const cleaned = out.scenes[0].content.canvas.elements[0];
+    expect(cleaned).not.toHaveProperty('rotate');
+    expect(cleaned).not.toHaveProperty('height');
+    expect(cleaned.width).toBe(legacyLine.width);
+  });
+
+  it('cleans line elements on a scene whiteboard', () => {
+    const input = {
+      [DSL_VERSION_KEY]: '0.2.0',
+      stage: { id: 'stage-1' },
+      scenes: [{ whiteboards: [{ elements: [legacyLine] }] }],
+    };
+
+    const out = migrate(input) as typeof input;
+    expect(out[DSL_VERSION_KEY]).toBe('0.3.0');
+    expect(out.scenes[0].whiteboards[0].elements[0]).not.toHaveProperty('rotate');
+    expect(out.scenes[0].whiteboards[0].elements[0]).not.toHaveProperty('height');
+  });
+
+  it('cleans line elements on a stage whiteboard', () => {
+    const input = {
+      [DSL_VERSION_KEY]: '0.2.0',
+      stage: { id: 'stage-1', whiteboard: [{ elements: [legacyLine] }] },
+      scenes: [],
+    };
+
+    const out = migrate(input) as typeof input;
+    expect(out[DSL_VERSION_KEY]).toBe('0.3.0');
+    expect(out.stage.whiteboard[0].elements[0]).not.toHaveProperty('rotate');
+    expect(out.stage.whiteboard[0].elements[0]).not.toHaveProperty('height');
+  });
+});
+
 describe('migrate', () => {
   it('stamps a legacy document up to the current version', () => {
     const out = migrate({ id: 'legacy', name: 'course' }) as Record<string, unknown>;

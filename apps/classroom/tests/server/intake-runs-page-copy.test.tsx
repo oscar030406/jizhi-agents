@@ -26,22 +26,31 @@ vi.mock('@/components/admin/intake-run-view', () => ({
 }));
 vi.mock('@/lib/server/domain-registry', () => ({ readDomainRegistry: async () => ({}) }));
 vi.mock('@/lib/accounts/org-store', () => ({
-  corpusVisibilityFor: async () => (corpus: string) => corpus !== 'private-b',
+  orgForAccount: async () => ({ id: 'org-a' }),
 }));
 vi.mock('@/lib/server/intake-runs', () => ({
   RUNS_DIR_LABEL: 'data/knowledge_base/intake_runs/',
   isValidRunId: () => true,
-  listRuns: async () => mocks.runs,
+  listRuns: async (
+    limit: number,
+    ownerOrgId?: string,
+    display: (run: Record<string, unknown>) => boolean = () => true,
+  ) =>
+    mocks.runs
+      .filter((run) => run.ownerOrgId === ownerOrgId)
+      .filter(display)
+      .slice(0, limit),
   readRunEvents: async () => mocks.payload,
 }));
 
 import IntakeRunsPage from '@/app/admin/knowledge/runs/page';
 import IntakeRunPage from '@/app/admin/knowledge/runs/[runId]/page';
 
-function run(corpus: string) {
+function run(corpus: string, ownerOrgId = 'org-a') {
   return {
     runId: `20260831T120000-${corpus}`,
     corpus,
+    ownerOrgId,
     scope: '课程资料',
     status: 'done',
     createdAt: '2026-08-31T12:00:00',
@@ -52,9 +61,9 @@ function run(corpus: string) {
   };
 }
 
-function payload(corpus: string, truncated = false) {
+function payload(corpus: string, truncated = false, ownerOrgId: string | null = 'org-a') {
   return {
-    record: { corpus },
+    record: { corpus, ...(ownerOrgId ? { owner_org_id: ownerOrgId } : {}) },
     events: [],
     truncated,
     nextSeq: 2000,
@@ -76,7 +85,10 @@ describe('知识库接入记录页的提供方文案', () => {
   });
 
   it('列表不渲染 fullprobe/probe 测试语料记录', async () => {
-    mocks.runs = [run('fullpath-probe'), run('fullprobe'), run('iotdb')];
+    mocks.runs = [
+      ...Array.from({ length: 30 }, (_, index) => run(`fullprobe-${index}`)),
+      run('iotdb'),
+    ];
     const html = renderToStaticMarkup(await IntakeRunsPage());
 
     expect(html).toContain('iotdb');
@@ -84,7 +96,7 @@ describe('知识库接入记录页的提供方文案', () => {
   });
 
   it('列表不渲染其他机构的接入记录', async () => {
-    mocks.runs = [run('private-b'), run('iotdb')];
+    mocks.runs = [run('private-b', 'org-b'), run('iotdb')];
     const html = renderToStaticMarkup(await IntakeRunsPage());
     expect(html).toContain('iotdb');
     expect(html).not.toContain('private-b');
@@ -110,7 +122,14 @@ describe('知识库接入记录页的提供方文案', () => {
   });
 
   it('详情路由拒绝渲染其他机构的接入记录', async () => {
-    mocks.payload = payload('private-b');
+    mocks.payload = payload('private-b', false, 'org-b');
+    await expect(
+      IntakeRunPage({ params: Promise.resolve({ runId: '20260831T120000-abcdef' }) }),
+    ).rejects.toThrow('NEXT_NOT_FOUND');
+  });
+
+  it('详情路由拒绝没有所有者的旧记录', async () => {
+    mocks.payload = payload('iotdb', false, null);
     await expect(
       IntakeRunPage({ params: Promise.resolve({ runId: '20260831T120000-abcdef' }) }),
     ).rejects.toThrow('NEXT_NOT_FOUND');

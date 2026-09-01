@@ -114,12 +114,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: '请求体不是合法 JSON' }, { status: 400 });
   }
 
-  const requestedCorpus = corpusOf(body.fields);
-  if (requestedCorpus) {
-    const access = await requireCorpusVisible(requestedCorpus);
-    if (!access.ok) return access.response;
-  }
-
   const env = await readProfileEnvelope(account.id);
   if (!env) return NextResponse.json({ error: '读不到档案' }, { status: 500 });
 
@@ -147,6 +141,21 @@ export async function POST(req: NextRequest) {
     // 400 而不是 500：这些都是用户输入问题（重名、空名、删最后一份、id 不存在），
     // 不是服务端故障。前端照着 message 直接显示即可。
     return NextResponse.json({ error: result.message }, { status: 400 });
+  }
+
+  const targetId =
+    body.action === 'create'
+      ? result.env.activeId
+      : body.action === 'update'
+        ? (body.id ?? env.activeId)
+        : undefined;
+  const targetCorpus = corpusOf(
+    result.env.profiles.find((profile) => profile.id === targetId)?.fields,
+  );
+  const corpora = new Set([targetCorpus, corpusOf(activeFields(result.env))].filter(Boolean));
+  for (const corpus of corpora) {
+    const access = await requireCorpusVisible(corpus as string);
+    if (!access.ok) return access.response;
   }
 
   await writeProfileEnvelope(account.id, result.env);

@@ -1,9 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/lib/accounts/org-store', () => ({
-  orgForAccount: vi.fn(async () => ({ id: 'org-a' })),
-}));
-
 describe('embedded persistence route', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -191,8 +187,7 @@ describe('embedded persistence route', () => {
     expect(seen[0]?.body).toBe(JSON.stringify({ hello: 'world' }));
     expect(seen[1]?.method).toBe('DELETE');
     expect(documentStoreOptions.at(-1)?.access).toEqual({
-      accountId: 'author-a',
-      orgId: 'org-a',
+      accountId: 'anon:author-a',
     });
   });
 });

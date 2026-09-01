@@ -5,6 +5,7 @@ import { orgForAccount } from '@/lib/accounts/org-store';
 import { accountForSession } from '@/lib/accounts/store';
 
 type CourseAccessMetadata = {
+  ownerOrgId?: unknown;
   stage?: { origin?: { corpus?: unknown; domain?: unknown } };
   generation?: { profile?: { corpus?: unknown; domain?: unknown } };
 };
@@ -27,6 +28,9 @@ export function courseVisibleToOrg(
   orgId: string | null,
   ownership: ReadonlyMap<string, string>,
 ): boolean {
+  const ownerOrgId = typeof course.ownerOrgId === 'string' ? course.ownerOrgId.trim() : '';
+  if (ownerOrgId) return orgId === ownerOrgId;
+
   const corpora = new Set(
     [selectedCorpus(course.stage?.origin), selectedCorpus(course.generation?.profile)].filter(
       (corpus): corpus is string => corpus !== null,

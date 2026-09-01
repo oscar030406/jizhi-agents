@@ -597,13 +597,29 @@ export function resolveImageBaseUrl(
   return resolveSectionBaseUrl('image', providerId, clientBaseUrl);
 }
 
+/** Resolve an image model against the server-managed allowlist. */
+export function resolveImageModel(providerId: string, clientModel?: string): string | undefined {
+  const serverModels = getConfig().image[providerId]?.models;
+  if (serverModels?.length) {
+    if (clientModel && serverModels.includes(clientModel)) return clientModel;
+    return serverModels[0];
+  }
+  return clientModel;
+}
+
 // ---------------------------------------------------------------------------
 // Public API — Video Generation
 // ---------------------------------------------------------------------------
 
-/** Returns server-configured video providers (managed flag only, no base URLs). */
-export function getServerVideoProviders(): Record<string, Record<string, never>> {
-  return Object.fromEntries(Object.keys(getConfig().video).map((id) => [id, {}]));
+/** Returns server-configured video providers (allowed models only, no base URLs). */
+export function getServerVideoProviders(): Record<string, { models?: string[] }> {
+  const cfg = getConfig();
+  const result: Record<string, { models?: string[] }> = {};
+  for (const [id, entry] of Object.entries(cfg.video)) {
+    result[id] = {};
+    if (entry.models && entry.models.length > 0) result[id].models = entry.models;
+  }
+  return result;
 }
 
 export function resolveVideoApiKey(providerId: string, clientKey?: string): string {
@@ -615,6 +631,16 @@ export function resolveVideoBaseUrl(
   clientBaseUrl?: string,
 ): string | undefined {
   return resolveSectionBaseUrl('video', providerId, clientBaseUrl);
+}
+
+/** Resolve a video model against the server-managed allowlist. */
+export function resolveVideoModel(providerId: string, clientModel?: string): string | undefined {
+  const serverModels = getConfig().video[providerId]?.models;
+  if (serverModels?.length) {
+    if (clientModel && serverModels.includes(clientModel)) return clientModel;
+    return serverModels[0];
+  }
+  return clientModel;
 }
 
 // ---------------------------------------------------------------------------

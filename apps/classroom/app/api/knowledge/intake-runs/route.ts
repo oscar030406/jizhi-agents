@@ -81,6 +81,8 @@ export async function POST(req: NextRequest) {
         'x-internal-token': process.env.GROUNDING_TOKEN ?? '',
         // 引擎用它核对 multipart 里的 corpus，防止归属闸检查 A 库、实际却写 B 库。
         'x-jizhi-corpus': corpus,
+        // 内部可信头：引擎在 run.json 第一次落盘时固化，后续日志授权不再随库归属漂移。
+        'x-jizhi-owner-org': org.id,
         // multipart 边界在 content-type 里，不带过去引擎就认不出分段。
         ...(req.headers.get('content-type')
           ? { 'content-type': req.headers.get('content-type') as string }
@@ -99,15 +101,20 @@ export async function POST(req: NextRequest) {
     };
     if (!resp.ok) {
       log.warn(`create run HTTP ${resp.status}: ${body.detail ?? ''}`);
+      const detail = body.detail || `引擎返回 HTTP ${resp.status}`;
       return apiError(
         API_ERROR_CODES.UPSTREAM_ERROR,
         resp.status === 400 || resp.status === 413 ? resp.status : 502,
-        body.detail || `引擎返回 HTTP ${resp.status}`,
+        `${detail}；知识库归属已保留，如不再接入请在机构设置中手动释放。`,
       );
     }
     return apiSuccess({ run: body });
   } catch (error) {
     log.warn(`create run failed: ${String(error)}`);
-    return apiError(API_ERROR_CODES.UPSTREAM_ERROR, 502, '引擎不可达，接入没有发起。');
+    return apiError(
+      API_ERROR_CODES.UPSTREAM_ERROR,
+      502,
+      '接入状态暂未确认；知识库归属已保留，请先查看接入记录再决定是否重试。',
+    );
   }
 }

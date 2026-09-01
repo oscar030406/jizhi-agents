@@ -13,6 +13,7 @@ import type { NextRequest } from 'next/server';
 const access = vi.hoisted(() => ({
   requireCorpusVisible: vi.fn(),
 }));
+const profiles = vi.hoisted(() => ({ readProfile: vi.fn() }));
 
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
@@ -21,13 +22,13 @@ vi.mock('@/lib/logger', () => ({
 vi.mock('@/lib/server/corpus-access', () => ({
   requireCorpusVisible: access.requireCorpusVisible,
 }));
+vi.mock('@/lib/accounts/store', () => ({ readProfile: profiles.readProfile }));
 
 const req = {} as NextRequest;
-const params = { params: Promise.resolve({ corpus: 'smart-manufacturing' }) };
 
-async function get() {
+async function get(corpus = 'smart-manufacturing') {
   const { GET } = await import('@/app/api/domain-path/[corpus]/route');
-  return GET(req, params);
+  return GET(req, { params: Promise.resolve({ corpus }) });
 }
 
 const originalFetch = globalThis.fetch;
@@ -36,7 +37,17 @@ const originalUrl = process.env.GROUNDING_URL;
 describe('GET /api/domain-path/[corpus]', () => {
   beforeEach(() => {
     process.env.GROUNDING_URL = 'http://engine.test';
-    access.requireCorpusVisible.mockResolvedValue({ ok: true, visible: () => true });
+    access.requireCorpusVisible.mockResolvedValue({
+      ok: true,
+      account: { id: 'acct-learner' },
+      visible: () => true,
+    });
+    profiles.readProfile.mockResolvedValue({
+      domain: 'ai',
+      corpus: 'ai',
+      education: '本科',
+      conceptMastery: { PID控制器: 0.82 },
+    });
   });
   afterEach(() => {
     globalThis.fetch = originalFetch;
@@ -74,10 +85,25 @@ describe('GET /api/domain-path/[corpus]', () => {
       stages: [{ index: 1, title: '第 1 阶', concepts: [{ name: 'PID控制器', depth: 0 }] }],
       caliber: '阶段由前置图拓扑深度分档',
     };
-    globalThis.fetch = vi.fn(async (url: unknown) => {
+    globalThis.fetch = vi.fn(async (url: unknown, init?: RequestInit) => {
       expect(String(url)).toBe(
         'http://engine.test/internal/v1/personalize/domain-path/smart-manufacturing',
       );
+      expect(init?.method).toBe('POST');
+      const sent = JSON.parse(String(init?.body)) as {
+        corpus: string;
+        profile: { domain: string; corpus: string; education: string };
+        conceptMastery: Record<string, number>;
+      };
+      expect(sent).toMatchObject({
+        corpus: 'smart-manufacturing',
+        profile: {
+          domain: 'smart-manufacturing',
+          corpus: 'smart-manufacturing',
+          education: '本科',
+        },
+        conceptMastery: { PID控制器: 0.82 },
+      });
       // 引擎那侧是 `ApiResponse(data=...)`，桥必须拆到 data
       return new Response(JSON.stringify({ code: 'SUCCESS', data: payload, traceId: 't1' }), {
         status: 200,
@@ -89,6 +115,33 @@ describe('GET /api/domain-path/[corpus]', () => {
     const body = (await res.json()) as { success: boolean; path: typeof payload };
     expect(body.success).toBe(true);
     expect(body.path).toEqual(payload);
+  });
+
+  it('AI 主域把既有 curated 路径随账户画像送进同一个引擎端点', async () => {
+    globalThis.fetch = vi.fn(async (url: unknown, init?: RequestInit) => {
+      expect(String(url)).toBe('http://engine.test/internal/v1/personalize/domain-path/ai');
+      const sent = JSON.parse(String(init?.body)) as {
+        corpus: string;
+        curatedPath?: { tracks?: unknown[]; nodes?: unknown[] };
+      };
+      expect(sent.corpus).toBe('ai');
+      expect(sent.curatedPath?.tracks?.length).toBeGreaterThan(0);
+      expect(sent.curatedPath?.nodes?.length).toBeGreaterThan(0);
+      return new Response(
+        JSON.stringify({
+          data: {
+            corpus: 'ai',
+            source: 'curated',
+            stages: [],
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }) as unknown as typeof fetch;
+
+    const res = await get('ai');
+    expect(res.status).toBe(200);
+    expect((await res.json()).path.source).toBe('curated');
   });
 
   // source=none 是引擎的正常回答（该库没跑过接入流水线），桥不许把它改写成错误：
@@ -160,7 +213,8 @@ describe('机构可见性闸', () => {
 
   it('公共库：闸放行，照常打引擎', async () => {
     process.env.GROUNDING_URL = 'http://engine.test';
-    access.requireCorpusVisible.mockResolvedValue({ ok: true, visible: () => true });
+    access.requireCorpusVisible.mockResolvedValue({ ok: true, account: null, visible: () => true });
+    profiles.readProfile.mockResolvedValue(null);
     globalThis.fetch = vi.fn(
       async () =>
         new Response(JSON.stringify({ data: { corpus: 'iotdb', source: 'intake', stages: [] } }), {

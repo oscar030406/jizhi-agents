@@ -32,6 +32,12 @@ function secureEqual(left: string, right: string): boolean {
   return timingSafeEqual(leftDigest, rightDigest);
 }
 
+function anonymousLearnerKey(value: string | undefined): string | undefined {
+  const key = value?.trim();
+  if (!key) return undefined;
+  return key.startsWith('anon:') ? key : `anon:${key}`;
+}
+
 export async function authenticatePersistenceRequest(
   req: IncomingMessage,
 ): Promise<RuntimeHttpPrincipal | undefined> {
@@ -45,11 +51,11 @@ export async function authenticatePersistenceRequest(
     if (account) return { learnerKey: account.id };
     // 未登录访客：仍需持有部署 token，分区用其浏览器本地 key
     if (!devTokenOk) return undefined;
-    const anonKey = singleHeader(req.headers['x-learner-key']);
+    const anonKey = anonymousLearnerKey(singleHeader(req.headers['x-learner-key']));
     return anonKey ? { learnerKey: anonKey } : {};
   }
 
   if (!devTokenOk) return undefined;
-  const learnerKey = singleHeader(req.headers['x-learner-key']);
+  const learnerKey = anonymousLearnerKey(singleHeader(req.headers['x-learner-key']));
   return learnerKey ? { learnerKey } : {};
 }

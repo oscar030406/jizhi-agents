@@ -39,25 +39,24 @@ describe('落盘失败不许静默', () => {
 });
 
 describe('首屏审计要赶在落盘之前', () => {
-  it('落盘前等审计一个有界的窗，不是发了就跳', () => {
-    // 线上实锤：PLC 课屏 1 完全无审计记录，其余屏都有。
-    // 判官结论是 `void auditPromise.then(…)` 后台跑的，而落盘紧接着执行——
-    // 审计要十几秒，**落盘的那一份没有 audit 字段**，跳走后 updateScene
-    // 只改内存，课堂页从盘上读回来首屏就是无审计的。
+  it('审核完成后才组装、保存和跳转', () => {
     const src = read('app/generation-preview/page.tsx');
-    const i = src.indexOf('const saved = await store.saveToStorage()');
-    expect(i).toBeGreaterThan(0);
-
-    const before = src.slice(Math.max(0, i - 1200), i);
-    expect(before).toContain('Promise.race');
-    expect(before).toContain('auditPromise');
-    expect(before).toContain('AUDIT_SETTLE_MS');
+    const audit = src.indexOf('const auditData = await fetchSceneAudit(');
+    const actions = src.indexOf('const data = await fetchSceneActions(');
+    const save = src.indexOf('const saved = await store.saveToStorage()');
+    const navigate = src.indexOf('router.push(`/classroom/${stage.id}`)');
+    expect(audit).toBeGreaterThan(0);
+    expect(actions).toBeGreaterThan(audit);
+    expect(save).toBeGreaterThan(actions);
+    expect(navigate).toBeGreaterThan(save);
+    expect(src).not.toContain('AUDIT_SETTLE_MS');
+    expect(src).not.toContain('Promise.race([\n        auditPromise');
   });
 
-  it('等待有上限——判官挂了不拖住整门课', () => {
+  it('最终首屏同时携带修订正文、audit 与 verification', () => {
     const src = read('app/generation-preview/page.tsx');
-    const ms = /AUDIT_SETTLE_MS = ([\d_]+)/.exec(src)?.[1]?.replace(/_/g, '');
-    expect(Number(ms)).toBeGreaterThan(0);
-    expect(Number(ms)).toBeLessThanOrEqual(60_000);
+    expect(src).toContain('content: auditData.content');
+    expect(src).toContain('firstScene.audit = a');
+    expect(src).toContain('firstScene.verification = auditData.verification');
   });
 });

@@ -48,7 +48,7 @@ const EMPTY = {
   ...MAIN,
   jobs: [],
   domain: 'manufacturing',
-  reason: '该领域尚未登记岗位要求数据（接入时未提供岗位/技能清单）',
+  reason: '本机构管理者在接入该领域时未提供岗位/技能清单',
 };
 
 /** 引擎侧的应答桩：按请求 URL 决定给什么。返回记录下来的调用 URL 列表。 */

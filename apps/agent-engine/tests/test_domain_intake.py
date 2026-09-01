@@ -163,6 +163,14 @@ def test_query_endpoints_read_from_disk(sandbox):
     assert domain_intake.read_run("../../etc") is None
 
 
+def test_deferred_run_persists_immutable_owner_org_at_creation(sandbox):
+    run = domain_intake.create_run_deferred(
+        "git", "https://example.test/repo.git", corpus="owned-run", owner_org_id="org-a"
+    )
+    record = json.loads(run.record_path.read_text(encoding="utf-8"))
+    assert record["owner_org_id"] == "org-a"
+
+
 # ── 失败态 ─────────────────────────────────────────────────────────────────
 
 

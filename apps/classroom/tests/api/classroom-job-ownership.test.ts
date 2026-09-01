@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   readClassroomGenerationJob: vi.fn(),
   runClassroomGenerationJob: vi.fn(),
   buildRequestOrigin: vi.fn(),
+  orgForAccount: vi.fn(),
 }));
 
 vi.mock('next/server', async (importOriginal) => ({
@@ -17,6 +18,7 @@ vi.mock('next/server', async (importOriginal) => ({
 }));
 vi.mock('@/lib/accounts/store', () => ({ accountForSession: mocks.accountForSession }));
 vi.mock('@/lib/accounts/session', () => ({ SESSION_COOKIE: 'jizhi_session' }));
+vi.mock('@/lib/accounts/org-store', () => ({ orgForAccount: mocks.orgForAccount }));
 vi.mock('@/lib/server/corpus-access', () => ({
   requireCorpusVisible: mocks.requireCorpusVisible,
 }));
@@ -77,6 +79,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.accountForSession.mockResolvedValue(null);
   mocks.requireCorpusVisible.mockResolvedValue({ ok: true });
+  mocks.orgForAccount.mockResolvedValue(null);
   mocks.buildRequestOrigin.mockReturnValue('http://localhost');
   mocks.createClassroomGenerationJob.mockResolvedValue(storedJob(null));
 });
@@ -88,6 +91,7 @@ describe('整课生成 job 账户归属', () => {
   ])('%s 创建时记录 ownerAccountId 与 corpus', async (_label, corpus, token, account, owner) => {
     mocks.accountForSession.mockResolvedValue(account);
     mocks.requireCorpusVisible.mockResolvedValue({ ok: true, account });
+    mocks.orgForAccount.mockResolvedValue(account ? { id: 'org-a' } : null);
     const { POST } = await import('@/app/api/generate-classroom/route');
 
     const response = await POST(postRequest(corpus, token));
@@ -98,6 +102,26 @@ describe('整课生成 job 账户归属', () => {
       expect.any(Object),
       { ownerAccountId: owner, corpus: corpus ?? 'ai' },
     );
+    expect(mocks.createClassroomGenerationJob.mock.calls[0][1]).toEqual(
+      account ? expect.objectContaining({ ownerOrgId: 'org-a' }) : expect.not.objectContaining({ ownerOrgId: expect.anything() }),
+    );
+  });
+
+  it('ignores a spoofed ownerOrgId and derives organization from the session', async () => {
+    const account = { id: 'account-a' };
+    mocks.requireCorpusVisible.mockResolvedValue({ ok: true, account });
+    mocks.orgForAccount.mockResolvedValue({ id: 'org-a' });
+    const { POST } = await import('@/app/api/generate-classroom/route');
+    const request = new NextRequest('http://localhost/api/generate-classroom', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ requirement: '生成一门课程', ownerOrgId: 'org-b' }),
+    });
+
+    expect((await POST(request)).status).toBe(202);
+    expect(mocks.createClassroomGenerationJob.mock.calls[0][1]).toMatchObject({
+      ownerOrgId: 'org-a',
+    });
   });
 
   it.each([

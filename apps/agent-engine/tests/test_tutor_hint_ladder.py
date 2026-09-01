@@ -208,7 +208,10 @@ def test_两个main都挂着导学路由():
     没加新路由，但这条得钉住：哪天有人把路由挪走，两边不能只剩一边。"""
     from app.main import app as app_main
     from backend.main import app as backend_main
+    from fastapi.testclient import TestClient
 
     path = "/internal/v1/personalize/tutor"
     for name, application in (("app.main", app_main), ("backend.main", backend_main)):
-        assert any(getattr(r, "path", "") == path for r in application.routes), f"{name} 没挂 {path}"
+        # FastAPI 0.135 起 include_router 可保留为惰性 _IncludedRouter，直接扫
+        # application.routes 会误报；真实请求 401 既证明路由已挂，也证明鉴权仍在。
+        assert TestClient(application).post(path, json={}).status_code == 401, f"{name} 没挂 {path}"

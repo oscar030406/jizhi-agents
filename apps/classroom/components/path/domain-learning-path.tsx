@@ -32,6 +32,7 @@ import { cn } from '@/lib/utils';
 
 /** 引擎 `/internal/v1/personalize/domain-path/{corpus}` 的返回体（跨工单契约）。 */
 export interface DomainPathConcept {
+  id?: string;
   name: string;
   depth: number;
   prereq?: string[];
@@ -39,19 +40,24 @@ export interface DomainPathConcept {
   confidence?: number | null;
   because?: string | null;
   sections?: string[];
+  status?: PathStatus;
+  mastery?: number;
 }
+
+type PathStatus = 'mastered' | 'current' | 'future';
 
 export interface DomainPathStage {
   index: number;
   title: string;
   concepts: DomainPathConcept[];
+  status?: PathStatus;
 }
 
 export interface DomainPath {
   corpus: string;
   label?: string;
   /** intake = 前置图排的；index-tags = 概念表太薄、改按索引标注的覆盖厚度分档；none = 排不出 */
-  source: 'intake' | 'index-tags' | 'none';
+  source: 'curated' | 'intake' | 'index-tags' | 'none';
   generated_at?: string | null;
   run_id?: string | null;
   concept_count?: number;
@@ -59,6 +65,14 @@ export interface DomainPath {
   stages?: DomainPathStage[];
   reason?: string | null;
   caliber?: string;
+  personalization?: {
+    profile_present?: boolean;
+    mastery_entries?: number;
+    matched_mastery?: number;
+    mastery_threshold?: number;
+    counts?: Record<PathStatus, number>;
+    current?: string[];
+  };
 }
 
 interface CourseDomainEntry {
@@ -105,11 +119,24 @@ export function DomainLearningPath({ children }: { children: React.ReactNode }) 
       />
     );
   }
-  if (context.isAi) return <>{children}</>;
-  return <DomainPathBody corpus={context.domain} contextLabel={context.label} />;
+  return (
+    <DomainPathBody
+      corpus={context.domain}
+      contextLabel={context.label}
+      curatedChildren={context.isAi ? children : undefined}
+    />
+  );
 }
 
-function DomainPathBody({ corpus, contextLabel }: { corpus: string; contextLabel?: string }) {
+function DomainPathBody({
+  corpus,
+  contextLabel,
+  curatedChildren,
+}: {
+  corpus: string;
+  contextLabel?: string;
+  curatedChildren?: React.ReactNode;
+}) {
   const router = useRouter();
   const [state, setState] = useState<State>({ kind: 'loading' });
   // 概念 → 课程的映射用运行时归属（/api/course-domains 现读磁盘），不用构建期快照：
@@ -187,17 +214,18 @@ function DomainPathBody({ corpus, contextLabel }: { corpus: string; contextLabel
     },
     [label, router],
   );
+  const isCurated = curatedChildren !== undefined;
 
   return (
     <>
-      <h1 className="text-2xl font-semibold tracking-tight">{label} · 学习路径</h1>
-      {state.kind === 'ok' && state.path.source === 'intake' && (
+      {!isCurated && <h1 className="text-2xl font-semibold tracking-tight">{label} · 学习路径</h1>}
+      {!isCurated && state.kind === 'ok' && state.path.source === 'intake' && (
         <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
           这条路径不是人工排的：概念取自该库接入时抽出的概念表，先后顺序由前置关系图的
           拓扑深度分档。同一阶内的概念没有先后，学完一阶再进下一阶。
         </p>
       )}
-      {state.kind === 'ok' && (
+      {!isCurated && state.kind === 'ok' && (
         <p className="mt-2 text-xs tabular-nums text-muted-foreground">
           {state.path.concept_count ?? 0} 个概念 · {state.path.edge_count ?? 0} 条前置边
           {state.path.run_id ? ` · 接入 run ${state.path.run_id}` : ''}
@@ -206,10 +234,12 @@ function DomainPathBody({ corpus, contextLabel }: { corpus: string; contextLabel
             : ''}
         </p>
       )}
-      <DomainPathNotice
-        corpus={corpus}
-        caliber={state.kind === 'ok' ? state.path.caliber : undefined}
-      />
+      {!isCurated && (
+        <DomainPathNotice
+          corpus={corpus}
+          caliber={state.kind === 'ok' ? state.path.caliber : undefined}
+        />
+      )}
 
       {state.kind === 'loading' && (
         <p className="mt-8 text-sm text-muted-foreground">正在取「{label}」的学习路径…</p>
@@ -247,10 +277,20 @@ function DomainPathBody({ corpus, contextLabel }: { corpus: string; contextLabel
         </div>
       )}
 
-      {state.kind === 'ok' &&
+      {state.kind === 'ok' && Boolean(state.path.stages?.length) && (
+        <PersonalRouteSummary path={state.path} />
+      )}
+
+      {isCurated && state.kind === 'ok' && Boolean(state.path.stages?.length) && curatedChildren}
+
+      {!isCurated &&
+        state.kind === 'ok' &&
         (state.path.stages ?? []).map((stage) => (
           <section key={stage.index} className="mt-10">
-            <h2 className="text-xl font-semibold tracking-tight">{stage.title}</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-xl font-semibold tracking-tight">{stage.title}</h2>
+              <StatusBadge status={stage.status} />
+            </div>
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
               {stage.concepts.map((concept) => (
                 <ConceptCard
@@ -279,21 +319,26 @@ function ConceptCard({
   const prereq = concept.prereq ?? [];
   const section = concept.sections?.[0];
   return (
-    <div className="rounded-xl border border-border bg-card p-4 shadow-card">
-      {course ? (
-        <Link
-          href={`/classroom/${course.id}`}
-          className={cn(
-            'group flex items-center justify-between gap-2 font-medium hover:text-primary',
-            FOCUS_RING,
-          )}
-        >
-          <span className="min-w-0 truncate">{concept.name}</span>
-          <ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-        </Link>
-      ) : (
-        <p className="font-medium">{concept.name}</p>
+    <div
+      className={cn(
+        'rounded-xl border bg-card p-4 shadow-card',
+        concept.status === 'current' ? 'border-primary/60 bg-primary/5' : 'border-border',
       )}
+    >
+      <div className="flex items-center justify-between gap-2">
+        {course ? (
+          <Link
+            href={`/classroom/${course.id}`}
+            className={cn('group flex min-w-0 items-center gap-2 font-medium hover:text-primary', FOCUS_RING)}
+          >
+            <span className="min-w-0 truncate">{concept.name}</span>
+            <ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+          </Link>
+        ) : (
+          <p className="min-w-0 truncate font-medium">{concept.name}</p>
+        )}
+        <StatusBadge status={concept.status} />
+      </div>
       {course && (
         <p className="mt-1 truncate text-xs text-muted-foreground">已有课程：{course.title}</p>
       )}
@@ -316,6 +361,11 @@ function ConceptCard({
           ? `前置判定置信度 ${concept.confidence.toFixed(2)}`
           : concept.because || '入口概念，没有前置'}
       </p>
+      {typeof concept.mastery === 'number' && (
+        <p className="mt-1 text-xs tabular-nums text-muted-foreground">
+          当前掌握度 {concept.mastery.toFixed(2)}
+        </p>
+      )}
 
       {!course && (
         <button
@@ -332,5 +382,69 @@ function ConceptCard({
         </button>
       )}
     </div>
+  );
+}
+
+function PersonalRouteSummary({ path }: { path: DomainPath }) {
+  const counts = path.personalization?.counts ?? { mastered: 0, current: 0, future: 0 };
+  return (
+    <section
+      aria-label="我的当前路线"
+      className="mb-8 rounded-xl border border-primary/30 bg-primary/5 p-4 shadow-card"
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="font-semibold">我的当前路线</p>
+        <p className="text-xs tabular-nums text-muted-foreground">
+          已掌握 {counts.mastered} · 当前推荐 {counts.current} · 后续 {counts.future}
+        </p>
+      </div>
+      <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+        这是当前账户自己的路线：引擎只用账户级画像与测验掌握度移动游标，不改知识库已有概念和顺序。
+        {path.personalization?.matched_mastery === 0
+          ? '当前尚无与本路径概念匹配的测验记录，先从既有入口开始。'
+          : ''}
+      </p>
+      <div className="mt-3 grid gap-2 sm:grid-cols-3">
+        {(path.stages ?? []).map((stage) => {
+          const current = stage.concepts
+            .filter((concept) => concept.status === 'current')
+            .map((concept) => concept.name);
+          return (
+            <div key={stage.index} className="rounded-lg border border-border bg-card px-3 py-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <p className="truncate text-sm font-medium">{stage.title}</p>
+                <StatusBadge status={stage.status} />
+              </div>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                {current.length
+                  ? `当前推荐：${current.slice(0, 3).join('、')}`
+                  : stage.status === 'mastered'
+                    ? '本阶段已掌握'
+                    : '完成前置内容后进入'}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function StatusBadge({ status }: { status?: PathStatus }) {
+  if (!status) return null;
+  const label = status === 'mastered' ? '已掌握' : status === 'current' ? '当前推荐' : '后续节点';
+  return (
+    <span
+      className={cn(
+        'shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium',
+        status === 'mastered'
+          ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+          : status === 'current'
+            ? 'bg-primary/10 text-primary'
+            : 'bg-muted text-muted-foreground',
+      )}
+    >
+      {label}
+    </span>
   );
 }

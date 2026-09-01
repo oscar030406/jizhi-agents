@@ -9,7 +9,7 @@ import {
   type LearningContract,
 } from '@/lib/generation/learning-contract';
 import type { SceneOutline } from '@/lib/types/generation';
-import type { SceneAudit } from '@/lib/generation/hallucination-audit';
+import { hashCourseScenes, type SceneAudit } from '@/lib/generation/hallucination-audit';
 
 function audit(overrides: Partial<SceneAudit> = {}): SceneAudit {
   const base: SceneAudit = {
@@ -60,6 +60,7 @@ describe('学习者发布资格纯函数', () => {
     },
   ];
   const releaseContract: LearningContract = {
+    teachingStrategy: 'standard',
     objectives: [
       { id: 'O1', action: '完成任务', condition: '给定新情境', successCriterion: '通过测验' },
     ],
@@ -72,22 +73,34 @@ describe('学习者发布资格纯函数', () => {
     grounding: { sourceRefs: ['corpus:ai'], claimPolicy: 'cite-or-mark-uncertain' },
   };
   const releasePlan = buildLearningContractPlan(releaseContract, releaseOutlines);
+  const releasePlanV1 = { ...releasePlan, version: 1 };
   const releasedScenes = [
     {
       id: 'scene-practice',
       outlineId: 'outline-practice',
       type: 'interactive',
-      content: { type: 'interactive', widgetType: 'game' },
+      content: { type: 'interactive', widgetType: 'game', html: '<button>完成练习</button>' },
       audit: audit(),
     },
     {
       id: 'scene-assessment',
       outlineId: 'outline-assessment',
       type: 'quiz',
-      content: { type: 'quiz' },
+      content: { type: 'quiz', questions: [{ id: 'q1', type: 'text', question: '迁移作答' }] },
       audit: audit(),
     },
   ];
+  const cleanCourseAudit = audit({
+    claims: [],
+    totalClaims: 0,
+    flaggedCount: 0,
+    uncertainCount: 0,
+    incorrectCount: 0,
+    grounded: false,
+    evidenceCount: 0,
+    panelComplete: true,
+    courseContentHash: hashCourseScenes(releasedScenes),
+  });
   const numericContent = {
     type: 'slide',
     canvas: { elements: [{ type: 'text', content: '<p>2 + 2 = 4</p>' }] },
@@ -222,7 +235,7 @@ describe('学习者发布资格纯函数', () => {
 
   it('一门课只要有一个场景不合格，整门课仍是草稿', () => {
     const result = decideCourseLearnerRelease({
-      stage: { learningContract: releasePlan },
+      stage: { learningContract: releasePlan, courseAudit: cleanCourseAudit },
       scenes: [
         releasedScenes[0],
         { ...releasedScenes[1], audit: audit({ decision: 'block_pending_review' }) },
@@ -237,7 +250,7 @@ describe('学习者发布资格纯函数', () => {
 
   it('仍在生成的课程不能提前成为学习者发布版', () => {
     const result = decideCourseLearnerRelease({
-      stage: { learningContract: releasePlan },
+      stage: { learningContract: releasePlan, courseAudit: cleanCourseAudit },
       scenes: releasedScenes,
       generating: { done: 1, total: 2 },
     });
@@ -253,7 +266,7 @@ describe('学习者发布资格纯函数', () => {
 
   it('任一计划场景生成失败时，剩余场景不能发布', () => {
     const result = decideCourseLearnerRelease({
-      stage: { learningContract: releasePlan },
+      stage: { learningContract: releasePlan, courseAudit: cleanCourseAudit },
       scenes: releasedScenes.slice(0, 1),
     });
 
@@ -267,10 +280,77 @@ describe('学习者发布资格纯函数', () => {
     );
   });
 
-  it('计划场景与教学类别全部履约时才可发布', () => {
+  it('全课程事实终审存在未消解冲突时，逐屏均通过也保持草稿', () => {
+    const result = decideCourseLearnerRelease({
+      stage: {
+        learningContract: releasePlan,
+        courseAudit: audit({
+          verdict: 'flagged',
+          decision: 'block_pending_review',
+          claims: [
+            {
+              claim: '两页对同一阈值给出不同数字。',
+              verdict: 'incorrect',
+              reason: '跨页冲突',
+            },
+          ],
+          totalClaims: 1,
+          incorrectCount: 1,
+          flaggedCount: 1,
+          courseContentHash: hashCourseScenes(releasedScenes),
+        }),
+      },
+      scenes: releasedScenes,
+    });
+
+    expect(result.eligible).toBe(false);
+    expect(result.courseReasons).toContain('course_fact_review_failed');
+  });
+
+  it('v2 教学契约缺少全课程终审时保持草稿，v1 存量仍兼容', () => {
     expect(
       decideCourseLearnerRelease({
         stage: { learningContract: releasePlan },
+        scenes: releasedScenes,
+      }).courseReasons,
+    ).toContain('course_fact_review_failed');
+
+    expect(
+      decideCourseLearnerRelease({
+        stage: { learningContract: releasePlanV1 },
+        scenes: releasedScenes,
+      }).courseReasons,
+    ).not.toContain('course_fact_review_failed');
+  });
+
+  it('终审后修改最终场景内容会使旧哈希失效并阻断发布', () => {
+    const courseAudit = audit({
+      claims: [],
+      totalClaims: 0,
+      flaggedCount: 0,
+      uncertainCount: 0,
+      incorrectCount: 0,
+      grounded: false,
+      evidenceCount: 0,
+      courseContentHash: hashCourseScenes(releasedScenes),
+    });
+    const editedScenes = releasedScenes.map((scene, index) =>
+      index === 0 ? { ...scene, content: { ...scene.content, edited: true } } : scene,
+    );
+
+    const result = decideCourseLearnerRelease({
+      stage: { learningContract: releasePlan, courseAudit },
+      scenes: editedScenes,
+    });
+
+    expect(result.eligible).toBe(false);
+    expect(result.courseReasons).toContain('course_fact_review_failed');
+  });
+
+  it('计划场景与教学类别全部履约时才可发布', () => {
+    expect(
+      decideCourseLearnerRelease({
+        stage: { learningContract: releasePlan, courseAudit: cleanCourseAudit },
         scenes: releasedScenes,
       }),
     ).toMatchObject({ eligible: true, courseReasons: [], contractViolations: [] });

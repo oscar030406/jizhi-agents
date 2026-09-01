@@ -17,6 +17,7 @@ export interface PracticeProject {
   /** 人工策展的课程边（data/practice-projects.json）：学完这门课能上手做这个项目。 */
   courseIds: string[];
   prereq: string;
+  steps?: string[];
   cost: string;
   networkNote: string;
   why: string;
@@ -126,6 +127,16 @@ export function PracticeCard({
       </summary>
       <div className="space-y-2 border-t border-border-subtle px-3 py-2.5 text-xs leading-relaxed">
         <p>{project.why}</p>
+        {project.steps && project.steps.length > 0 && (
+          <div>
+            <p className="font-medium">操作步骤：</p>
+            <ol className="mt-1 list-decimal space-y-1 pl-5">
+              {project.steps.map((step, index) => (
+                <li key={`${index}-${step}`}>{step}</li>
+              ))}
+            </ol>
+          </div>
+        )}
         <p><span className="font-medium">前置：</span>{project.prereq} · <span className="font-medium">成本：</span>{project.cost}</p>
         {project.networkNote.startsWith('⚠') && (
           <p className="text-yellow-deep">{project.networkNote}</p>

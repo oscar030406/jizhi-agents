@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   createSceneWithActions: vi.fn(),
   persistClassroom: vi.fn(),
   callLLM: vi.fn(),
+  zeroEvidenceReason: vi.fn(),
 }));
 
 vi.mock('@/lib/server/resolve-model', () => ({
@@ -37,6 +38,11 @@ vi.mock('@/lib/generation/scene-generator', () => ({
 
 vi.mock('@/lib/server/classroom-storage', () => ({
   persistClassroom: mocks.persistClassroom,
+}));
+
+vi.mock('@/lib/generation/evidence-grounding', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/generation/evidence-grounding')>()),
+  zeroEvidenceReason: mocks.zeroEvidenceReason,
 }));
 
 vi.mock('@/lib/logger', () => ({
@@ -91,6 +97,7 @@ describe('classroom scene generation retries', () => {
     });
     mocks.isProviderKeyRequired.mockReturnValue(false);
     mocks.callLLM.mockResolvedValue({ text: 'ok' });
+    mocks.zeroEvidenceReason.mockResolvedValue(null);
     mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
       success: true,
       data: {

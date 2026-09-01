@@ -20,7 +20,7 @@
  * 写的是「接入知识库时」，不是「随时可以补传」。这句话跟着代码走，那条路要是又断了，
  * 这里也要跟着改回去。
  *
- * 主域 AI 的岗位图谱来自几十 GB 招聘数据集 + 人工提炼，新库现场复刻不了——
+ * 主域 AI 的岗位图谱来自既有审核清单；新库现场不能凭教材反推真实岗位要求——
  * 从语料硬派生只会造出看起来合理的假岗位，那比空着危险得多。
  */
 import Link from 'next/link';
@@ -31,7 +31,7 @@ export function ForeignDomainEmpty({ label, reason }: { label: string; reason?: 
     <section className="rounded-xl border border-border bg-surface px-6 py-10 text-center">
       <Briefcase className="mx-auto size-8 text-muted-foreground/60" />
       <h2 className="mt-4 text-base font-medium text-foreground">
-        所属机构尚未提供「{label}」的岗位画像
+        本机构管理者尚未提供「{label}」的岗位画像
       </h2>
       <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-muted-foreground">
         {/* 引擎说得清楚就用引擎的原话，不改写、不润色——它知道这个域缺的到底是什么。 */}

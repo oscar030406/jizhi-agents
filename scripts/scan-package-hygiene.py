@@ -9,7 +9,8 @@
 误伤一次就得回去改正文，代价比漏一条大。
 
 用法：
-    python scripts/scan-package-hygiene.py <目录或 .zip>          # 扫，出清单
+    python scripts/scan-package-hygiene.py <目录或压缩包>         # 扫，出清单
+    python scripts/scan-package-hygiene.py <...> --strict         # 发布闸：密钥/运行数据/协作痕迹即失败
     python scripts/scan-package-hygiene.py <...> --md out.md      # 顺手写一份报告
     python scripts/scan-package-hygiene.py --selftest             # 先自证扫得到再去扫真包
 """
@@ -21,6 +22,7 @@ import io
 import os
 import re
 import sys
+import tarfile
 import zipfile
 
 # 二进制与压缩产物不扫（在里面撞出来的都是噪声，实测 wasm/npz 会随机命中 key 形状）
@@ -70,9 +72,23 @@ PATH_RULES: list[tuple[str, str, str]] = [
     ("agent 配置目录", r"(^|/)\.(claude|cursor|codex|serena)/", "agent 工作目录整进包了"),
     ("agent 入口文件", r"(^|/)(CLAUDE|AGENTS|codex)\.md$|(^|/)\.mcp\.json$", "给 agent 读的入口文件"),
     ("交接/工单文件", r"(^|/)(HANDOFF|AUTORUN|WO)-[^/]*\.md$|(^|/)接手指南\.md$", "agent 工作台账"),
+    ("运行时业务数据", r"(^|/)\.next/standalone/data/|(^|/)(accounts|sessions)\.json$|"
+                       r"(^|/)(generated-classrooms|generation-jobs|render-job-owners|usage)/",
+     "账号、课程、任务或使用数据进入代码发布包"),
+    ("运行时日志", r"(^|/)[^/]+\.(log|jsonl)$", "运行日志进入代码发布包"),
+    ("环境文件", r"(^|/)\.env(?:\.[^/]*)?$", "环境配置进入代码发布包"),
 ]
 
 Hit = tuple[str, str, str, str]  # (分组, 规则, 路径, 证据)
+
+# 源码里的模型名、提示词和过滤标签是产品实现，不是协作痕迹。严格发布闸只拦
+# 密钥、运行数据、环境文件及明确的 agent/交接痕迹；其余宽口径命中仍进入报告。
+STRICT_RULES = {
+    *(name for name, _pattern, _desc in SECRET_RULES),
+    *(name for name, _pattern, _desc in PATH_RULES),
+    "协作署名",
+    "交接文档引用",
+}
 
 
 def _scan_text(rel: str, text: str, group: str, out: list[Hit]) -> None:
@@ -101,6 +117,22 @@ def _iter_zip(path: str):
             yield rel, raw
 
 
+def _iter_tar(path: str):
+    with tarfile.open(path, "r:*") as archive:
+        for member in archive.getmembers():
+            if not member.isfile():
+                continue
+            rel = member.name.replace("\\", "/")
+            if os.path.splitext(rel)[1].lower() in SKIP_EXT:
+                yield rel, None
+                continue
+            fh = archive.extractfile(member)
+            if fh is None:
+                continue
+            with fh:
+                yield rel, fh.read(MAX_BYTES)
+
+
 def _iter_dir(root: str):
     for base, dirs, files in os.walk(root):
         for f in files:
@@ -121,7 +153,13 @@ def scan(target: str) -> tuple[list[Hit], int, int]:
     """返回 (命中清单, 扫过的文件数, 跳过的二进制数)。"""
     hits: list[Hit] = []
     walked = skipped = 0
-    源 = _iter_zip(target) if target.lower().endswith(".zip") else _iter_dir(target)
+    lower = target.lower()
+    if lower.endswith(".zip"):
+        源 = _iter_zip(target)
+    elif lower.endswith((".tgz", ".tar.gz", ".tar")):
+        源 = _iter_tar(target)
+    else:
+        源 = _iter_dir(target)
     for rel, raw in 源:
         group = "第三方材料" if THIRD_PARTY.search("/" + rel) else "我方"
         for name, pattern, _desc in PATH_RULES:
@@ -158,6 +196,9 @@ SAMPLE = {
     "a/leak4.py": "H = 'hf_" + "d" * 34 + "'\n",
     "a/leak5.ts": "headers: { Authorization: 'Bearer abcdefghijklmnopqrstuvwxyz012345' }\n",
     "a/accounts.json": '{"sessionToken": "abcdefghijklmnopqrstuvwx"}\n',
+    "a/.next/standalone/data/accounts.json": "{}\n",
+    "a/dev.log": "started\n",
+    "a/.env": "EXAMPLE=value\n",
 }
 # 只有在这里出现、不该被任何规则命中的正常文本（防误伤）
 CLEAN = {
@@ -180,6 +221,10 @@ def selftest() -> int:
             os.makedirs(os.path.dirname(p), exist_ok=True)
             io.open(p, "w", encoding="utf-8").write(body)
         hits, walked, _ = scan(d)
+        tar_path = os.path.join(d, "sample.tgz")
+        with tarfile.open(tar_path, "w:gz") as archive:
+            archive.add(os.path.join(d, "a"), arcname="a")
+        tar_hits, tar_walked, _ = scan(tar_path)
     fired = {h[1] for h in hits}
     missing = expected - fired
     false_pos = sorted({h[2] for h in hits if h[2].startswith("b/")})
@@ -190,7 +235,10 @@ def selftest() -> int:
         print(f"  ✗ 没触发：{'、'.join(sorted(missing))}")
     if false_pos:
         print(f"  ✗ 误伤正常技术名词：{'、'.join(false_pos)}")
-    ok = not missing and not false_pos
+    tar_ok = tar_walked > 0 and any(hit[1] == "协作署名" for hit in tar_hits)
+    if not tar_ok:
+        print("  ✗ .tgz 扫描未命中已知样本")
+    ok = not missing and not false_pos and tar_ok
     print("自证通过——这把尺子可以拿去扫真包。" if ok else "自证不通过，词表有问题，别用它下结论。")
     return 0 if ok else 1
 
@@ -217,9 +265,10 @@ def render(target: str, hits: list[Hit], walked: int, skipped: int) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("target", nargs="?", help="目录或 .zip")
+    ap.add_argument("target", nargs="?", help="目录、.zip、.tgz、.tar.gz 或 .tar")
     ap.add_argument("--md", help="把清单写成 markdown")
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--strict", action="store_true", help="发布闸：硬命中或空包时非零退出")
     args = ap.parse_args()
     if args.selftest:
         return selftest()
@@ -231,7 +280,14 @@ def main() -> int:
     if args.md:
         io.open(args.md, "w", encoding="utf-8").write(report + "\n")
         print(f"\n已写入 {args.md}")
-    # 只列不删，也不用退出码替人做判断——清单交给人看
+    if walked + skipped == 0:
+        print("\n错误：扫描对象中没有任何文件；拒绝把空扫描当成通过。", file=sys.stderr)
+        return 2
+    if args.strict and any(
+        group == "我方" and rule in STRICT_RULES for group, rule, *_rest in hits
+    ):
+        print("\n发布闸失败：我方文件存在密钥、运行数据或明确协作痕迹。", file=sys.stderr)
+        return 1
     return 0
 
 

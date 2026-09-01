@@ -466,6 +466,32 @@ pdf:
       expect(providers['grok-video']).toEqual({});
       expect(resolveVideoBaseUrl('grok-video')).toBe('https://proxy.example.com/video');
     });
+
+    it('exposes and resolves server-pinned image models', async () => {
+      vi.stubEnv('IMAGE_SEEDREAM_API_KEY', 'sk-seedream');
+      vi.stubEnv('IMAGE_SEEDREAM_MODELS', 'model-a,model-b');
+      const { getServerImageProviders, resolveImageModel } =
+        await import('@/lib/server/provider-config');
+
+      expect(getServerImageProviders().seedream).toEqual({ models: ['model-a', 'model-b'] });
+      expect(resolveImageModel('seedream', 'model-b')).toBe('model-b');
+      expect(resolveImageModel('seedream', 'not-allowed')).toBe('model-a');
+      expect(resolveImageModel('seedream')).toBe('model-a');
+      expect(resolveImageModel('qwen-image', 'client-model')).toBe('client-model');
+    });
+
+    it('exposes and resolves server-pinned video models', async () => {
+      vi.stubEnv('VIDEO_SEEDANCE_API_KEY', 'sk-seedance');
+      vi.stubEnv('VIDEO_SEEDANCE_MODELS', 'video-a,video-b');
+      const { getServerVideoProviders, resolveVideoModel } =
+        await import('@/lib/server/provider-config');
+
+      expect(getServerVideoProviders().seedance).toEqual({ models: ['video-a', 'video-b'] });
+      expect(resolveVideoModel('seedance', 'video-b')).toBe('video-b');
+      expect(resolveVideoModel('seedance', 'not-allowed')).toBe('video-a');
+      expect(resolveVideoModel('seedance')).toBe('video-a');
+      expect(resolveVideoModel('kling', 'client-model')).toBe('client-model');
+    });
   });
 
   describe('isServerConfiguredProvider', () => {

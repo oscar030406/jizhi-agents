@@ -62,6 +62,8 @@ export type AppStage = DslStage & {
   origin?: CourseOrigin;
   /** 大纲阶段批准的最小教学契约；发布前用它核对实际生成场景。 */
   learningContract?: import('@/lib/generation/learning-contract').LearningContractPlan;
+  /** 全课程断言账本与可见动作语义的跨页事实终审；含最终场景载荷哈希。 */
+  courseAudit?: import('@/lib/generation/hallucination-audit').SceneAudit;
 };
 
 export type Stage = AppStage;

@@ -340,9 +340,9 @@ export async function POST(req: NextRequest) {
     const access = await requireCorpusVisible(effectiveCorpus);
     if (!access.ok) return access.response;
 
-    // 换库生成的第一道闸：选了没建索引的库就在这里停住（大纲是整条生成链的第一步，
-    // 拦在这里等于一个 token 都还没花）。没显式选库的照旧放行。
-    const corpusBlock = await corpusUnavailableReason(requirements.learnerProfile?.corpus);
+    // 生成的第一道闸：显式 corpus、domain 回退与默认域统一检查有效库，
+    // 拦在这里等于一个 token 都还没花。
+    const corpusBlock = await corpusUnavailableReason(effectiveCorpus);
     if (corpusBlock) {
       return apiError('INVALID_REQUEST', 400, corpusBlock);
     }

@@ -40,6 +40,7 @@ def _card(repo="acme/good-repo", **over):
         "difficulty": 2,
         "hours": "8h",
         "prereq": "",
+        "steps": ["拉取并安装项目依赖", "按 README 启动示例", "对照验收标准记录结果"],
         "cost": "",
         "networkNote": "",
         "why": "练什么",
@@ -60,7 +61,17 @@ def test_draft_cards_drops_invented_repo_and_fills_facts_from_api_data():
     p = kept[0]
     assert p["org"] == "acme（1.2k★）"
     assert p["links"] == [{"label": "仓库", "url": "https://github.com/acme/good-repo"}]
+    assert p["steps"] == ["拉取并安装项目依赖", "按 README 启动示例", "对照验收标准记录结果"]
     assert p["approved"] is False
+
+
+def test_draft_cards_drops_project_with_fewer_than_two_nonempty_steps():
+    gw = FakeGateway(
+        {"projects": [_card(steps=["只写了一步", " "]), _card(name="有效任务")]}
+    )
+    kept, dropped = practice_scout.draft_cards(gw, "c", "s", CANDIDATES, 6)
+    assert len(kept) == 1 and len(dropped) == 1
+    assert dropped[0]["reasons"] == ["可执行步骤少于 2 条"]
 
 
 def test_draft_cards_all_invalid_raises():

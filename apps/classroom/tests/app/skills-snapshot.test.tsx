@@ -130,6 +130,46 @@ describe('引擎在线', () => {
 });
 
 describe('有效领域一致性', () => {
+  it('非 AI 域返回岗位数据后展示服务端结果，不再沿用客户端初始空态', async () => {
+    const liveJob = { ...snapshot.jobs[0], title: '智能制造设备运维工程师' };
+    stubFetch({
+      '/api/org/assignments': ok({
+        success: true,
+        assignments: [{ id: 'mine', courseId: 'course-mfg', title: 'ROS2 与 PLC' }],
+      }),
+      '/api/course-domains': ok({
+        'course-mfg': { domain: 'smart-manufacturing', title: 'ROS2 与 PLC' },
+      }),
+      '/api/domains': ok({
+        entries: {
+          'smart-manufacturing': {
+            corpus: 'smart-manufacturing',
+            label: '智能制造：ROS2 与 S7-1200 PLC',
+            eligible: true,
+          },
+        },
+      }),
+      '/api/skills': ok({
+        ...snapshot,
+        snapshot_at: undefined,
+        domain: 'smart-manufacturing',
+        jobs: [liveJob],
+      }),
+      '/api/practice-scout': ok({
+        success: true,
+        corpus: 'smart-manufacturing',
+        status: 'missing',
+        projects: [],
+        reason: '所属机构尚未提供该领域的实操项目',
+      }),
+    });
+
+    const host = await render();
+
+    expect(host.textContent).toContain(liveJob.title);
+    expect(host.textContent).not.toContain('没有随附岗位／技能清单');
+  });
+
   it('智能制造课程指派覆盖残留 AI 画像，岗位与实操都只问智能制造引擎产物', async () => {
     const reason = '所属机构尚未提供该领域的岗位画像';
     stubFetch({
@@ -234,7 +274,7 @@ describe('快照过期提示', () => {
  * 一句 reason，页面照它换空态、原文显示那句话，且不许退回主域快照。
  */
 describe('引擎说这个域没有岗位数据', () => {
-  const reason = '该领域尚未登记岗位要求数据（接入时未提供岗位/技能清单）';
+  const reason = '本机构管理者在接入该领域时未提供岗位/技能清单';
   const empty = { ...snapshot, snapshot_at: undefined, domain: 'manufacturing', jobs: [], reason };
 
   beforeEach(() => {

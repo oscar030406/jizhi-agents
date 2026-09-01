@@ -99,6 +99,7 @@ describe('POST /api/knowledge/intake-runs', () => {
     const resp = await post(req);
     expect(resp.status).toBe(200);
     expect(await resp.json()).toMatchObject({ run: { run_id: '20260816T101010-abcdef' } });
+    expect(orgMocks.setCorpusOrg).toHaveBeenCalledTimes(1);
 
     const [url, init] = engineFetch.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('http://engine.local/api/domain-intake/runs');
@@ -114,6 +115,7 @@ describe('POST /api/knowledge/intake-runs', () => {
     const headers = (engineFetch.mock.calls[0][1] as RequestInit).headers as Record<string, string>;
     expect(headers['x-internal-token']).toBe('probe-token');
     expect(headers['x-jizhi-corpus']).toBe('probe');
+    expect(headers['x-jizhi-owner-org']).toBe('org-a');
     // content-type 里带着 boundary=...，丢了引擎就切不出分段
     expect(headers['content-type']).toMatch(/multipart\/form-data;\s*boundary=/);
   });
@@ -124,13 +126,15 @@ describe('POST /api/knowledge/intake-runs', () => {
     expect(init.duplex).toBe('half');
   });
 
-  it('引擎的报错原样透传，不在桥这层改写', async () => {
+  it('引擎 4xx 不自动释放认领，避免并发请求释放成功任务的归属', async () => {
     engineFetch.mockResolvedValue(
       new Response(JSON.stringify({ detail: '这份投料里没有任何可读文档' }), { status: 400 }),
     );
     const resp = await post(request({ corpus: 'probe' }));
     expect(resp.status).toBe(400);
-    expect(await resp.json()).toMatchObject({ error: '这份投料里没有任何可读文档' });
+    expect((await resp.json()).error).toContain('手动释放');
+    expect(orgMocks.setCorpusOrg).toHaveBeenCalledTimes(1);
+    expect(orgMocks.setCorpusOrg).not.toHaveBeenCalledWith('probe', null, 'org-a');
   });
 
   it('他机构已认领的库在上传前拒绝', async () => {
@@ -140,10 +144,12 @@ describe('POST /api/knowledge/intake-runs', () => {
     expect(engineFetch).not.toHaveBeenCalled();
   });
 
-  it('引擎不可达时回 502 并说清没发起', async () => {
-    engineFetch.mockRejectedValue(new Error('ECONNREFUSED'));
+  it('超时状态不确定时保留首次认领，不误回滚', async () => {
+    engineFetch.mockRejectedValue(new DOMException('timed out', 'TimeoutError'));
     const resp = await post(request({ corpus: 'probe' }));
     expect(resp.status).toBe(502);
-    expect((await resp.json()).error).toContain('没有发起');
+    expect((await resp.json()).error).toContain('状态暂未确认');
+    expect(orgMocks.setCorpusOrg).toHaveBeenCalledTimes(1);
+    expect(orgMocks.setCorpusOrg).not.toHaveBeenCalledWith('probe', null, 'org-a');
   });
 });

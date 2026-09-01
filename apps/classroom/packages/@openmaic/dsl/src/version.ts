@@ -21,12 +21,13 @@
  * store first consumes this pipeline.
  */
 
+import { stripLegacyLineGeometry } from './legacy-line-geometry.js';
+
 /**
  * Current version of the serialized slide contract.
- * 0.2.0 对齐上游（audioUrl 退契约的纯盖章步，转换体为空、数据不动）；
- * 停在 0.1.0 会把上游 0.3.2+ 写出的文档当 future 版本拒收。
+ * 0.3.0 strips legacy `rotate` / `height` fields from `line` elements.
  */
-export const DSL_VERSION = '0.2.0' as const;
+export const DSL_VERSION = '0.3.0' as const;
 
 export type DslVersion = typeof DSL_VERSION;
 
@@ -127,6 +128,11 @@ export interface DslMigration {
   migrate: (doc: unknown) => unknown;
 }
 
+/** Strip the inert line fields rejected by the closed slide schema. */
+function stripLegacyLineRotateHeight(doc: unknown): unknown {
+  return stripLegacyLineGeometry(doc);
+}
+
 /**
  * Ordered migration ladder. Each entry's `to` is the next entry's `from`, and
  * the last entry's `to` is {@link DSL_VERSION} (both checked by a test). Every
@@ -137,16 +143,16 @@ export interface DslMigration {
  * The first entry stamps legacy (pre-`dslVersion`) documents up to
  * {@link INITIAL_DSL_VERSION}. It is intentionally a no-op *transform*: bringing
  * `Action` into the contract (#811) and adding validators (#817) did not alter
- * any serialized document, so the current on-disk shape already *is* 0.1.0. The
- * entry exists to wire the pipeline end to end and to give real documents a
- * version stamp to migrate forward from. When the serialized shape first
- * changes, bump {@link DSL_VERSION} *then* and append a real transform from
- * `INITIAL_DSL_VERSION` to the new pinned version.
+ * any serialized document, so the on-disk shape at that point already *was*
+ * 0.1.0. The entry exists to wire the pipeline end to end and to give real
+ * documents a version stamp to migrate forward from. The second entry is the no-op 0.2.0
+ * `audioUrl` abolition stamp; the third performs the legacy line cleanup.
  */
 export const DSL_MIGRATIONS: readonly DslMigration[] = [
   { from: UNVERSIONED_DSL_VERSION, to: INITIAL_DSL_VERSION, migrate: (doc) => doc },
-  // 0.2.0 = 上游 audioUrl 退契约盖章步，刻意 no-op（见 DSL_VERSION 注释）
+  // 0.2.0 = 上游 audioUrl 退契约盖章步，刻意 no-op
   { from: '0.1.0', to: '0.2.0', migrate: (doc) => doc },
+  { from: '0.2.0', to: '0.3.0', migrate: stripLegacyLineRotateHeight },
 ];
 
 /**

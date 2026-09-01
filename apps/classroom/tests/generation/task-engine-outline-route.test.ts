@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 const streamLLMMock = vi.hoisted(() => vi.fn());
 const resolveModelFromRequestMock = vi.hoisted(() => vi.fn());
 const readDomainRegistryMock = vi.hoisted(() => vi.fn());
+const corpusUnavailableReasonMock = vi.hoisted(() => vi.fn());
+const fetchLearnerBlueprintMock = vi.hoisted(() => vi.fn());
 const VOCATIONAL_FLAG = 'OPENMAIC_ENABLE_VOCATIONAL';
 let originalVocationalFlag: string | undefined;
 
@@ -21,6 +23,17 @@ vi.mock('@/lib/server/domain-registry', () => ({
 vi.mock('@/lib/server/corpus-access', () => ({
   requireCorpusVisible: vi.fn().mockResolvedValue({ ok: true }),
 }));
+
+vi.mock('@/lib/server/knowledge-center', () => ({
+  corpusUnavailableReason: corpusUnavailableReasonMock,
+}));
+
+vi.mock('@/lib/generation/learner-profile', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/generation/learner-profile')>(
+    '@/lib/generation/learner-profile',
+  );
+  return { ...actual, fetchLearnerBlueprint: fetchLearnerBlueprintMock };
+});
 
 async function readStreamBody(response: Response) {
   const reader = response.body?.getReader();
@@ -61,32 +74,33 @@ function mockRequest(requirements: Record<string, unknown>) {
 
 function withLearningContract<T extends { outlines: Array<Record<string, unknown>> }>(payload: T) {
   const first = payload.outlines[0];
-  const practice =
-    payload.outlines.find((outline) => outline.type === 'interactive' || outline.type === 'pbl') ??
-    first;
-  const feedback =
-    payload.outlines.find(
-      (outline) =>
-        outline.type === 'pbl' ||
-        outline.type === 'quiz' ||
-        (outline.type === 'interactive' &&
-          (outline.widgetType === 'game' || outline.widgetType === 'procedural-skill')),
-    ) ?? practice;
-  const assessment =
-    payload.outlines.find(
-      (outline) =>
-        outline.type === 'quiz' ||
-        outline.type === 'pbl' ||
-        (outline.type === 'interactive' && outline.widgetType === 'game'),
-    ) ??
-    payload.outlines.find(
-      (outline) => outline.type === 'interactive' && outline.widgetType === 'procedural-skill',
-    ) ??
-    feedback;
+  const practiceIndex = payload.outlines.findIndex(
+    (outline) => outline.type === 'interactive' || outline.type === 'pbl',
+  );
+  const assessmentIndex = payload.outlines.findIndex(
+    (outline, index) =>
+      index >= Math.max(practiceIndex, 0) && (outline.type === 'quiz' || outline.type === 'pbl'),
+  );
+  const feedbackIndex = payload.outlines.findIndex(
+    (outline, index) =>
+      index > practiceIndex &&
+      (assessmentIndex < 0 || index < assessmentIndex) &&
+      (outline.type === 'interactive' || outline.type === 'pbl' || outline.type === 'quiz'),
+  );
+  const practice = payload.outlines[practiceIndex] ?? first;
+  const feedback = payload.outlines[feedbackIndex] ?? practice;
+  const assessment = payload.outlines[assessmentIndex] ?? feedback;
+  const outlines = payload.outlines.map((outline, index) =>
+    [practiceIndex, feedbackIndex, assessmentIndex].includes(index)
+      ? { ...outline, teachingObjective: 'O1' }
+      : outline,
+  );
 
   return {
     ...payload,
+    outlines,
     learningContract: {
+      teachingStrategy: 'standard',
       objectives: [
         {
           id: 'O1',
@@ -125,6 +139,10 @@ describe('task-engine outline route', () => {
       generatedAt: null,
       sourceRunId: null,
     });
+    corpusUnavailableReasonMock.mockReset();
+    corpusUnavailableReasonMock.mockResolvedValue(null);
+    fetchLearnerBlueprintMock.mockReset();
+    fetchLearnerBlueprintMock.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -133,6 +151,34 @@ describe('task-engine outline route', () => {
     } else {
       process.env[VOCATIONAL_FLAG] = originalVocationalFlag;
     }
+  });
+
+  test('domain-only profile still passes its effective corpus through the index gate', async () => {
+    vi.resetModules();
+    streamLLMMock.mockReset();
+    resolveModelFromRequestMock.mockReset();
+    resolveModelFromRequestMock.mockResolvedValue({
+      model: { provider: 'glm.chat', modelId: 'glm-5.1' },
+      modelInfo: { outputWindow: 4096, capabilities: {} },
+      modelString: 'glm:glm-5.1',
+      providerId: 'glm',
+      modelId: 'glm-5.1',
+      thinkingConfig: undefined,
+    });
+    corpusUnavailableReasonMock.mockResolvedValue('domain-only 的索引尚未就绪');
+
+    const { POST } = await import('@/app/api/generate/scene-outlines-stream/route');
+    const response = await POST(
+      mockRequest({
+        requirement: '生成领域课程',
+        learnerProfile: { domain: 'domain-only' },
+      }) as unknown as Parameters<typeof POST>[0],
+    );
+
+    expect(response.status).toBe(400);
+    expect(corpusUnavailableReasonMock).toHaveBeenCalledWith('domain-only');
+    expect(readDomainRegistryMock).not.toHaveBeenCalled();
+    expect(streamLLMMock).not.toHaveBeenCalled();
   });
 
   test('auto-routes smart-manufacturing practice to task engine and preserves mixed scene types', async () => {
@@ -370,12 +416,22 @@ describe('task-engine outline route', () => {
                 widgetOutline: { concept: 'motion', keyVariables: ['speed'] },
               },
               {
-                id: 'scene_2',
+                id: 'scene_feedback',
+                type: 'interactive',
+                title: 'Feedback and Retry',
+                description: 'Use feedback to revise the response and try again.',
+                keyPoints: ['Feedback', 'Revision', 'Retry'],
+                order: 2,
+                widgetType: 'game',
+                widgetOutline: { challenge: 'Revise the response after feedback' },
+              },
+              {
+                id: 'scene_3',
                 type: 'quiz',
                 title: 'Transfer Check',
                 description: 'Apply the idea to a new case.',
                 keyPoints: ['New case', 'Reasoning', 'Feedback'],
-                order: 2,
+                order: 3,
                 quizConfig: {
                   questionCount: 1,
                   difficulty: 'medium',
@@ -444,12 +500,22 @@ describe('task-engine outline route', () => {
                 },
               },
               {
-                id: 'scene_2',
+                id: 'scene_feedback',
+                type: 'interactive',
+                title: 'Process Feedback and Retry',
+                description: 'Use the process feedback to revise the decision and retry.',
+                keyPoints: ['Feedback', 'Revision', 'Retry'],
+                order: 2,
+                widgetType: 'game',
+                widgetOutline: { challenge: 'Correct the process after feedback' },
+              },
+              {
+                id: 'scene_3',
                 type: 'quiz',
                 title: 'Process Check',
                 description: 'Apply the process to a new case and retry after feedback.',
                 keyPoints: ['New case', 'Decision', 'Retry'],
-                order: 2,
+                order: 3,
                 quizConfig: {
                   questionCount: 1,
                   difficulty: 'medium',
@@ -584,28 +650,40 @@ describe('task-engine outline route', () => {
                 order: 2,
               },
               {
+                id: 'scene_practice',
+                type: 'interactive',
+                title: 'Guided Practice',
+                description: 'Apply the topic to a fresh example.',
+                keyPoints: ['Practice', 'Attempt', 'Evidence'],
+                order: 3,
+                widgetType: 'game',
+                widgetOutline: {
+                  challenge: 'Apply the topic to a fresh example',
+                },
+              },
+              {
+                id: 'scene_feedback',
+                type: 'interactive',
+                title: 'Feedback and Retry',
+                description: 'Correct the first attempt using visible feedback.',
+                keyPoints: ['Practice', 'Feedback', 'Retry'],
+                order: 4,
+                widgetType: 'game',
+                widgetOutline: {
+                  challenge: 'Revise the first attempt and retry',
+                },
+              },
+              {
                 id: 'scene_assessment',
                 type: 'quiz',
                 title: 'Assessment',
                 description: 'Apply the topic in a new case.',
                 keyPoints: ['Application', 'Evidence', 'Feedback'],
-                order: 3,
+                order: 5,
                 quizConfig: {
                   questionCount: 1,
                   difficulty: 'medium',
                   questionTypes: ['text'],
-                },
-              },
-              {
-                id: 'scene_practice',
-                type: 'interactive',
-                title: 'Guided Practice',
-                description: 'Apply the topic with immediate feedback.',
-                keyPoints: ['Practice', 'Feedback', 'Retry'],
-                order: 4,
-                widgetType: 'game',
-                widgetOutline: {
-                  challenge: 'Apply the topic to a fresh example',
                 },
               },
             ],

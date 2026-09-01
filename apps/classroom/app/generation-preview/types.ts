@@ -61,13 +61,25 @@ export interface GenerationSessionState {
 export const LEARNING_CONTRACT_REQUIRED_MESSAGE =
   '教学契约缺失或与当前大纲不一致，已停止生成，请重新生成大纲。';
 
+type LegacyLearningContractPlan = Omit<
+  LearningContractPlan,
+  'version' | 'teachingStrategy' | 'strategyEvidence'
+> & {
+  version: 1;
+  teachingStrategy?: unknown;
+};
+
 /** Keep the approved phase references, but make planned scenes match the user's current outline. */
 export function rebuildLearningContractPlan(
-  plan: LearningContractPlan,
+  plan: LearningContractPlan | LegacyLearningContractPlan,
   outlines: readonly SceneOutline[],
 ): LearningContractPlan {
   return {
-    version: 1,
+    version: 2,
+    teachingStrategy: plan.version === 1 ? 'standard' : plan.teachingStrategy,
+    ...(plan.version === 2 && plan.strategyEvidence
+      ? { strategyEvidence: plan.strategyEvidence }
+      : {}),
     plannedScenes: outlines.map((outline) => ({
       sceneId: outline.id,
       type: outline.type,
@@ -79,7 +91,7 @@ export function rebuildLearningContractPlan(
 
 /** Editing may change titles freely, but deleting/downgrading required teaching work must re-gate. */
 export function validateLearningContractPlan(
-  plan: LearningContractPlan | null | undefined,
+  plan: LearningContractPlan | LegacyLearningContractPlan | null | undefined,
   outlines: readonly SceneOutline[],
 ): LearningContractPlan {
   if (!plan) throw new Error(LEARNING_CONTRACT_REQUIRED_MESSAGE);
@@ -91,6 +103,7 @@ export function validateLearningContractPlan(
       type: outline.type,
       content: { widgetType: outline.widgetType },
     })),
+    { actualContentReady: false },
   );
   if (!result.fulfilled) {
     throw new Error(`${LEARNING_CONTRACT_REQUIRED_MESSAGE} ${result.violations.join('; ')}`);

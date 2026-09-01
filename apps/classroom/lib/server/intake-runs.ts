@@ -52,6 +52,8 @@ export interface IntakeStageSlot {
 
 export interface IntakeRunRecord {
   run_id: string;
+  /** 创建 run 的机构；旧记录没有该字段，按未知所有者处理，不对管理端开放。 */
+  owner_org_id?: string;
   corpus: string;
   scope: string;
   status: 'running' | 'done' | 'failed';
@@ -69,6 +71,7 @@ export interface IntakeRunRecord {
 
 export interface IntakeRunSummary {
   runId: string;
+  ownerOrgId: string | null;
   corpus: string;
   scope: string;
   status: IntakeRunRecord['status'];
@@ -168,7 +171,12 @@ const STATUSES: StageStatus[] = [
 ];
 
 /** run 列表，新的在前。目录不存在（一次都没跑过）时返回空数组，页面出空态。 */
-export async function listRuns(limit = 30): Promise<IntakeRunSummary[]> {
+export async function listRuns(
+  limit = 30,
+  ownerOrgId?: string,
+  display: (run: IntakeRunSummary) => boolean = () => true,
+): Promise<IntakeRunSummary[]> {
+  if (limit <= 0) return [];
   let names: string[];
   try {
     const entries = await fs.readdir(runsDir(), { withFileTypes: true });
@@ -178,12 +186,15 @@ export async function listRuns(limit = 30): Promise<IntakeRunSummary[]> {
   }
   names.sort().reverse(); // run_id 以时间戳打头，字典序倒排 = 新的在前
   const rows: IntakeRunSummary[] = [];
-  for (const name of names.slice(0, limit)) {
+  for (const name of names) {
     const record = await readRunRecord(name);
     if (!record) continue;
+    // 先按不可变 run 所有者过滤，再截取 limit；旧 run 没有所有者，安全地不进入机构视图。
+    if (ownerOrgId !== undefined && record.owner_org_id !== ownerOrgId) continue;
     const stages = Object.values(record.stages ?? {});
-    rows.push({
+    const row: IntakeRunSummary = {
       runId: record.run_id ?? name,
+      ownerOrgId: record.owner_org_id ?? null,
       corpus: record.corpus ?? '',
       scope: record.scope ?? '',
       status: record.status,
@@ -195,7 +206,10 @@ export async function listRuns(limit = 30): Promise<IntakeRunSummary[]> {
         STATUSES.map((s) => [s, stages.filter((x) => x?.status === s).length]),
       ) as Record<StageStatus, number>,
       error: record.error ?? '',
-    });
+    };
+    if (!display(row)) continue;
+    rows.push(row);
+    if (rows.length >= limit) break;
   }
   return rows;
 }

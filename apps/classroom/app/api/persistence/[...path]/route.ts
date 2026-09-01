@@ -10,7 +10,6 @@ import {
 } from '@openmaic/storage/server/reference';
 import { Pool } from 'pg';
 
-import { orgForAccount } from '@/lib/accounts/org-store';
 import { validateAppScene, validateAppStage } from '@/lib/document-store/validators';
 import { authenticatePersistenceRequest } from '@/lib/persistence/server-auth';
 
@@ -121,10 +120,7 @@ async function documentHandler(
         withTransaction: resources.withTransaction,
         validateScene: validateAppScene,
         validateStage: validateAppStage,
-        access: {
-          accountId,
-          orgId: (await orgForAccount(accountId))?.id ?? null,
-        },
+        access: { accountId },
       })
     : resources.documentStore;
 

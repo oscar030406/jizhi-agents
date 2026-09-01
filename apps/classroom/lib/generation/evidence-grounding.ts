@@ -793,11 +793,9 @@ function excerptCharBudget(el: Record<string, unknown>): number {
  *
  * ## 为什么要单开一个函数，不复用 `fetchEvidence`
  *
- * `fetchEvidence` 把四种情况**全部返回 `null`**：没配 `GROUNDING_URL`、
- * 请求失败、零命中、引擎判「证据不足」。对生成主路径来说这样是对的
- * （四种都该降级成裸生成，别拦车），但对**开跑前的判断**就不够了——
- * 「本机没配检索」和「这个库真查不到」必须分开：前者拦车会让本地开发跑不动，
- * 后者不拦车就会产出一门零据课。
+ * `fetchEvidence` 会把检索不可用降级成 `null`，但对**开跑前的判断**不够：
+ * 「本机没配检索」和「已配置的检索桥失败」必须分开。前者保持本地开发语义，
+ * 后者若静默放行，就会产出一门零据课。
  *
  * ## 为什么要有这道闸
  *
@@ -807,8 +805,8 @@ function excerptCharBudget(el: Record<string, unknown>): number {
  * 证据块 0、所有屏 `grounded: false`。记录是诚实的，但学习者拿到的是
  * 一门看起来正常的课，而它跟所选的库毫无关系。
  *
- * 返回 `null` = 不该拦（没配检索、或探针本身失败——探针不可靠时宁可放行，
- * 不能因为一次网络抖动把人的生成挡了）。返回字符串 = 拦车理由，人话。
+ * 返回 `null` = 不该拦（没配检索，或检索确有命中）。返回字符串 = 拦车理由，人话。
+ * 一旦配置 `GROUNDING_URL`，非 200、非法响应和调用异常都必须失败显式化。
  */
 export async function zeroEvidenceReason(
   requirement: string,
@@ -828,15 +826,14 @@ export async function zeroEvidenceReason(
         cache: 'no-store',
       },
     );
-    if (!resp.ok) return null; // 探针失败不拦车
+    if (!resp.ok) {
+      return `检索服务请求失败（HTTP ${resp.status}）。为避免生成无出处课程，本次生成已停止，请稍后重试。`;
+    }
     const payload = (await resp.json()) as { data?: { chunks?: unknown[] } };
     const chunks = payload.data?.chunks;
-    // **拦车的理由必须是「查过、确实没有」，不能是「读不懂回包」。**
-    // 缺 `data.chunks` 这个键说明对面回的不是我们认识的形状（版本不一致、
-    // 换了网关、测试里的桩），那时候不知道有没有命中——不知道就放行。
-    // 一版写成 `chunks?.length ?? 0`，把缺字段当成零命中，
-    // 当场误拦了一条只想验元数据落库的用例（classroom-generation-metadata）。
-    if (!Array.isArray(chunks)) return null;
+    if (!Array.isArray(chunks)) {
+      return '检索服务响应格式无效（缺少 data.chunks 数组）。为避免生成无出处课程，本次生成已停止，请稍后重试。';
+    }
     if (chunks.length > 0) return null;
     const where = corpus?.trim() ? `知识库「${corpus.trim()}」` : '当前知识库';
     return (
@@ -845,6 +842,6 @@ export async function zeroEvidenceReason(
       `两条出路：把需求写得贴近这个库真正讲的内容，或者换一个库。`
     );
   } catch {
-    return null; // 探针本身出错：宁可放行，不因一次抖动挡住生成
+    return '检索服务调用异常或响应无法解析。为避免生成无出处课程，本次生成已停止，请稍后重试。';
   }
 }

@@ -19,6 +19,7 @@ import { ThumbnailInteractive } from '@/components/slide-renderer/components/Thu
 import { useStageStore, useCanvasStore } from '@/lib/store';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useI18n } from '@/lib/hooks/use-i18n';
+import { useNearViewport } from '@/lib/hooks/use-near-viewport';
 import type { Scene, SceneType, SlideContent, InteractiveContent } from '@/lib/types/stage';
 import { PENDING_SCENE_ID } from '@/lib/store/stage';
 import { SceneAuditBadge } from '@/components/stage/scene-audit-badge';
@@ -342,7 +343,7 @@ export function SceneSidebar({
                 <div className="relative aspect-video w-full rounded overflow-hidden bg-gray-100 dark:bg-gray-800 ring-1 ring-black/5 dark:ring-white/5">
                   <div className="absolute inset-0 flex items-center justify-center">
                     {isSlide && slideContent ? (
-                      <SlideThumbnail
+                      <LazySlideThumbnail
                         slide={slideContent.canvas}
                         viewportSize={viewportSize}
                         viewportRatio={viewportRatio}
@@ -701,6 +702,32 @@ export function SceneSidebar({
         {/* Spacer to push toggle button area */}
         <div className="mt-auto" />
       </div>
+    </div>
+  );
+}
+
+function LazySlideThumbnail({
+  slide,
+  viewportSize,
+  viewportRatio,
+  size,
+}: {
+  readonly slide: SlideContent['canvas'];
+  readonly viewportSize: number;
+  readonly viewportRatio: number;
+  readonly size: number;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const visible = useNearViewport(ref);
+  return (
+    <div ref={ref} className="flex h-full w-full items-center justify-center">
+      <SlideThumbnail
+        slide={slide}
+        viewportSize={viewportSize}
+        viewportRatio={viewportRatio}
+        size={size}
+        visible={visible}
+      />
     </div>
   );
 }

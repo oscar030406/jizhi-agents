@@ -1,4 +1,4 @@
-import type { SceneAudit } from './hallucination-audit';
+import { hashCourseScenes, type SceneAudit } from './hallucination-audit';
 import {
   extractContentVerifiables,
   hasVerifiableContent,
@@ -23,9 +23,11 @@ export type LearnerReleaseBlockReason =
 export interface LearnerReleaseScene {
   id?: string;
   outlineId?: string;
+  title?: string;
   type?: string;
   audit?: SceneAudit | null;
   content?: unknown;
+  actions?: unknown;
   verification?: VerificationMeta | null;
 }
 
@@ -75,6 +77,7 @@ export function decideSceneLearnerRelease(scene: LearnerReleaseScene): SceneLear
 export type CourseLearnerReleaseBlockReason =
   | 'course_incomplete'
   | 'course_empty'
+  | 'course_fact_review_failed'
   | 'learning_contract_missing'
   | 'learning_contract_unfulfilled';
 
@@ -88,12 +91,31 @@ export interface CourseLearnerReleaseDecision {
 export function decideCourseLearnerRelease(course: {
   scenes?: readonly LearnerReleaseScene[];
   generating?: unknown;
-  stage?: { learningContract?: unknown };
+  stage?: { learningContract?: unknown; courseAudit?: SceneAudit | null };
 }): CourseLearnerReleaseDecision {
   const scenes = Array.isArray(course.scenes) ? course.scenes : [];
   const courseReasons: CourseLearnerReleaseBlockReason[] = [];
   if (course.generating) courseReasons.push('course_incomplete');
   if (scenes.length === 0) courseReasons.push('course_empty');
+
+  const courseAudit = course.stage?.courseAudit;
+  const contract = course.stage?.learningContract;
+  const contractV2 =
+    !!contract && typeof contract === 'object' && (contract as { version?: unknown }).version === 2;
+  const hashMismatch = Boolean(
+    courseAudit?.courseContentHash && courseAudit.courseContentHash !== hashCourseScenes(scenes),
+  );
+  if (
+    (contractV2 && (!courseAudit || !courseAudit.courseContentHash)) ||
+    (contractV2 && courseAudit?.panelComplete !== true) ||
+    hashMismatch ||
+    (courseAudit &&
+      (courseAudit.verdict === 'flagged' ||
+        courseAudit.decision === 'block_pending_review' ||
+        courseAudit.claims?.some((claim) => claim.verdict !== 'supported')))
+  ) {
+    courseReasons.push('course_fact_review_failed');
+  }
 
   let contractViolations: string[] = [];
   if (!course.stage?.learningContract) {
@@ -127,7 +149,7 @@ export function decideCourseLearnerRelease(course: {
 export function isCourseLearnerReleased(course: {
   scenes?: readonly LearnerReleaseScene[];
   generating?: unknown;
-  stage?: { learningContract?: unknown };
+  stage?: { learningContract?: unknown; courseAudit?: SceneAudit | null };
 }): boolean {
   return decideCourseLearnerRelease(course).eligible;
 }
