@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   applyDomainRegistry,
   domainRegistryEntry,
+  isScratchCorpus,
   parseDomainRegistry,
 } from '@/lib/knowledge/domain-registry';
 import { domainLabel, hasDomainLabel } from '@/lib/knowledge/domain-labels';
@@ -23,6 +24,19 @@ import { courseDomainOf, readCourseDomains } from '@/lib/server/course-domains';
 import { readDomainRegistry } from '@/lib/server/domain-registry';
 
 const ORIGINAL_ENGINE_DIR = process.env.ENGINE_DATA_DIR;
+
+describe('学习端测试语料判定', () => {
+  it.each(['fullprobe', 'fullprobe-20260901', 'fullprobeLegacyRun'])(
+    '隐藏真实遗留名 %s',
+    (corpus) => {
+      expect(isScratchCorpus(corpus)).toBe(true);
+    },
+  );
+
+  it.each(['ai', 'smart-manufacturing', 'probing-design'])('不误伤正式领域 %s', (corpus) => {
+    expect(isScratchCorpus(corpus)).toBe(false);
+  });
+});
 
 afterEach(() => {
   applyDomainRegistry(null);
@@ -152,36 +166,31 @@ describe('课程域归属：单课规则', () => {
       typeof courseDomainOf
     >[0]['scenes'];
 
-  it('路径规则只压前缀投票，压不过课程自己记的 corpus', () => {
-    // 2026-08-23 改口径。原来是「路径内一律归 ai，压过 corpus」——
-    // 那让 c3HH74qwAH（自己记 rag-adv）在域视图里显示成 ai，
-    // 与课程自身的出处记录给出两个答案。路径规则存在的理由只是纠正前缀投票误判。
+  it('课程自己记的 corpus 压过引用前缀', () => {
     const withCorpus = {
       scenes: scenesCiting('em01s02'),
       generation: { profile: { corpus: 'rag-adv' } },
     } as Parameters<typeof courseDomainOf>[0];
-    expect(courseDomainOf(withCorpus, true)).toBe('rag-adv');
-    expect(courseDomainOf(withCorpus, false)).toBe('rag-adv');
+    expect(courseDomainOf(withCorpus)).toBe('rag-adv');
 
     // em 前缀直接归主库（先导语料早已合入主索引），路径内外一致
     const noCorpus = { scenes: scenesCiting('em01s02') } as Parameters<typeof courseDomainOf>[0];
-    expect(courseDomainOf(noCorpus, true)).toBe('ai');
-    expect(courseDomainOf(noCorpus, false)).toBe('ai');
+    expect(courseDomainOf(noCorpus)).toBe('ai');
   });
 
   it('没有 corpus 字段的存量课按 source_id 前缀归位', () => {
-    expect(courseDomainOf({ scenes: scenesCiting('em01s02') }, false)).toBe('ai');
-    expect(courseDomainOf({ scenes: scenesCiting('iotdb-quick-start') }, false)).toBe('iotdb');
-    expect(courseDomainOf({ scenes: scenesCiting('applications-sales') }, false)).toBe('odoo');
+    expect(courseDomainOf({ scenes: scenesCiting('em01s02') })).toBe('ai');
+    expect(courseDomainOf({ scenes: scenesCiting('iotdb-quick-start') })).toBe('iotdb');
+    expect(courseDomainOf({ scenes: scenesCiting('applications-sales') })).toBe('odoo');
   });
 
   it('零引用又没有出身记录 → unknown，不冒充主域', () => {
-    expect(courseDomainOf({ scenes: [] }, false)).toBe('unknown');
+    expect(courseDomainOf({ scenes: [] })).toBe('unknown');
   });
 });
 
 describe('课程域归属：跑真实课程目录', () => {
-  it('结果与 build-course-domains.mjs 的既有产物一致', async () => {
+  it('运行时归属覆盖现有课程且不依赖构建期快照', async () => {
     const rows = await readCourseDomains();
     expect(Object.keys(rows).length).toBeGreaterThan(0);
 

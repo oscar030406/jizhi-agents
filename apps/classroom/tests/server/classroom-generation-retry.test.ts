@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   createSceneWithActions: vi.fn(),
   persistClassroom: vi.fn(),
   callLLM: vi.fn(),
+  fetchEvidence: vi.fn(),
   zeroEvidenceReason: vi.fn(),
 }));
 
@@ -42,6 +43,7 @@ vi.mock('@/lib/server/classroom-storage', () => ({
 
 vi.mock('@/lib/generation/evidence-grounding', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/generation/evidence-grounding')>()),
+  fetchEvidence: mocks.fetchEvidence,
   zeroEvidenceReason: mocks.zeroEvidenceReason,
 }));
 
@@ -66,6 +68,25 @@ const outline = {
 const slideContent = {
   elements: [],
   remark: 'Retry transient failures',
+};
+
+const learningContract = {
+  teachingStrategy: 'standard' as const,
+  objectives: [
+    {
+      id: 'O1',
+      action: 'apply a retry',
+      condition: 'given a transient failure',
+      successCriterion: 'retries once and preserves the result',
+    },
+  ],
+  prerequisiteActivation: ['outline-1'],
+  demonstration: ['outline-1'],
+  learnerPractice: ['outline-1'],
+  feedbackRetry: ['outline-1'],
+  transferApplication: ['outline-1'],
+  assessmentMap: [{ sceneId: 'outline-1', objectiveIds: ['O1'] }],
+  grounding: { sourceRefs: ['corpus:ai'], claimPolicy: 'cite-or-mark-uncertain' as const },
 };
 
 async function generateWithProgress() {
@@ -97,12 +118,18 @@ describe('classroom scene generation retries', () => {
     });
     mocks.isProviderKeyRequired.mockReturnValue(false);
     mocks.callLLM.mockResolvedValue({ text: 'ok' });
+    mocks.fetchEvidence.mockResolvedValue({
+      status: 'unavailable',
+      configured: false,
+      reason: 'test runtime has no evidence bridge',
+    });
     mocks.zeroEvidenceReason.mockResolvedValue(null);
     mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
       success: true,
       data: {
         languageDirective: 'Use English.',
         outlines: [outline],
+        learningContract,
       },
     });
     mocks.applyOutlineFallbacks.mockImplementation((value) => value);

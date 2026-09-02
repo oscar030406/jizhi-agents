@@ -6,7 +6,7 @@ import { runClassroomGenerationJob } from '@/lib/server/classroom-job-runner';
 import { createClassroomGenerationJob } from '@/lib/server/classroom-job-store';
 import { buildRequestOrigin } from '@/lib/server/classroom-storage';
 import { corpusOf } from '@/lib/generation/learner-profile';
-import { requireCorpusVisible } from '@/lib/server/corpus-access';
+import { authorizeInternalCorpusService, requireCorpusVisible } from '@/lib/server/corpus-access';
 import { createLogger } from '@/lib/logger';
 import { orgForAccount } from '@/lib/accounts/org-store';
 
@@ -46,18 +46,24 @@ export async function POST(req: NextRequest) {
     }
 
     const corpus = corpusOf(body.learnerProfile) ?? 'ai';
-    const access = await requireCorpusVisible(corpus);
-    if (!access.ok) return access.response;
+    const serviceAccess = await authorizeInternalCorpusService(req, corpus);
+    if (serviceAccess.attempted && !serviceAccess.ok) return serviceAccess.response;
 
-    const ownerOrgId = access.account ? (await orgForAccount(access.account.id))?.id : undefined;
-    const generationInput: GenerateClassroomInput = ownerOrgId
-      ? { ...body, ownerOrgId }
-      : body;
+    const access = serviceAccess.attempted ? null : await requireCorpusVisible(corpus);
+    if (access && !access.ok) return access.response;
+
+    const ownerOrgId = serviceAccess.attempted
+      ? serviceAccess.orgId
+      : access?.account
+        ? (await orgForAccount(access.account.id))?.id
+        : undefined;
+    const generationInput: GenerateClassroomInput = ownerOrgId ? { ...body, ownerOrgId } : body;
 
     const baseUrl = buildRequestOrigin(req);
     const jobId = nanoid(10);
     const job = await createClassroomGenerationJob(jobId, generationInput, {
-      ownerAccountId: access.account?.id ?? null,
+      ownerAccountId: access?.account?.id ?? null,
+      ownerOrgId: ownerOrgId ?? null,
       corpus,
     });
     const pollUrl = `${baseUrl}/api/generate-classroom/${jobId}`;

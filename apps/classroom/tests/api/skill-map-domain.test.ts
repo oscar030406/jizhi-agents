@@ -79,6 +79,15 @@ afterEach(() => {
 });
 
 describe('/api/skills 分域', () => {
+  it('fullprobe 前缀的遗留测试域对学习端返回 404，且不调用引擎', async () => {
+    const seen = stubEngine(() => ({ ok: true, body: MAIN }));
+
+    const response = await get('?domain=fullprobe20260901');
+
+    expect(response.status).toBe(404);
+    expect(seen).toEqual([]);
+  });
+
   it('把 domain 原样带给引擎', async () => {
     const seen = stubEngine(() => ({ ok: true, body: MAIN }));
     await get('?domain=manufacturing');

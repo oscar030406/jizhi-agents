@@ -56,6 +56,9 @@ describe('outline learning-contract prompt', () => {
       expect(text).toContain('strict order');
       expect(text).toContain('quiz or PBL');
       expect(text).toContain('teachingObjective');
+      expect(text).toContain('Every interactive or PBL practice scene');
+      expect(text).toContain('collect learner input and visibly respond');
+      expect(text).toContain('explicit completion criteria');
       expect(text).toContain('corpus:ai');
       expect(text).not.toContain('{{groundingRefs}}');
     });

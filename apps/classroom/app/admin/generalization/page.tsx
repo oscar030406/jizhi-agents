@@ -99,9 +99,8 @@ function VoidCheckup({ checkup }: { readonly checkup: Checkup }) {
     <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2.5">
       <p className="text-xs font-medium">这一轮体检不成立</p>
       <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-        判官对照的资料池是 0 块——证据检索桥当时没通，正文与判官都没读到本库的教材，
-        那一轮量到的是模型自己知道多少，不是换库之后这条链转不转。
-        桥恢复后重跑一次，这一栏会自动换成新的一轮。
+        本轮没有取得该知识库的教材证据，生成与审核都无法依据这批资料进行，
+        因此结果不能作为跨领域验证。平台恢复证据服务并重新体检后，本栏会显示新的结果。
       </p>
       <p className="mt-1.5 font-mono text-[11px] text-muted-foreground">run {checkup.runId}</p>
     </div>
@@ -134,9 +133,8 @@ function CheckupBlock({
       ) : null}
       {er && er.ready < er.total ? (
         <p className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
-          有 {er.total - er.ready} 屏在生成时没拿到教材摘录（检索桥失败或零命中），
-          正文凭模型自身知识写成——这些屏的接地数字量到的是管道故障，不是内容质量。
-          逐屏原因可通过下方本轮产物按钮查看。
+          有 {er.total - er.ready} 屏未获得教材摘录（证据服务不可用或没有匹配内容），
+          因此这些屏不能用于评价教学内容质量。逐屏原因可通过下方本轮体检记录查看。
         </p>
       ) : null}
       {/* 覆盖那一格已撤下，撤因见 data.ts 的 `goldTotal` 注释。说明就摆在原先印数字的位置：
@@ -152,7 +150,7 @@ function CheckupBlock({
           {/* 原来这里只印一段 `trial_courses/<档>_kc_misses.json` 文本，看着像链接却点不动。
               产物读得到就换成能点开的按钮；读不到才退回印路径，让人去服务器上找。 */}
           {artifacts.length > 0
-            ? '没讲到的是哪几个，逐条落在本轮产物里，点开看：'
+            ? '没讲到的是哪几个，逐条记录在本轮体检明细中，点开查看：'
             : '没讲到的是哪几个，这一轮暂时没有可查看的明细。'}
         </p>
         {artifacts.length > 0 ? (
@@ -200,7 +198,7 @@ function DomainColumn({
           // 接入流水线没记接入时刻（readiness.json 里没有时间戳字段），只能给索引文件的
           // 落盘日期，所以这里写的是「语料入库」不是「接入于」。
           <p className="mt-1 text-[11px] text-muted-foreground">
-            语料入库 {panel.sourceFileDate}（索引文件时间，流水线没记接入时刻）
+            资料最近处理 {panel.sourceFileDate}
           </p>
         ) : null}
       </header>
@@ -210,13 +208,15 @@ function DomainColumn({
           deep={t.deep}
           label="可检索证据块"
           value={num(panel.chunks)}
-          caliber="索引文件的行数"
+          caliber="系统当前索引统计"
         />
         <Figure
           deep={t.deep}
-          label="收进来的文档"
+          label="系统接收的文档"
           value={num(panel.files)}
-          caliber={panel.chars ? `正文 ${num(Math.round(panel.chars / 10000))} 万字` : '各来源策展后的篇数'}
+          caliber={
+            panel.chars ? `正文 ${num(Math.round(panel.chars / 10000))} 万字` : '各来源策展后的篇数'
+          }
         />
       </div>
 
@@ -238,9 +238,9 @@ function DomainColumn({
 
       {panel.checkup ? (
         <p className="text-[11px] leading-relaxed text-muted-foreground">
-          体检 {panel.checkup.finishedAt.slice(0, 16).replace('T', ' ')} 跑完，
-          耗时 {Math.round(panel.checkup.durationMs / 60000)} 分钟，
-          生成 {panel.checkup.scenes}/{panel.checkup.plannedScenes} 屏
+          体检 {panel.checkup.finishedAt.slice(0, 16).replace('T', ' ')} 跑完， 耗时{' '}
+          {Math.round(panel.checkup.durationMs / 60000)} 分钟， 生成 {panel.checkup.scenes}/
+          {panel.checkup.plannedScenes} 屏
           {cost
             ? `；调用 ${cost.calls} 次，入 ${num(cost.inputTokens)} / 出 ${num(cost.outputTokens)} token（另盲评 ${num(cost.engineTokens)}）`
             : ''}
@@ -258,24 +258,33 @@ function DomainColumn({
             <li key={s.name} className="border-t border-border/60 pt-2">
               <p className="font-mono text-[11px] break-all">
                 {s.url ? (
-                  <a href={s.url} className="underline underline-offset-2" target="_blank" rel="noreferrer">
+                  <a
+                    href={s.url}
+                    className="underline underline-offset-2"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
                     {s.name}
                   </a>
                 ) : (
                   s.name
                 )}
                 <span className="ml-2 font-sans text-muted-foreground">{s.docs} 篇</span>
-                {s.grade ? <span className="ml-2 font-sans text-muted-foreground">证据等级 {s.grade}</span> : null}
+                {s.grade ? (
+                  <span className="ml-2 font-sans text-muted-foreground">证据等级 {s.grade}</span>
+                ) : null}
               </p>
-              <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{s.license || '许可未登记'}</p>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                {s.license || '许可未登记'}
+              </p>
             </li>
           ))}
         </ul>
         {panel.corpus === 'ai' ? null : (
           <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
             许可判定：{panel.license.spdx}
-            {panel.license.unknown ? '（没找到许可声明，按未知处理）' : ''}。
-            冻结金标 {panel.goldTopics} 个主题文件。
+            {panel.license.unknown ? '（没找到许可声明，按未知处理）' : ''}。 冻结金标{' '}
+            {panel.goldTopics} 个主题文件。
           </p>
         )}
       </details>
@@ -290,7 +299,9 @@ export default async function GeneralizationPage() {
         <div className="rounded-2xl border border-border bg-card p-8 text-center shadow-card">
           <ShieldAlert className="mx-auto mb-3 size-8 text-amber-600" />
           <h1 className="mb-2 text-lg font-semibold">领域泛化</h1>
-          <p className="text-sm text-muted-foreground">这一页只对管理者账号开放。请在首页右上角以「管理者」身份登录。</p>
+          <p className="text-sm text-muted-foreground">
+            这一页只对管理者账号开放。请在首页右上角以「管理者」身份登录。
+          </p>
           <Link
             href="/"
             className="mt-5 inline-flex items-center gap-1.5 rounded-full border border-border px-4 py-2 text-xs transition-colors hover:bg-accent"
@@ -308,11 +319,7 @@ export default async function GeneralizationPage() {
     readOtherCorpora(),
     readHeadlineMetrics(),
   ]);
-  const others = allOthers.filter(
-    (item) =>
-      !isScratchCorpus(item.corpus) &&
-      !/(?:fullprobe|fullpath[-_]?probe|(?:^|[-_])probe(?:[-_]|$))/i.test(item.corpus),
-  );
+  const others = allOthers.filter((item) => !isScratchCorpus(item.corpus));
   const checked = panels.filter((p) => p.checkup);
   const external = metrics.filter((m) => m.id !== 'api_interception_v2');
   // 每轮体检的产物在服务端就读好（两类文件各 1–2 KB），弹层直接拿——
@@ -356,8 +363,8 @@ export default async function GeneralizationPage() {
           <h2 className="text-sm font-medium">主语料的对外指标（另一套口径）</h2>
           <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">
             下面三条跑在主语料上，分母是几百，判据与聚合规则都写在台账里。
-            <strong className="font-medium">与上面的换库体检不可比</strong>：一个是几百条断言的评测链，
-            一个是个位数分母的连通性体检，混着读会得出错误结论。
+            <strong className="font-medium">与上面的换库体检不可比</strong>
+            ：一个是几百条断言的评测链， 一个是个位数分母的连通性体检，混着读会得出错误结论。
           </p>
           <div className="mt-4 grid gap-4 sm:grid-cols-3">
             {external.length === 0 ? (
@@ -400,17 +407,17 @@ export default async function GeneralizationPage() {
               <li>
                 覆盖：不给比率。分母是冻结金标的全集，分子只来自 2 屏试跑课，
                 而试跑大纲机械点名的知识成分是固定条数、不随领域变——相除量到的是试跑规模，
-                不是覆盖能力。页面改为只列“没讲到的是哪几个”，并通过本轮产物按钮提供明细。
+                不是覆盖能力。页面改为只列“没讲到的是哪几个”，并通过本轮体检明细按钮提供详情。
                 2026-08-17 之前完成的轮次仍保留旧口径比率作为历史记录。
               </li>
               <li>盲评 x/n：判官读不到档位标签，只看正文猜这屏写给谁。</li>
-              <li>成本读 classroom 的调用账本增量，账本没有单价字段，所以不折算成钱。</li>
+              <li>模型调用量取自本次体检记录；记录没有统一单价，因此不折算金额。</li>
             </ul>
             <p className="text-foreground">
-              重跑一次体检会调用生成与审核接口、按 token
+              重跑一次体检会重新执行生成与审核、按 token
               计费，由平台维护人员执行；页面不提供触发按钮。
             </p>
-            <p>查看本页原始产物（点文件名查看原文）：</p>
+            <p>查看本轮体检记录：</p>
             {checked.length === 0 ? (
               <p>（还没有跑完的体检）</p>
             ) : (
@@ -419,9 +426,7 @@ export default async function GeneralizationPage() {
                   <li key={p.corpus}>
                     <p>{p.label}</p>
                     <div className="mt-1">
-                      <RunArtifacts
-                        artifacts={artifacts.get(p.checkup?.runId ?? '') ?? []}
-                      />
+                      <RunArtifacts artifacts={artifacts.get(p.checkup?.runId ?? '') ?? []} />
                     </div>
                   </li>
                 ))}
@@ -429,7 +434,10 @@ export default async function GeneralizationPage() {
             )}
             <p>
               资料清单、许可与切片统计来自系统接入记录；所属机构管理者可前往{' '}
-              <Link href="/admin/knowledge" className="underline underline-offset-2 hover:text-foreground">
+              <Link
+                href="/admin/knowledge"
+                className="underline underline-offset-2 hover:text-foreground"
+              >
                 知识库详情
               </Link>{' '}
               查看来源与原件。
@@ -469,7 +477,9 @@ function headline(rawValue: string, rawCaliber = ''): { figure: string; rest: st
   const caliber = redactCaliber(rawCaliber);
   const m = /[\d.]+\s*%/.exec(value);
   if (!m || m.index === undefined) return { figure: value.slice(0, 12), rest: value.slice(12) };
-  const rest = (value.slice(0, m.index).replace(/[=＝]\s*$/, '') + value.slice(m.index + m[0].length))
+  const rest = (
+    value.slice(0, m.index).replace(/[=＝]\s*$/, '') + value.slice(m.index + m[0].length)
+  )
     // 开括号与它的闭括号一起摘，只摘开括号会在卡面上留个孤儿右括号
     // （实测：「95% CI 77.8–92.6%，n=108，下界未达 85%）——rubric v4…」）。
     .replace(/^[（(]([^）)]*)[）)]/, '$1')

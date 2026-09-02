@@ -17,6 +17,8 @@ export type ClassroomGenerationJobStatus = 'queued' | 'running' | 'succeeded' | 
 export interface ClassroomGenerationJob {
   id: string;
   ownerAccountId: string | null;
+  /** 服务端完整试跑绑定的机构；旧 job 缺失时内部服务一律不得读取。 */
+  ownerOrgId?: string | null;
   corpus: string;
   status: ClassroomGenerationJobStatus;
   step: ClassroomGenerationStep | 'queued' | 'failed';
@@ -110,7 +112,7 @@ export function isValidClassroomJobId(jobId: string): boolean {
 export async function createClassroomGenerationJob(
   jobId: string,
   input: GenerateClassroomInput,
-  access: Pick<ClassroomGenerationJob, 'ownerAccountId' | 'corpus'>,
+  access: Pick<ClassroomGenerationJob, 'ownerAccountId' | 'ownerOrgId' | 'corpus'>,
 ): Promise<ClassroomGenerationJob> {
   const now = new Date().toISOString();
   const job: ClassroomGenerationJob = {

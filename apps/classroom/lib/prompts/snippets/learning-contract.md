@@ -96,11 +96,20 @@ Hard rules:
 - Every phase array is non-empty and references an ID that exists in `outlines`. A compact course may
   reuse a scene when it genuinely performs more than one role.
 - Practice requires learner action, not another explanation slide.
-- Every interactive practice scene sets `teachingObjective` to one objective ID. Later scenes with
-  that same `teachingObjective` must provide feedback and retry, followed by a quiz or PBL mapped to
-  that objective in `assessmentMap`.
+- Every outline sets `objectiveIds` to one or more IDs from `learningContract.objectives`; use all
+  relevant IDs when one scene genuinely serves more than one objective. Each objective must have
+  mapped prerequisite activation, demonstration, learner practice, feedback/retry, transfer, and
+  assessment evidence. `teachingObjective` may mirror the first ID for legacy consumers, but
+  `objectiveIds` is the authoritative mapping.
+- The scene description and key points must state how that scene serves the mapped objective's
+  `action`, `condition`, and `successCriterion`; merely repeating objective keywords is not evidence.
+  Later feedback scenes for a practice must share its objective ID, and a later quiz or PBL in
+  `assessmentMap` must close that same objective loop.
+- Every interactive or PBL practice scene used by the contract must collect learner input and visibly respond to that input; static HTML or a configuration-shaped placeholder is not learner practice. A PBL must contain a concrete deliverable, runnable milestones and microtasks, and explicit completion criteria.
 - Feedback names how the learner sees an error and retries.
 - Transfer uses a quiz or PBL in a situation not already used by the demonstration.
+- A transfer keeps the same target action and success criterion but changes the task situation or
+  input materially; renaming the example or changing only a number is not a new situation.
 - Every objective ID appears in `assessmentMap`; assessment evidence must come from a quiz or PBL
   rather than a display-oriented interactive or self-reported understanding.
 - Do not invent source titles or URLs. Copy only route-provided grounding identifiers.

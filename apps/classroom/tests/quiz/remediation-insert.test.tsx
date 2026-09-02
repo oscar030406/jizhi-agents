@@ -28,14 +28,27 @@ vi.mock('@/components/audio/speech-button', () => ({
 vi.mock('motion/react', async () => {
   const React = await import('react');
   const ANIMATION_PROPS = new Set([
-    'initial', 'animate', 'exit', 'transition', 'whileTap', 'whileHover', 'layout', 'layoutId',
-    'variants', 'custom', 'drag', 'onAnimationComplete',
+    'initial',
+    'animate',
+    'exit',
+    'transition',
+    'whileTap',
+    'whileHover',
+    'layout',
+    'layoutId',
+    'variants',
+    'custom',
+    'drag',
+    'onAnimationComplete',
   ]);
   const motion = new Proxy(
     {},
     {
       get: (_t, tag: string) =>
-        function MotionStub({ children, ...props }: Record<string, unknown> & { children?: unknown }) {
+        function MotionStub({
+          children,
+          ...props
+        }: Record<string, unknown> & { children?: unknown }) {
           const clean = Object.fromEntries(
             Object.entries(props).filter(([k]) => !ANIMATION_PROPS.has(k)),
           );
@@ -58,7 +71,7 @@ vi.mock('@/lib/evidence', () => ({
 }));
 vi.mock('@/lib/evidence/from-quiz', () => ({ quizEvidenceDraft: () => null }));
 vi.mock('@/lib/evidence/profile-bridge', () => ({
-  learnerDomain: () => 'ai',
+  courseDomain: vi.fn(async () => 'ai'),
   refreshDerivedProfile: vi.fn(async () => {}),
 }));
 vi.mock('@/lib/runtime/learner-key', () => ({ getLearnerKey: async () => 'anon:test' }));
@@ -125,6 +138,7 @@ let host: HTMLElement | null = null;
 beforeEach(() => {
   generateRemediationScene.mockReset();
   useStageStore.setState({ currentSceneId: 'scene-1' });
+  localStorage.setItem('learnerProfile', JSON.stringify({ domain: 'ai', corpus: 'ai' }));
   vi.stubGlobal(
     'fetch',
     vi.fn((input: RequestInfo | URL) => {
@@ -324,7 +338,9 @@ describe('执行决策 → 补救场景落地', () => {
   });
 
   it('生成失败：原样显示失败原因，执行按钮留着让人重来', async () => {
-    generateRemediationScene.mockResolvedValue({ error: '补救内容未过事实审核放行线：断言 3 条判错' });
+    generateRemediationScene.mockResolvedValue({
+      error: '补救内容未过事实审核放行线：断言 3 条判错',
+    });
     await mount();
     await click(byText('执行：降维解释'));
 

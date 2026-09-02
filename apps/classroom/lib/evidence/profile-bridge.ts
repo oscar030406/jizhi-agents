@@ -62,6 +62,10 @@ export interface DerivedProfileFields {
   conceptConfidence: Record<string, number>;
   /** 他现在还提不提得出来。随时间衰减的那一个。 */
   conceptRecall: Record<string, number>;
+  /** 专业掌握度的真源；扁平字段只是当前域视图，不能再跨域争同一个键。 */
+  conceptMasteryByDomain: Record<string, Record<string, number>>;
+  conceptConfidenceByDomain: Record<string, Record<string, number>>;
+  conceptRecallByDomain: Record<string, Record<string, number>>;
   /** 这份画像是从几条证据算出来的。可对质的入口。 */
   derivedFrom: { evidenceCount: number; at: string };
 }
@@ -77,33 +81,35 @@ export interface DerivedProfileFields {
 export function deriveProfileFields(
   evidence: Parameters<typeof fold>[0],
   options: FoldOptions = {},
+  activeDomain?: string,
 ): DerivedProfileFields {
   const profile = fold(evidence, options);
-  const mastery: Record<string, number> = {};
-  const confidence: Record<string, number> = {};
-  const recall: Record<string, number> = {};
-  /** 同名概念跨域撞车时，记住当前占位者的证据数，好让证据多的那个赢。 */
-  const winnerEvidence: Record<string, number> = {};
+  const masteryByDomain: Record<string, Record<string, number>> = {};
+  const confidenceByDomain: Record<string, Record<string, number>> = {};
+  const recallByDomain: Record<string, Record<string, number>> = {};
   let count = 0;
-  for (const list of Object.values(profile.byDomain)) {
+  for (const [domain, list] of Object.entries(profile.byDomain)) {
+    const mastery = (masteryByDomain[domain] ??= {});
+    const confidence = (confidenceByDomain[domain] ??= {});
+    const recall = (recallByDomain[domain] ??= {});
     for (const m of list) {
       if (m.measured.kind !== 'concept') continue;
-      // 键用概念名，与旧字段的形状一致（旧路写的就是 `mastery[concept]`）。
-      // 同名概念跨域撞车时取证据多的那个——真要分域得改 6 个读点，那是下一步。
       const key = m.measured.concept;
-      if (winnerEvidence[key] === undefined || m.evidenceCount > winnerEvidence[key]) {
-        winnerEvidence[key] = m.evidenceCount;
-        mastery[key] = round2(m.estimate);
-        confidence[key] = round2(m.confidence);
-        recall[key] = round2(m.recall);
-      }
+      mastery[key] = round2(m.estimate);
+      confidence[key] = round2(m.confidence);
+      recall[key] = round2(m.recall);
       count += m.evidenceCount;
     }
   }
+  const availableDomains = Object.keys(masteryByDomain);
+  const selectedDomain = activeDomain ?? (availableDomains.length === 1 ? availableDomains[0] : '');
   return {
-    conceptMastery: mastery,
-    conceptConfidence: confidence,
-    conceptRecall: recall,
+    conceptMastery: masteryByDomain[selectedDomain] ?? {},
+    conceptConfidence: confidenceByDomain[selectedDomain] ?? {},
+    conceptRecall: recallByDomain[selectedDomain] ?? {},
+    conceptMasteryByDomain: masteryByDomain,
+    conceptConfidenceByDomain: confidenceByDomain,
+    conceptRecallByDomain: recallByDomain,
     derivedFrom: { evidenceCount: count, at: new Date().toISOString() },
   };
 }
@@ -121,20 +127,35 @@ function round2(v: number): number {
  */
 export async function refreshDerivedProfile(
   deps: EvidenceDeps & FoldOptions = {},
+  activeDomain?: string,
 ): Promise<DerivedProfileFields | null> {
   if (typeof localStorage === 'undefined') return null;
-  try {
-    const ledger = await readLedger(deps);
-    const fields = deriveProfileFields(history(ledger), {
-      ...deps,
-      invalidated: invalidatedIds(ledger),
-    });
-    const stored = JSON.parse(localStorage.getItem(PROFILE_KEY) ?? 'null') ?? {};
-    localStorage.setItem(PROFILE_KEY, JSON.stringify({ ...stored, ...fields }));
-    return fields;
-  } catch {
-    // 画像刷新失败不拦教学流程。它是缓存，下次交互会重算——
-    // 这也是导出量相对存储量的好处：丢了不心疼。
-    return null;
+  const ledger = await readLedger(deps);
+  const fields = deriveProfileFields(
+    history(ledger),
+    { ...deps, invalidated: invalidatedIds(ledger) },
+    activeDomain,
+  );
+  const stored = JSON.parse(localStorage.getItem(PROFILE_KEY) ?? 'null') ?? {};
+  const next = { ...stored, ...fields };
+  const response = await fetch('/api/profile', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ action: 'update', fields: next }),
+  });
+  if (!response.ok) throw new Error(`账户学情画像写入失败（HTTP ${response.status}）`);
+  localStorage.setItem(PROFILE_KEY, JSON.stringify(next));
+  return fields;
+}
+
+/** 证据必须跟随实际课程，而不是可能残留的本地画像领域。 */
+export async function courseDomain(courseId: string): Promise<string> {
+  const response = await fetch('/api/course-domains', { cache: 'no-store' });
+  if (!response.ok) throw new Error(`课程领域读取失败（HTTP ${response.status}）`);
+  const domains = (await response.json()) as Record<string, { domain?: unknown }>;
+  const domain = domains?.[courseId]?.domain;
+  if (typeof domain !== 'string' || !domain.trim()) {
+    throw new Error(`课程 ${courseId} 尚无领域归属，学习证据未写入`);
   }
+  return domain.trim();
 }

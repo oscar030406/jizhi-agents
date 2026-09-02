@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   addAssignment: vi.fn(),
   removeAssignment: vi.fn(),
   corpusOwnership: vi.fn(),
+  readCourseDomains: vi.fn(),
 }));
 
 vi.mock('@/lib/server/classroom-storage', () => ({
@@ -40,6 +41,12 @@ vi.mock('@/lib/accounts/org-store', () => ({
 
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+}));
+
+vi.mock('@/lib/server/course-domains', () => ({
+  readCourseDomains: mocks.readCourseDomains,
+  UNKNOWN_DOMAIN: 'unknown',
+  RETIRED_DOMAIN: 'retired',
 }));
 
 function audit(overrides: Partial<SceneAudit> = {}): SceneAudit {
@@ -104,7 +111,10 @@ describe('GET /api/classroom 学习者发布门禁', () => {
     vi.clearAllMocks();
     mocks.listClassrooms.mockResolvedValue([]);
     mocks.accountForSession.mockResolvedValue(null);
+    mocks.orgForAccount.mockResolvedValue(null);
+    mocks.assignmentsOf.mockResolvedValue([]);
     mocks.corpusOwnership.mockResolvedValue(new Map());
+    mocks.readCourseDomains.mockResolvedValue({});
   });
 
   it.each([
@@ -177,7 +187,7 @@ describe('GET /api/classroom 学习者发布门禁', () => {
     expect(detailResponse.status).toBe(404);
   });
 
-  it('同机构成员可读自己的私有课程，其他机构不可读', async () => {
+  it('同机构 owner 可读全部，member 只有明确指派后才可读，其他机构不可读', async () => {
     const baseCourse = course('private-course', audit());
     const privateCourse = {
       ...baseCourse,
@@ -189,13 +199,46 @@ describe('GET /api/classroom 学习者发布门禁', () => {
     };
     mocks.readClassroom.mockResolvedValue(privateCourse);
     mocks.corpusOwnership.mockResolvedValue(new Map([['private-a', 'org-a']]));
-    mocks.accountForSession.mockResolvedValue({ id: 'member' });
-    mocks.orgForAccount.mockResolvedValue({ id: 'org-a' });
+    mocks.accountForSession.mockResolvedValue({ id: 'owner-a' });
+    mocks.orgForAccount.mockResolvedValue({ id: 'org-a', memberRole: 'owner' });
 
     expect((await getClassroom(privateCourse.id)).status).toBe(200);
 
-    mocks.orgForAccount.mockResolvedValue({ id: 'org-b' });
+    mocks.accountForSession.mockResolvedValue({ id: 'member-a' });
+    mocks.orgForAccount.mockResolvedValue({ id: 'org-a', memberRole: 'member' });
     expect((await getClassroom(privateCourse.id)).status).toBe(404);
+
+    mocks.assignmentsOf.mockResolvedValue([{ courseId: privateCourse.id }]);
+    expect((await getClassroom(privateCourse.id)).status).toBe(200);
+
+    mocks.orgForAccount.mockResolvedValue({ id: 'org-b', memberRole: 'member' });
+    expect((await getClassroom(privateCourse.id)).status).toBe(404);
+  });
+
+  it('机构 member 的课程墙只列明确指派课程', async () => {
+    const assigned = course('assigned', audit());
+    const unassigned = course('unassigned', audit());
+    mocks.accountForSession.mockResolvedValue({ id: 'member-a' });
+    mocks.orgForAccount.mockResolvedValue({ id: 'org-a', memberRole: 'member' });
+    mocks.assignmentsOf.mockResolvedValue([{ courseId: assigned.id }]);
+    mocks.listClassrooms.mockResolvedValue(
+      [assigned, unassigned].map((item) => ({
+        id: item.id,
+        title: item.stage.name,
+        sceneCount: 1,
+        createdAt: item.createdAt,
+        audit: null,
+      })),
+    );
+    mocks.readClassroom.mockImplementation(async (id: string) =>
+      id === assigned.id ? assigned : unassigned,
+    );
+
+    const response = await getClassroom();
+    expect((await response.json()).classrooms.map((item: { id: string }) => item.id)).toEqual([
+      assigned.id,
+    ]);
+    expect(mocks.assignmentsOf).toHaveBeenCalledWith('org-a', 'member-a');
   });
 });
 
@@ -214,7 +257,7 @@ describe('机构指派的学习者消费门禁', () => {
     mocks.assignmentsOf.mockResolvedValue([]);
   });
 
-  it('学员读取已有指派时过滤掉后来被打回的课程，保留合格课程', async () => {
+  it('学员读取已有指派时保留被打回课程并显式标为不可用，合格课程仍可进入', async () => {
     mocks.assignmentsOf.mockResolvedValue([
       { id: 'a1', courseId: 'blocked', title: '待复核', assignedBy: 'owner-1', createdAt: '1' },
       { id: 'a2', courseId: 'released', title: '已发布', assignedBy: 'owner-1', createdAt: '2' },
@@ -230,9 +273,29 @@ describe('机构指派的学习者消费门禁', () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(body.assignments.map((item: { courseId: string }) => item.courseId)).toEqual([
-      'released',
+    expect(body.assignments).toEqual([
+      {
+        id: 'a1',
+        courseId: 'blocked',
+        title: '待复核',
+        assignedBy: 'owner-1',
+        createdAt: '1',
+        domain: null,
+        availability: 'unavailable',
+        unavailableReason: '机构课程暂不可用：课程尚未通过发布审核，请联系管理者完成复核。',
+      },
+      {
+        id: 'a2',
+        courseId: 'released',
+        title: '已发布',
+        assignedBy: 'owner-1',
+        createdAt: '2',
+        domain: null,
+        availability: 'ready',
+      },
     ]);
+    expect(body.assignments[0]).not.toHaveProperty('href');
+    expect(body.assignments[0]).not.toHaveProperty('url');
   });
 
   it('管理者不能新指派待复核草稿', async () => {
@@ -275,6 +338,9 @@ describe('机构指派的学习者消费门禁', () => {
       memberRole: 'owner',
     });
     mocks.readClassroom.mockResolvedValue(course('released', audit()));
+    mocks.readCourseDomains.mockResolvedValue({
+      released: { domain: 'ai', corpus: 'ai', title: '引擎课程 released' },
+    });
     mocks.addAssignment.mockResolvedValue({
       ok: true,
       assignment: {
@@ -308,6 +374,7 @@ describe('机构指派的学习者消费门禁', () => {
       '引擎课程 released',
       'account-1',
       'learner-1',
+      'ai',
     );
   });
 });

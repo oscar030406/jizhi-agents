@@ -50,7 +50,7 @@ export function SceneCompanion({
   const frames = art.acts;
   const line = (sceneType && SCENE_LINE[sceneType]) || FALLBACK_LINE;
 
-  const [bubble, setBubble] = useState<string | null>(null);
+  const [bubbleState, setBubbleState] = useState<{ sceneId: string; text: string } | null>(null);
   const [frame, setFrame] = useState(IDLE);
   const [glide, setGlide] = useState(true);
   const [hidden, setHidden] = useState(false);
@@ -65,6 +65,7 @@ export function SceneCompanion({
 
   const H = isMobile ? 88 : 132;
   const visible = chatCollapsed !== false && !hidden;
+  const bubble = bubbleState && bubbleState.sceneId === scene?.id ? bubbleState.text : null;
 
   useEffect(() => {
     // jsdom 没有 matchMedia。这个组件挂在课堂画布里，任何渲染课堂子树的测试都会
@@ -131,11 +132,10 @@ export function SceneCompanion({
   // 换屏就换一句招呼，同一屏只招呼一次；导学栏开着时不打扰
   useEffect(() => {
     if (!scene || !visible) return;
-    setBubble(null);
     if (greeted.current.has(scene.id)) return;
     const t = window.setTimeout(() => {
       greeted.current.add(scene.id);
-      setBubble(line);
+      setBubbleState({ sceneId: scene.id, text: line });
     }, 3000);
     return () => window.clearTimeout(t);
   }, [scene, line, visible]);
@@ -143,7 +143,7 @@ export function SceneCompanion({
   // 气泡自己消失，别让它一直杵在那儿挡正文
   useEffect(() => {
     if (!bubble) return;
-    const t = window.setTimeout(() => setBubble(null), 9000);
+    const t = window.setTimeout(() => setBubbleState(null), 9000);
     return () => window.clearTimeout(t);
   }, [bubble]);
 
@@ -205,7 +205,7 @@ export function SceneCompanion({
     settleUntil.current = Date.now() + 900;
     setFrame(SETTLE);
     window.setTimeout(() => setFrame((f) => (f === SETTLE ? IDLE : f)), 900);
-    setBubble(null);
+    setBubbleState(null);
     onToggleChat?.();
   };
 
@@ -220,7 +220,11 @@ export function SceneCompanion({
     <div
       ref={rootRef}
       className="pointer-events-none absolute z-30 flex select-none flex-col items-end"
-      style={{ left: pos.x, top: pos.y, transition: glide ? 'left 2.4s ease, top 2.4s ease' : 'none' }}
+      style={{
+        left: pos.x,
+        top: pos.y,
+        transition: glide ? 'left 2.4s ease, top 2.4s ease' : 'none',
+      }}
     >
       {bubble && (
         <div className="pointer-events-auto absolute bottom-full right-0 mb-2 w-60 animate-[companion-pop_.28s_ease] rounded-xl border border-border-subtle bg-surface-raised px-3 py-2 text-left text-[0.82rem] leading-relaxed text-foreground shadow-lg">
@@ -228,7 +232,7 @@ export function SceneCompanion({
           {bubble}
           <button
             type="button"
-            onClick={() => setBubble(null)}
+            onClick={() => setBubbleState(null)}
             aria-label="关掉这句话"
             className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-full border border-border-subtle bg-surface text-[0.65rem] text-muted-foreground hover:text-foreground"
           >
@@ -248,7 +252,6 @@ export function SceneCompanion({
         aria-label={label}
         title={`${label}（双击暂时收起）`}
       >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={frames[frame]}
           alt={`${persona.name}（${persona.role}）`}

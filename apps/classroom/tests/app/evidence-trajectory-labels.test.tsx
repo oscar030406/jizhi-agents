@@ -44,6 +44,12 @@ const LEDGER = {
     ev('llm_basics', '2026-08-12T01:00:00Z'),
     ev('embodied_vlm', '2026-08-12T02:00:00Z'),
     ev('学习率的影响', '2026-08-12T03:00:00Z'),
+    ev('控制', '2026-08-12T03:30:00Z'),
+    {
+      ...ev('控制', '2026-08-12T04:00:00Z'),
+      measured: { kind: 'concept', domain: 'smart-manufacturing', concept: '控制' },
+      verdict: { outcome: 'incorrect', score: 0, because: { hit: [], missed: ['控制'] } },
+    } as Evidence,
   ],
   signals: [],
   invalidations: [],
@@ -56,7 +62,7 @@ async function render(): Promise<HTMLElement> {
   let root!: Root;
   await act(async () => {
     root = createRoot(host);
-    root.render(<EvidenceTrajectoryChart />);
+    root.render(<EvidenceTrajectoryChart domain="ai" />);
   });
   for (let i = 0; i < 2; i += 1) {
     await act(async () => {
@@ -78,5 +84,11 @@ describe('证据轨迹图的测项名', () => {
 
   it('退回场景标题的测项原样显示', async () => {
     expect((await render()).textContent ?? '').toContain('学习率的影响');
+  });
+
+  it('只折叠当前有效领域，智能制造的同名失败证据不进入 AI 轨迹', async () => {
+    const text = (await render()).textContent ?? '';
+    expect(text).toContain('控制');
+    expect(text).not.toContain('得分 0.00');
   });
 });

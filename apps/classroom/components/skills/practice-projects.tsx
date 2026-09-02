@@ -1,10 +1,10 @@
-// /skills 每岗位「实践项目」区（learning-path-practice-spec §2.3）。
-// 数据 data/practice-projects.json 静态 import（客户端页可用，13 卡体积可忽略）；
-// 一岗 ≤3 张按层级排序；词条字段含验收标准/简历用法/网络警告（我们的增量字段）。
+'use client';
+
+// 域级实操项目的共享客户端与展示卡。运行时唯一真源是 practice-scout 的已发布结果；
+// 旧 data/practice-projects.json 不再进入任何选择器，避免绕过生成、审核与发布门禁。
 
 import Link from 'next/link';
-
-import practiceData from '@/data/practice-projects.json';
+import { useEffect, useState } from 'react';
 
 export interface PracticeProject {
   id: string;
@@ -14,10 +14,10 @@ export interface PracticeProject {
   difficulty: number;
   hours: string;
   jobIds: string[];
-  /** 人工策展的课程边（data/practice-projects.json）：学完这门课能上手做这个项目。 */
+  /** 引擎在当前领域候选课程中生成、并经服务端复验的课程边。 */
   courseIds: string[];
   prereq: string;
-  steps?: string[];
+  steps: string[];
   cost: string;
   networkNote: string;
   why: string;
@@ -36,42 +36,104 @@ const LEVEL_META: Record<PracticeProject['level'], { label: string; cls: string 
 };
 const LEVEL_ORDER: PracticeProject['level'][] = ['starter', 'advanced', 'portfolio'];
 
-const ALL_PROJECTS = (practiceData as { projects: PracticeProject[] }).projects;
+export type PracticeLoadState =
+  | { kind: 'loading' }
+  | { kind: 'ready'; projects: PracticeProject[] }
+  | { kind: 'missing'; reason: string }
+  | { kind: 'unavailable'; reason: string };
 
-/**
- * 这份静态策展数据（岗位图谱 + 13 个项目）属于哪个知识库。
- * 数据文件本身没有 domain 字段——它诞生于只有主库的年代。判断「当前域有没有
- * 岗位/策展数据」的分支一律引用这个常量，不许把 'ai' 直接写进业务逻辑
- * （2026-08-28 硬编码清查：skills 页曾写死 `!== 'ai'`）。
- * 外域的实操供给走引擎 practice-scout（GitHub 实搜起草 + 管理员审核），不读本文件。
- */
-export const JOB_MAP_CORPUS = 'ai';
+/** 当前领域已发布实操项目。结果与 corpus 绑定，切域当帧即失效旧数组。 */
+export function usePublishedPractice(corpus: string | null): PracticeLoadState {
+  const [loaded, setLoaded] = useState<{
+    corpus: string;
+    state: PracticeLoadState;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!corpus) return;
+    let alive = true;
+    (async () => {
+      try {
+        const response = await fetch(`/api/practice-scout/${encodeURIComponent(corpus)}`, {
+          cache: 'no-store',
+        });
+        const body = (await response.json().catch(() => null)) as {
+          status?: string;
+          projects?: PracticeProject[];
+          reason?: string;
+        } | null;
+        if (!alive) return;
+        if (!response.ok || body?.status === 'unavailable') {
+          setLoaded({
+            corpus,
+            state: {
+              kind: 'unavailable',
+              reason:
+                body?.reason ?? '实操项目服务暂时不可用，当前无法确认该领域是否已有生成结果。',
+            },
+          });
+          return;
+        }
+        const projects = body?.projects ?? [];
+        setLoaded({
+          corpus,
+          state: projects.length
+            ? { kind: 'ready', projects }
+            : {
+                kind: 'missing',
+                reason: body?.reason ?? '所属机构尚未生成并审核发布该领域的实操项目。',
+              },
+        });
+      } catch {
+        if (alive) {
+          setLoaded({
+            corpus,
+            state: {
+              kind: 'unavailable',
+              reason: '实操项目服务暂时不可用，当前无法确认该领域是否已有生成结果。',
+            },
+          });
+        }
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [corpus]);
+
+  if (!corpus) {
+    return { kind: 'missing', reason: '当前学习领域尚未确认，暂时没有可读取的实操项目。' };
+  }
+  return loaded?.corpus === corpus ? loaded.state : { kind: 'loading' };
+}
 
 // focus 环，口径见 app/path/page.tsx 同名常量：--ring 带 alpha，实测 1.26:1 看不见，
 // 借满不透明度的中性蓝 chart-2 顶上。--ring 修好后三处一起换回。
 const FOCUS_RING =
   'focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-chart-2';
 
-export function projectsForJob(jobId: string): PracticeProject[] {
-  return ALL_PROJECTS
+export function projectsForJob(
+  projects: readonly PracticeProject[],
+  jobId: string,
+): PracticeProject[] {
+  return projects
     .filter((p) => p.jobIds.includes(jobId))
     .sort((a, b) => LEVEL_ORDER.indexOf(a.level) - LEVEL_ORDER.indexOf(b.level))
     .slice(0, 3); // 一技能点 ≤3 推荐（roadmap.sh/AWS 共性规律）
 }
 
 /**
- * 反向索引：一门课有哪些对口项目。边只落在项目侧（courseIds），这里运行时算，
- * 不落第二份数据——课程 json 是冻结的策展物，不往里写。
- * 按层级排序，不截断：一门课挂到的项目最多 5 个（当前策展实测），全给。
+ * 反向索引：一门课有哪些对口项目。边只落在发布项目侧（courseIds），这里运行时算，
+ * 不往课程数据再写一份。按层级排序，不截断。
  */
-export function projectsForCourse(courseId: string): PracticeProject[] {
-  return ALL_PROJECTS
+export function projectsForCourse(
+  projects: readonly PracticeProject[],
+  courseId: string,
+): PracticeProject[] {
+  return projects
     .filter((p) => p.courseIds.includes(courseId))
     .sort((a, b) => LEVEL_ORDER.indexOf(a.level) - LEVEL_ORDER.indexOf(b.level));
 }
-
-/** 首页区尾「全部 N 个实操项目」用的总数，别在页面里写死数字。 */
-export const PRACTICE_PROJECT_TOTAL = ALL_PROJECTS.length;
 
 /** 首页「动手实操」区每档取几张（starter 2 / advanced 2 / portfolio 1 压轴）。 */
 const HOME_PICKS: Record<PracticeProject['level'], number> = {
@@ -81,14 +143,11 @@ const HOME_PICKS: Record<PracticeProject['level'], number> = {
 };
 
 /**
- * 首页精选：每档按 `practice-projects.json` 里的排列顺序取前 N。
- *
- * 用文件顺序而不是难度或星数排——那份 json 是人工策展物，条目顺序本身就是策展顺序
- * （每档第一条是该档的代表作），再套一层算法排序等于把策展意图洗掉。
+ * 首页精选：每档按引擎发布顺序取前 N；发布顺序已经经过管理者审核，不再二次猜分。
  */
-export function featuredProjects(): PracticeProject[] {
+export function featuredProjects(projects: readonly PracticeProject[]): PracticeProject[] {
   return LEVEL_ORDER.flatMap((level) =>
-    ALL_PROJECTS.filter((p) => p.level === level).slice(0, HOME_PICKS[level]),
+    projects.filter((p) => p.level === level).slice(0, HOME_PICKS[level]),
   );
 }
 
@@ -112,7 +171,9 @@ export function PracticeCard({
       <summary
         className={`flex cursor-pointer flex-wrap items-center gap-2 rounded-lg px-3 py-2.5 text-sm transition-colors duration-150 hover:bg-muted/50 [&::-webkit-details-marker]:hidden ${FOCUS_RING}`}
       >
-        <span className={`shrink-0 rounded-full px-2 py-px text-xs font-medium ${meta.cls}`}>{meta.label}</span>
+        <span className={`shrink-0 rounded-full px-2 py-px text-xs font-medium ${meta.cls}`}>
+          {meta.label}
+        </span>
         {/* 窄屏独占一行后就让它换行显示全名（最多两行），sm 以上回到单行截断 */}
         <span className="order-last w-full min-w-0 font-medium sm:order-none sm:w-auto sm:flex-1 sm:truncate">
           {project.name}
@@ -137,13 +198,26 @@ export function PracticeCard({
             </ol>
           </div>
         )}
-        <p><span className="font-medium">前置：</span>{project.prereq} · <span className="font-medium">成本：</span>{project.cost}</p>
+        <p>
+          <span className="font-medium">前置：</span>
+          {project.prereq} · <span className="font-medium">成本：</span>
+          {project.cost}
+        </p>
         {project.networkNote.startsWith('⚠') && (
           <p className="text-yellow-deep">{project.networkNote}</p>
         )}
-        <p><span className="font-medium">验收：</span>{project.acceptance}</p>
-        <p><span className="font-medium">做完有：</span>{project.deliverable}</p>
-        <p className="text-muted-foreground"><span className="font-medium">简历用法：</span>{project.resumeAdvice}</p>
+        <p>
+          <span className="font-medium">验收：</span>
+          {project.acceptance}
+        </p>
+        <p>
+          <span className="font-medium">做完有：</span>
+          {project.deliverable}
+        </p>
+        <p className="text-muted-foreground">
+          <span className="font-medium">简历用法：</span>
+          {project.resumeAdvice}
+        </p>
         {relatedCourses.length > 0 && (
           <p className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <span className="font-medium">相关课程：</span>

@@ -19,6 +19,7 @@ import { uniquifyMediaElementIds } from './scene-builder';
 import type { AICallFn, GenerationResult } from './pipeline-types';
 import { createLogger } from '@/lib/logger';
 import {
+  bindLearningObjectivesToOutlines,
   groundingRefsForOutline,
   validateAndRepairLearningContract,
   validateVocationalOutline,
@@ -233,7 +234,7 @@ export async function generateSceneOutlinesFromRequirements(
         data: {
           languageDirective,
           courseTitle,
-          outlines: result,
+          outlines: bindLearningObjectivesToOutlines(contractResult.contract, result),
           learningContract: contractResult.contract,
         },
       };

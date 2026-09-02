@@ -11,7 +11,9 @@ import json
 from functools import lru_cache
 from pathlib import Path
 
-from backend.services.goal_concepts import matched_goal_concepts
+from backend.rag.retriever import DEFAULT_CORPUS_ALIASES
+from backend.services.concept_graph import concept_meta
+from backend.services.goal_concepts import goal_concepts
 
 _LEVELS = ["L1", "L2", "L3", "L4"]
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -58,7 +60,7 @@ def concept_difficulty_map() -> dict[str, int]:
     return {c: entry_level(primary.get(c) or tagged.get(c, [2])) for c in concepts}
 
 
-def goal_difficulty(goal: str) -> int:
+def goal_difficulty(goal: str, corpus: str) -> int:
     """目标难度 = 概念入门难度 + 任务动作复杂度。
 
     仅用概念难度会把“部署一个 API”误判成研究级部署，也会把“设计门控/重排/多 Agent”
@@ -67,9 +69,20 @@ def goal_difficulty(goal: str) -> int:
     审核、部署的端到端工程任务为 L4。规则描述任务形态，不读取 gold_labeler 的目标表。
     """
     normalized = goal.lower()
-    concepts = matched_goal_concepts(goal)
-    diff_map = concept_difficulty_map()
-    concept_level = max((diff_map.get(concept, 2) for concept in concepts), default=2)
+    name = corpus.strip().lower()
+    concepts = goal_concepts(goal, name)
+    is_main = name in DEFAULT_CORPUS_ALIASES
+    if is_main:
+        diff_map = concept_difficulty_map()
+        concept_level = max((diff_map.get(concept, 2) for concept in concepts), default=2)
+    else:
+        concept_level = max(
+            (
+                _level_to_int(str(concept_meta(concept, name).get("difficulty") or "L2"))
+                for concept in concepts
+            ),
+            default=2,
+        )
 
     end_to_end_markers = (
         "从零构建",
@@ -127,7 +140,9 @@ def goal_difficulty(goal: str) -> int:
         return 2
 
     advanced_bundle = {"rag", "guardrails", "deployment"}
-    if advanced_bundle <= set(concepts) and any(marker in normalized for marker in end_to_end_markers):
+    if is_main and advanced_bundle <= set(concepts) and any(
+        marker in normalized for marker in end_to_end_markers
+    ):
         return 4
     if len(concepts) >= 4 and any(marker in normalized for marker in end_to_end_markers):
         return 4
@@ -139,4 +154,4 @@ def goal_difficulty(goal: str) -> int:
 
 
 def goal_difficulty_level(goal: str) -> str:
-    return _int_to_level(goal_difficulty(goal))
+    return _int_to_level(goal_difficulty(goal, "ai"))

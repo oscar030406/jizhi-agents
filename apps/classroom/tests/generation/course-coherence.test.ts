@@ -7,6 +7,9 @@
  * 所以传结构化清单（做过什么、别再做），不传滚动摘要——摘要治的是
  * 「忘了前文」，塞更多前文只会让重复更像样。
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -101,8 +104,6 @@ describe('真的接进生成链了', () => {
   it('batch 生成逐屏记账并下发', () => {
     // 清单形态最容易「建了没接线」——状态建好了、指令函数写好了，
     // 就是没人调。静态断言守住。
-    const { readFileSync } = require('node:fs') as typeof import('node:fs');
-    const { join } = require('node:path') as typeof import('node:path');
     const src = readFileSync(join(process.cwd(), 'lib/server/classroom-generation.ts'), 'utf-8');
     expect(src).toContain('coherenceDirective(frame, progress)');
     expect(src).toContain('progress.concepts.push');

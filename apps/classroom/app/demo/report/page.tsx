@@ -129,14 +129,12 @@ function BlindSpotSection({ data }: { data: DemoReport }) {
           <span key={c} className="size-3 rounded-[4px]" style={{ backgroundColor: c }} />
         ))}
         <span>精通</span>
-        <span className="ml-2">色阶为掌握度四档，数据取自该 run 的 mastery_vector</span>
+        <span className="ml-2">色阶为掌握度四档，数据取自本次学情诊断</span>
       </div>
 
       {data.weakConcepts.length > 0 && (
         <div className="space-y-1.5 rounded-xl border border-yellow-deep/20 bg-yellow-soft p-4">
-          <p className="text-sm font-medium text-yellow-deep">
-            引擎判定的知识盲区（weak_concepts）
-          </p>
+          <p className="text-sm font-medium text-yellow-deep">引擎判定的知识盲区</p>
           <p className="text-sm leading-relaxed text-muted-foreground">
             {data.weakConcepts.map(conceptLabel).join('、')}——学习路径的补齐顺序据此排定。
           </p>
@@ -217,9 +215,9 @@ function DifficultyMatchSection({ data }: { data: DemoReport }) {
       </div>
       <p className="rounded-md bg-muted/50 p-3 text-sm leading-relaxed text-muted-foreground">
         <span className="font-medium text-foreground">匹配结论：</span>
-        推荐难度 {data.difficultyBand.recommended} 来自该 run 的学情诊断；{items.length}{' '}
-        条资源（分阶测验题 + 路径阶段）中 {matched} 条落在推荐难度内，难度值全部是引擎当时写进
-        run 的原值。
+        推荐难度 {data.difficultyBand.recommended} 来自本次学情诊断；{items.length}{' '}
+        条资源（分阶测验题 + 路径阶段）中 {matched} 条落在推荐难度内，难度值全部是引擎当时写进 run
+        的原值。
       </p>
     </div>
   );
@@ -267,7 +265,7 @@ function LearningPathSection({ data }: { data: DemoReport }) {
       </div>
       <p className="rounded-md bg-muted/50 p-3 text-sm leading-relaxed text-muted-foreground">
         <span className="font-medium text-foreground">路径依据：</span>
-        阶段顺序、难度与工时由该 run 的 LearningPathPlannerAgent 产出
+        阶段顺序、难度与工时由学习路径规划模块生成
         {prerequisites.length > 0 && <>；前置要求：{prerequisites.join('、')}</>}
         {estimatedHours !== null && <>；总预估 {estimatedHours} 小时</>}。
       </p>
@@ -318,24 +316,18 @@ export default function DemoReportPage() {
         )}
         {data === 'missing' && (
           <p className="rounded-xl border border-dashed border-border/70 p-8 text-center text-sm leading-relaxed text-muted-foreground">
-            样例数据尚未生成。在 apps/classroom 下执行{' '}
-            <code className="rounded bg-muted px-1">node scripts/generate-demo-report.mjs</code>{' '}
-            即可从引擎归档 run 提取（零模型调用）。
+            样例学情报告暂不可用，请稍后再试。
           </p>
         )}
 
         {data !== null && data !== 'missing' && (
           <>
-            {/* 显著说明条：这是真实 run 的静态存档，不是现场为访客算的 */}
+            {/* 显著说明条：这是真实生成记录的静态存档，不是现场为访客算的 */}
             <p className="flex items-start gap-2 rounded-xl border border-blue-deep/20 bg-blue-soft p-4 text-sm leading-relaxed text-blue-deep">
               <Info className="mt-0.5 size-4 shrink-0" />
               <span>
-                本页是样例画像「{data.profile.name}」的一次生成记录存档（run{' '}
-                <code className="rounded bg-background/60 px-1 text-xs">
-                  {data.source.runId.slice(0, 8)}
-                </code>
-                ，归档于 {data.source.archivedAt.slice(0, 10)}
-                ）。登录后这里显示你自己的实时报告。
+                本页是样例画像「{data.profile.name}」的一次真实生成记录，归档于{' '}
+                {data.source.archivedAt.slice(0, 10)}。登录后这里显示你自己的实时报告。
               </span>
             </p>
 
@@ -365,7 +357,7 @@ export default function DemoReportPage() {
             <SectionCard
               icon={AlertTriangle}
               title="知识盲区定位"
-              description="每个概念的掌握度取自该 run 的 mastery_vector；被引擎列入 weak_concepts 的加粗标出。"
+              description="每个概念的掌握度取自本次学情诊断；诊断出的薄弱概念以粗体标出。"
             >
               <BlindSpotSection data={data} />
             </SectionCard>
@@ -381,13 +373,13 @@ export default function DemoReportPage() {
             <SectionCard
               icon={GitBranch}
               title="学习路径规划"
-              description="路径规划 Agent 按薄弱点排出的补齐顺序，每阶段带目标、覆盖概念与预估工时。"
+              description="学习路径规划模块按薄弱点排出补齐顺序，每阶段带目标、覆盖概念与预估工时。"
             >
               <LearningPathSection data={data} />
             </SectionCard>
 
             <p className="pb-4 text-center text-xs text-muted-foreground">
-              全部字段提取自引擎归档 run {data.source.runId}。
+              全部内容均提取自多智能体引擎的一次真实生成记录。
             </p>
           </>
         )}

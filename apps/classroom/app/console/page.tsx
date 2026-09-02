@@ -18,6 +18,7 @@ import { BookOpen, ShieldCheck, UserCog, Loader2, Clock } from 'lucide-react';
 import { useAccountStore } from '@/lib/store/account';
 import { conceptLabel } from '@/lib/knowledge/concept-labels';
 import { domainLabel } from '@/lib/knowledge/domain-labels';
+import { projectProfileToDomain } from '@/lib/knowledge/domain-context';
 import { listStages, type StageListItem } from '@/lib/utils/stage-storage';
 import { createLogger } from '@/lib/logger';
 import { cn } from '@/lib/utils';
@@ -49,7 +50,10 @@ interface StoredProfile {
 function readLocalProfile(): StoredProfile | null {
   try {
     const raw = localStorage.getItem('learnerProfile');
-    return raw ? (JSON.parse(raw) as StoredProfile) : null;
+    if (!raw) return null;
+    const profile = JSON.parse(raw) as StoredProfile;
+    const domain = String(profile.corpus ?? profile.domain ?? '').trim();
+    return domain ? projectProfileToDomain(profile, domain) : null;
   } catch {
     return null;
   }
@@ -58,7 +62,7 @@ function readLocalProfile(): StoredProfile | null {
 export default function ConsolePage() {
   const { enabled, account, loading, refresh } = useAccountStore();
   const [courses, setCourses] = useState<StageListItem[] | null>(null);
-  const [profile, setProfile] = useState<StoredProfile | null>(null);
+  const profile = useMemo(() => (account ? readLocalProfile() : null), [account]);
 
   useEffect(() => {
     void refresh();
@@ -76,8 +80,8 @@ export default function ConsolePage() {
 
   useEffect(() => {
     if (!account) return;
-    setProfile(readLocalProfile());
-    void loadCourses();
+    const frame = window.requestAnimationFrame(() => void loadCourses());
+    return () => window.cancelAnimationFrame(frame);
   }, [account, loadCourses]);
 
   const mastery = useMemo(() => {
@@ -109,7 +113,7 @@ export default function ConsolePage() {
         {!enabled && (
           /* 本部署关掉账户时这页原来只剩一句话。空态说清数据在哪、下一步去哪。 */
           <EmptyState
-            title="本部署未启用账户系统"
+            title="本站暂未启用账户系统"
             hint="学习者画像、生成的课程与答题记录都只保存在当前这个浏览器里，没有跨设备同步。画像在首页右上角「学习者画像」里改，课程在首页的最近课堂里进。"
           />
         )}

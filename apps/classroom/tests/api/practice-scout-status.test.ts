@@ -94,6 +94,33 @@ describe('GET /api/practice-scout/[corpus] 生成状态', () => {
     expect(body.reason).toBeUndefined();
   });
 
+  it('旧发布项目未过新门禁时要求重新生成审核，不暴露状态码占位文案', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ detail: '项目 old-1 的 steps 必须为 3–6 步' }), {
+            status: 409,
+            headers: { 'content-type': 'application/json' },
+          }),
+      ),
+    );
+
+    const response = await get('ai');
+    const body = (await response.json()) as {
+      status: string;
+      projects: unknown[];
+      reason: string;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.status).toBe('missing');
+    expect(body.projects).toEqual([]);
+    expect(body.reason).toContain('旧发布项目不符合当前门禁，请管理者重新生成并审核');
+    expect(body.reason).toContain('steps 必须为 3–6 步');
+    expect(body.reason).not.toContain('状态码 409');
+  });
+
   it('无权访问时拒绝且不调用引擎', async () => {
     access.requireCorpusVisible.mockResolvedValue({
       ok: false,

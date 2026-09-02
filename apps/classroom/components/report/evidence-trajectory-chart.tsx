@@ -143,34 +143,45 @@ function Row({
 }
 
 export function EvidenceTrajectoryChart({ domain }: { domain?: string } = {}) {
-  const [list, setList] = useState<Trajectory[] | null>(null);
-  // 由同一段履历 fold 出来的画像。**同源**——图上的点和右边的数字来自一次读取，
-  // 对不上就是 fold 有问题，不会是两份数据不同步。
-  const [mastery, setMastery] = useState<Map<string, Mastery>>(new Map());
+  type LoadState =
+    | { domain: string; kind: 'loading' }
+    | { domain: string; kind: 'error' }
+    | { domain: string; kind: 'ready'; list: Trajectory[]; mastery: Map<string, Mastery> };
+  const [state, setState] = useState<LoadState>({ domain: domain ?? '', kind: 'loading' });
 
   useEffect(() => {
     let cancelled = false;
+    if (!domain) return () => undefined;
     void (async () => {
       try {
         const ledger = await readLedger();
         if (cancelled) return;
         const hist = history(ledger).filter(
-          (e) => e.measured.kind !== 'concept' || !domain || e.measured.domain === domain,
+          (e) => e.measured.kind === 'concept' && e.measured.domain === domain,
         );
         // 概念测项的 label 是引擎概念 id（`llm_basics`、`embodied_vlm` 这种），
         // 左侧行名和下面「逐条证据」两处都直接印它。在这里过一遍概念中文名的单一真源，
         // 两处一起换；退回场景标题的那些本来就是中文，`conceptLabel` 原样放行。
-        setList(trajectories(hist).map((t) => ({ ...t, label: conceptLabel(t.label) })));
         const profile = fold(hist, { invalidated: invalidatedIds(ledger) });
-        setMastery(new Map(profile.all.map((m) => [m.key, m])));
+        setState({
+          domain,
+          kind: 'ready',
+          list: trajectories(hist).map((t) => ({ ...t, label: conceptLabel(t.label) })),
+          mastery: new Map((profile.byDomain[domain] ?? []).map((m) => [m.key, m])),
+        });
       } catch {
-        if (!cancelled) setList([]);
+        if (!cancelled) setState({ domain, kind: 'error' });
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [domain]);
+
+  const current: LoadState =
+    domain && state.domain === domain ? state : { domain: domain ?? '', kind: 'loading' };
+  const list = current.kind === 'ready' ? current.list : null;
+  const mastery = current.kind === 'ready' ? current.mastery : new Map<string, Mastery>();
 
   const stats = useMemo(() => (list ? summarize(list) : null), [list]);
   const bounds = useMemo(() => {
@@ -182,13 +193,34 @@ export function EvidenceTrajectoryChart({ domain }: { domain?: string } = {}) {
     return { minMs: min, spanMs: Math.max(...times) - min };
   }, [list]);
 
+  if (!domain) {
+    return (
+      <div className="rounded-lg border border-dashed border-border/70 px-6 py-10 text-center">
+        <p className="text-sm font-medium text-foreground">当前领域的证据轨迹未覆盖</p>
+        <p className="mx-auto mt-1 max-w-md text-sm leading-relaxed text-muted-foreground">
+          当前有效领域尚未确认；本页没有读取或展示任何全域履历。
+        </p>
+      </div>
+    );
+  }
+  if (current.kind === 'error') {
+    return (
+      <div className="rounded-lg border border-dashed border-border/70 px-6 py-10 text-center">
+        <p className="text-sm font-medium text-foreground">当前领域的证据轨迹未覆盖</p>
+        <p className="mx-auto mt-1 max-w-md text-sm leading-relaxed text-muted-foreground">
+          证据账本暂时无法读取；没有回退到全域履历。
+        </p>
+      </div>
+    );
+  }
+
   if (list === null) {
     return <p className="text-sm text-muted-foreground">正在读取履历…</p>;
   }
   if (list.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-border/70 px-6 py-10 text-center">
-        <p className="text-sm font-medium text-foreground">履历还是空的</p>
+        <p className="text-sm font-medium text-foreground">当前领域的履历还是空的</p>
         <p className="mx-auto mt-1 max-w-md text-sm leading-relaxed text-muted-foreground">
           做完一次测验或走一轮导学问答，这里就会出现第一个点。
           <span className="block">

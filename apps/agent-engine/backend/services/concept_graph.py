@@ -32,20 +32,14 @@
 `load_prereq_edges(domain=...)` 只取一个域的边；不传保持全域并集（既有四个调用点靠它，
 它们本来就只跑 AI/具身域）。{@link available_prereq_domains} 供上层如实展示取的是哪几份。
 
-**域参数当前谁在用**：一个生产调用点都没有——`prerequisites` / `known_concepts` /
-`graph_source` 全是不传域的全域并集，`domain_path.build_domain_path` 则是自己读
-`readiness.json` 建了一份同域视图，没走这里。眼下守着这条路的只有
-`tests/test_domain_path.py::test_prereq_edges_are_domain_scoped`。
-留着不删是因为「串味」这个坑已经踩过一次（模块头第一段那件事换个位置复发），
-按域取边是修它的唯一入口，删掉等于把已知的坑重新埋回去。
-按域的路径规划一接过来，第一个调用点就落在这。
+**域参数的生产消费者**：个性化蓝图和学习路径规划都显式传入独立库名；
+`domain_path.build_domain_path` 直接读同一份 `readiness.json` 形成展示视图。
 
-## 缓存不失效，重跑接入要重启
+## 接入完成后统一失效缓存
 
 `readiness.json` 会被接入流水线重写（每跑一次 run 就是一份新的）。这里的 `lru_cache`
-是**进程内永久缓存，不做失效**：引擎进程里没有文件变更的通知源，加 mtime 轮询要给
-每次调用摊一次 stat，而前置图在一次进程生命周期里改动是罕例。代价说清楚即可——
-接入流水线重跑完，新边要等引擎重启才生效。
+不做 mtime 轮询；由接入流水线成功收尾时调用 `refresh_concept_graph()`，一次清掉元数据、
+按域原表和派生查询三层缓存。这样平时读取仍是零 stat，新边也不必等进程重启。
 
 ## 未复核的边只作软前置
 
@@ -148,6 +142,13 @@ def load_prereq_edges(domain: str | None = None) -> dict[str, list[str]]:
     return out
 
 
+def refresh_concept_graph() -> None:
+    """接入成功后的唯一缓存失效入口。"""
+    load_graph.cache_clear()
+    _prereq_by_domain.cache_clear()
+    load_prereq_edges.cache_clear()
+
+
 def available_prereq_domains() -> list[str]:
     """有边可取的域名单。报告层拿它写「这次用的是哪几份表」，别猜。"""
     return sorted(d for d, slot in _prereq_by_domain().items() if slot)
@@ -196,7 +197,14 @@ def prerequisites(concept: str, domain: str | None = None) -> list[str]:
     return out
 
 
-def concept_meta(concept: str) -> dict:
+def concept_meta(concept: str, domain: str | None = None) -> dict:
+    """概念元数据；独立域只读自己的 readiness，绝不借同名 AI 元数据。"""
+    if domain is not None:
+        readiness = read_json_dict(KB_DIR / f"{domain}_intake" / "readiness.json")
+        for item in readiness.get("concepts") or []:
+            if isinstance(item, dict) and item.get("concept") == concept:
+                return dict(item)
+        return {}
     return load_graph().get(concept, {})
 
 
@@ -207,6 +215,17 @@ def known_concepts(domain: str | None = None) -> set[str]:
     否则拓扑排序会把它们排进来。
     """
     out: set[str] = set() if domain else set(load_graph())
+    if domain:
+        from backend.services.goal_concepts import domain_concepts
+
+        out |= set(domain_concepts(domain))
+    else:
+        for path in KB_DIR.glob(INTAKE_READINESS_GLOB):
+            out |= {
+                str(item["concept"])
+                for item in read_json_dict(path).get("concepts") or []
+                if isinstance(item, dict) and item.get("concept")
+            }
     edges = load_prereq_edges(domain)
     out |= set(edges)
     for prereqs in edges.values():

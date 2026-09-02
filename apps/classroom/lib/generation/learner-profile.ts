@@ -49,10 +49,17 @@ export interface LearnerProfileInput {
   time_budget_hours?: number;
   /** 动态层：quiz 决策写回的当前难度（L1-L4） */
   currentDifficulty?: string;
+  currentDifficultyByDomain?: Record<string, string>;
   /** 动态层：逐概念掌握度（键=场景标题或概念 id，0-1，EMA 累积） */
   conceptMastery?: Record<string, number>;
   /** 动态层：Elo 能力评级（组卷难度自适应用），无则由画像映射冷启动 */
   eloRating?: number;
+  eloRatingByDomain?: Record<string, number>;
+  conceptMasteryByDomain?: Record<string, Record<string, number>>;
+  conceptConfidence?: Record<string, number>;
+  conceptConfidenceByDomain?: Record<string, Record<string, number>>;
+  conceptRecall?: Record<string, number>;
+  conceptRecallByDomain?: Record<string, Record<string, number>>;
 }
 
 export interface ResourceMix {
@@ -163,6 +170,9 @@ export async function fetchLearnerBlueprint(
         // 领域的课程（引擎 schemas/learner.py 的 #6 跨域污染注释）。口径同
         // corpusOf——检索、判官、诊断三路必须同源。
         corpus: corpusOf(profile) ?? '',
+        // 这不是自评档位：它由测验/导学证据账本 fold 后写回当前账户档案。
+        // 引擎只按精确概念 ID 消费；没有真实证据就是空对象，绝不由标题猜掌握度。
+        concept_mastery: profile.conceptMastery ?? {},
       }),
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       cache: 'no-store',

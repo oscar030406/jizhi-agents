@@ -38,7 +38,9 @@ function kb(bytes: number): string {
 /** 一行的状态：切出几块 / 被退回（理由）/ 在盘但没进索引。三者互斥。 */
 function StatusCell({ row }: { readonly row: SourceFileRow }) {
   if (row.chunks > 0) {
-    return <span className="tabular-nums text-emerald-700 dark:text-emerald-300">{row.chunks} 块</span>;
+    return (
+      <span className="tabular-nums text-emerald-700 dark:text-emerald-300">{row.chunks} 块</span>
+    );
   }
   if (row.rejected) {
     return (
@@ -77,7 +79,11 @@ export function SourceFilesPanel({
         const res = await fetch(
           `/api/knowledge/corpora/${encodeURIComponent(corpus)}/source?file=${encodeURIComponent(rel)}`,
         );
-        const body = (await res.json()) as { success?: boolean; error?: string; file?: SourceFileDetail };
+        const body = (await res.json()) as {
+          success?: boolean;
+          error?: string;
+          file?: SourceFileDetail;
+        };
         if (!res.ok || !body.success || !body.file) {
           setError(body.error || `读取失败（HTTP ${res.status}）`);
           return;
@@ -160,13 +166,13 @@ export function SourceFilesPanel({
         )}
         {view.external && view.rootExists && (
           <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-            系统已从平台管理的外部资料源接收原件；索引与向量产物已纳入当前知识库。
+            系统已从平台管理的外部资料源接收原件；索引与向量处理结果已纳入当前知识库。
           </p>
         )}
         {view.indexChunks !== view.totals.chunks && (
           <p className="mt-1 text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
-            对不上账：索引里共 {view.indexChunks} 块，按原件加总 {view.totals.chunks} 块，
-            相差 {Math.abs(view.indexChunks - view.totals.chunks)} 块。以索引为准。
+            统计不一致：当前索引共 {view.indexChunks} 块，按原件加总 {view.totals.chunks} 块， 相差{' '}
+            {Math.abs(view.indexChunks - view.totals.chunks)} 块。页面按当前索引统计。
           </p>
         )}
         {view.orphans.length > 0 && (
@@ -180,8 +186,8 @@ export function SourceFilesPanel({
             {view.scopedOut.stillIndexed > 0 && (
               <span className="text-amber-700 dark:text-amber-300">
                 {' '}
-                其中 {view.scopedOut.stillIndexed} 个仍然在索引里——就绪度报告与索引对不上账，
-                以索引为准（索引是后来单独补建的，没吃这份圈出清单）。
+                其中 {view.scopedOut.stillIndexed} 个仍被当前索引收录；范围清单与索引状态不一致，
+                页面按当前索引统计。
               </span>
             )}
           </p>
@@ -204,12 +210,11 @@ export function SourceFilesPanel({
         <h3 className="mb-2 text-xs font-medium">退回清单</h3>
         {view.rejected === null ? (
           <p className="text-[11px] leading-relaxed text-muted-foreground">
-            这个库不是走当前接入链建的，没有留下退回记录。
-            「哪些文件没收、为什么」在当时的建库程序里写死了，没有可查的清单，这一栏出不了数。
+            该知识库由早期流程建立，未保留文件退回记录，因此这里无法列出退回详情。
           </p>
         ) : view.rejected.length === 0 ? (
           <p className="text-[11px] leading-relaxed text-muted-foreground">
-            这一轮接入没有退回任何文件（清单存在且为空数组）。
+            本次接入没有退回任何文件。
           </p>
         ) : (
           <>
@@ -227,7 +232,7 @@ export function SourceFilesPanel({
               </p>
             )}
             <p className="mt-3 text-[10px] leading-relaxed text-muted-foreground">
-              系统接入规则负责格式初筛与内容去重；版本控制、依赖和虚拟环境目录会自动跳过，
+              系统接入规则负责格式初筛与内容去重；版本控制文件、依赖包和运行环境文件会自动跳过，
               既不接收也不计入原件总数。
             </p>
           </>
@@ -238,7 +243,10 @@ export function SourceFilesPanel({
         const showAll = expanded[g.name];
         const rows = showAll ? g.files : g.files.slice(0, PAGE);
         return (
-          <details key={g.name} className="rounded-2xl border border-border bg-card p-5 shadow-card">
+          <details
+            key={g.name}
+            className="rounded-2xl border border-border bg-card p-5 shadow-card"
+          >
             <summary className="cursor-pointer text-xs font-medium">
               {g.name}
               <span className="ml-2 font-normal text-muted-foreground">
@@ -276,8 +284,8 @@ export function SourceFilesPanel({
                   )}
                   {f.collides.length > 0 && (
                     <p className="w-full text-[10px] leading-relaxed text-amber-700 dark:text-amber-300">
-                      slug 碰撞，无法唯一定位它切出的块：与 {f.collides.join('、')} 折成同一个
-                      source_id 前缀，上面那个块数是这几个文件共用的。
+                      文件标识冲突，无法分别统计证据块：它与 {f.collides.join('、')} 共用同一标识，
+                      上面的块数是这些文件的合计值。
                     </p>
                   )}
                 </li>
@@ -310,9 +318,7 @@ export function SourceFilesPanel({
           </DialogHeader>
 
           {error && (
-            <p className="text-[11px] text-rose-600 dark:text-rose-400">
-              {redactCaliber(error)}
-            </p>
+            <p className="text-[11px] text-rose-600 dark:text-rose-400">{redactCaliber(error)}</p>
           )}
           {!detail && !error && (
             <p className="flex items-center gap-2 text-[11px] text-muted-foreground">
@@ -353,7 +359,7 @@ export function SourceFilesPanel({
                 </div>
               )}
               <div>
-                <h4 className="mb-2 text-xs font-medium">原文（未渲染）</h4>
+                <h4 className="mb-2 text-xs font-medium">原文（纯文本）</h4>
                 <pre className="max-h-[45vh] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted/60 px-3 py-2 font-mono text-[10px] leading-relaxed">
                   {detail.text}
                 </pre>

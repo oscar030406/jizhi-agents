@@ -958,3 +958,46 @@ export function isPBLProjectV2(value: unknown): value is PBLProjectV2 {
     Array.isArray(v.threads)
   );
 }
+
+/**
+ * The structure the Planner itself must finish before a new PBL can run.
+ * This deliberately checks authored task/output/acceptance content rather
+ * than treating the shallow renderer type guard as a production gate.
+ */
+export function pblProductionGaps(value: unknown): string[] {
+  if (!isPBLProjectV2(value)) return ['projectV2 shape is invalid'];
+
+  const gaps: string[] = [];
+  const hasText = (candidate: unknown): candidate is string =>
+    typeof candidate === 'string' && candidate.trim().length > 0;
+
+  if (!hasText(value.title)) gaps.push('title is empty');
+  if (!hasText(value.description)) gaps.push('description is empty');
+  if (!hasText(value.learningObjective)) gaps.push('learningObjective is empty');
+  if (!value.roles.some((role) => role?.type === 'instructor' && hasText(role.name))) {
+    gaps.push('no Instructor role');
+  }
+  if (value.milestones.length === 0) gaps.push('no milestones');
+
+  value.milestones.forEach((milestone, milestoneIndex) => {
+    const label = hasText(milestone?.title) ? milestone.title : `#${milestoneIndex + 1}`;
+    if (!hasText(milestone?.title)) gaps.push(`milestone ${label} title is empty`);
+    if (!hasText(milestone?.description)) gaps.push(`milestone "${label}" description is empty`);
+    if (!hasText(milestone?.briefing)) gaps.push(`milestone "${label}" briefing is empty`);
+    if (!hasText(milestone?.completionCriteria)) {
+      gaps.push(`milestone "${label}" completionCriteria is empty`);
+    }
+    if (!hasText(milestone?.debrief)) gaps.push(`milestone "${label}" debrief is empty`);
+    if (!Array.isArray(milestone?.microtasks) || milestone.microtasks.length === 0) {
+      gaps.push(`milestone "${label}" has no microtasks`);
+      return;
+    }
+    milestone.microtasks.forEach((microtask, microtaskIndex) => {
+      if (!hasText(microtask?.title)) {
+        gaps.push(`milestone "${label}" microtask #${microtaskIndex + 1} title is empty`);
+      }
+    });
+  });
+
+  return gaps;
+}

@@ -35,7 +35,10 @@ export function SafetyNotice() {
   const version = useDomainRegistryVersion();
   const [corpus, setCorpus] = useState<string>('');
   useEffect(() => {
-    setCorpus(loadLearnerProfile().corpus?.trim() ?? '');
+    const frame = window.requestAnimationFrame(() =>
+      setCorpus(loadLearnerProfile().corpus?.trim() ?? ''),
+    );
+    return () => window.cancelAnimationFrame(frame);
   }, []);
 
   if (!needsSafetyLayer(corpus, version)) return null;

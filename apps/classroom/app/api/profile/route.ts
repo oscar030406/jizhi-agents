@@ -83,7 +83,16 @@ export async function GET(req: NextRequest) {
   const storedCorpus = corpusOf(base.fields);
   if (storedCorpus) {
     const access = await requireCorpusVisible(storedCorpus);
-    if (!access.ok) return access.response;
+    if (!access.ok) {
+      // 机构切换后，旧画像可能仍指向原机构私有库。GET 只净化响应副本，让当前
+      // 指派继续定域；盘上历史保留，POST 对不可见库仍按下面的写入闸严格拒绝。
+      if (access.response.status !== 403) return access.response;
+      return NextResponse.json({
+        ...base,
+        fields: { ...(base.fields ?? {}), domain: null, corpus: null },
+        profileCorpusUnavailable: storedCorpus,
+      });
+    }
   }
   return NextResponse.json(base);
 }

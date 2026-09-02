@@ -20,10 +20,6 @@
 
 - `docs/05-evidence/` 与 `docs/04-research/`：内部证据文档，本来就该出现
   中间读数与作废值（它们记的是「这个数为什么作废」）。扫了全是噪声。
-- `apps/classroom/public/skill-map.json`：`/skills` 公开页的构建期快照，
-  197 个数值字段是岗位需求分布这类市场数据，与实验指标无交叉引用。
-  **它确实缺过期检测**（语料重建后 chunks 数会失真），但那是另一件事，
-  别混进这个脚本装作扫过了。
 - `.pptx`：二进制，要解压扫 slide XML。`--pptx` 单独开，默认不扫——
   它慢且容易误报（图表数据点会被当数字）。
 
@@ -152,7 +148,7 @@ def main() -> int:
             all_hits.append((f, lineno, num, line))
 
     print(f"扫了 {len(files)} 份对外文档，{len(all_hits)} 处数字")
-    print("不扫：docs/05-evidence、docs/04-research、skill-map.json、.pptx（见模块头）\n")
+    print("不扫：docs/05-evidence、docs/04-research、.pptx（见模块头）\n")
 
     stale_hits = [h for h in all_hits if h[2] in STALE and not allowed(h[0].name, h[2])]
     print(f"=== 作废读数命中：{len(stale_hits)} 处 ===")

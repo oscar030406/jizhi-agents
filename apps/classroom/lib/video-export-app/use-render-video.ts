@@ -11,6 +11,7 @@
  */
 import { useCallback } from 'react';
 import { useI18n } from '@/lib/hooks/use-i18n';
+import { ensureFullMediaExportReady } from '@/lib/export/use-export-script';
 import { useVideoRenderStore } from '@/lib/store/video-render';
 
 export function useRenderVideo() {
@@ -22,7 +23,10 @@ export function useRenderVideo() {
   const setOptions = useVideoRenderStore((s) => s.setOptions);
   const startRender = useVideoRenderStore((s) => s.startRender);
 
-  const renderVideo = useCallback(() => startRender(t), [startRender, t]);
+  const renderVideo = useCallback(() => {
+    if (!ensureFullMediaExportReady(t('share.notReady'))) return;
+    return startRender(t);
+  }, [startRender, t]);
 
   return {
     rendering: status === 'compiling' || status === 'rendering',

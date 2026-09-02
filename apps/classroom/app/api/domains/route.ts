@@ -13,6 +13,7 @@ import { NextResponse } from 'next/server';
 import { accountForSession } from '@/lib/accounts/store';
 import { SESSION_COOKIE } from '@/lib/accounts/session';
 import { corpusVisibilityFor } from '@/lib/accounts/org-store';
+import { isScratchCorpus } from '@/lib/knowledge/domain-registry';
 import { readDomainRegistry } from '@/lib/server/domain-registry';
 
 export const dynamic = 'force-dynamic'; // 清单随建库变化，不许命中构建期缓存
@@ -22,12 +23,14 @@ export async function GET() {
   // 机构可见性（2026-08-30）：有归属的库只对本机构成员出现在清单里；
   // 公共库（无归属行）人人可见。过滤在这一跳做——它是客户端视图的唯一水源，
   // 漏一处旁路就等于没隔离。
-  const account = await accountForSession((await cookies()).get(SESSION_COOKIE)?.value).catch(() => null);
+  const account = await accountForSession((await cookies()).get(SESSION_COOKIE)?.value).catch(
+    () => null,
+  );
   const visible = await corpusVisibilityFor(account?.id ?? null);
   const entries = registry?.entries;
   if (entries && typeof entries === 'object') {
     const filtered = Object.fromEntries(
-      Object.entries(entries).filter(([corpus]) => visible(corpus)),
+      Object.entries(entries).filter(([corpus]) => visible(corpus) && !isScratchCorpus(corpus)),
     );
     return NextResponse.json({ ...registry, entries: filtered });
   }

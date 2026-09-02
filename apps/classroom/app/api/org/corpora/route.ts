@@ -8,7 +8,7 @@
 import type { NextRequest } from 'next/server';
 
 import { corpusOwnership, orgForAccount, setCorpusOrg } from '@/lib/accounts/org-store';
-import { isValidCorpusName } from '@/lib/server/knowledge-center';
+import { isValidCorpusName, releaseCorpusOwnerMarker } from '@/lib/server/knowledge-center';
 import { API_ERROR_CODES, apiError, apiSuccess } from '@/lib/server/api-response';
 import { requireCorpusVisible } from '@/lib/server/corpus-access';
 import { createLogger } from '@/lib/logger';
@@ -50,11 +50,29 @@ export async function POST(req: NextRequest) {
   if (!corpus || !isValidCorpusName(corpus)) {
     return apiError(API_ERROR_CODES.MISSING_REQUIRED_FIELD, 400, '知识库名不合法。');
   }
-  if (body.action !== 'claim' && body.action !== 'release') {
-    return apiError(API_ERROR_CODES.MISSING_REQUIRED_FIELD, 400, 'action 需为 claim 或 release。');
+  if (body.action === 'claim') {
+    return apiError(
+      API_ERROR_CODES.INVALID_REQUEST,
+      409,
+      '知识库归属只由成功的入库任务自动建立，公共系统知识库不能手工认领。',
+    );
   }
-  const result = await setCorpusOrg(corpus, body.action === 'claim' ? org.id : null, org.id);
-  if (!result.ok) return apiError(API_ERROR_CODES.MISSING_REQUIRED_FIELD, 400, result.message);
-  log.info(`corpus ${corpus} ${body.action} by org ${org.id}`);
-  return apiSuccess({ corpus, action: body.action });
+  if (body.action !== 'release') {
+    return apiError(API_ERROR_CODES.MISSING_REQUIRED_FIELD, 400, 'action 需为 release。');
+  }
+  try {
+    if ((await corpusOwnership()).get(corpus) !== org.id) {
+      return apiError(API_ERROR_CODES.UNAUTHORIZED, 403, '只能释放本机构知识库。');
+    }
+    const result = await setCorpusOrg(corpus, null, org.id);
+    if (!result.ok) return apiError(API_ERROR_CODES.MISSING_REQUIRED_FIELD, 400, result.message);
+    if (!(await releaseCorpusOwnerMarker(corpus, org.id))) {
+      return apiError(API_ERROR_CODES.UNAUTHORIZED, 403, '只能释放本机构知识库。');
+    }
+    log.info(`corpus ${corpus} ${body.action} by org ${org.id}`);
+    return apiSuccess({ corpus, action: body.action });
+  } catch (error) {
+    log.warn(`release corpus ownership failed: ${String(error)}`);
+    return apiError(API_ERROR_CODES.INTERNAL_ERROR, 503, '知识库归属暂时无法释放。');
+  }
 }

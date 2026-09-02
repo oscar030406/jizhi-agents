@@ -1,11 +1,12 @@
 /**
  * 知识库中心的服务端聚合：每个语料库现在建到哪一站，各站的产物文件是什么、什么时候更新的。
  *
- * 数据来源全是**引擎数据目录里的产物文件本身**，不经引擎进程：
+ * 管线展示数据直接读取部署时挂载的只读产物目录；机构归属例外：它是权限数据，
+ * 只能通过带 `x-internal-token` 的引擎接口读取或释放，Web 进程不碰私有标记文件。
  *
  * | 字段 | 真源 |
  * |---|---|
- * | 语料库名单 | `public/skill-map.json` 的 `corpora`（引擎 `DOMAIN_CORPORA` 的部署快照）∪ `corpora/` 下的目录 ∪ `ai` |
+ * | 语料库名单 | 引擎 `domain_registry.json` 的实时注册项 ∪ `corpora/` 下的目录 ∪ `ai` |
  * | chunk 数 | 数 `knowledge_index.jsonl` 的行数（实测与引擎 `_corpus_status()` 的 chunk_count 三库全等：1704 / 3202 / 307） |
  * | 检索后端 | `knowledge_embeddings.npz` 在不在（在 = 向量，只有 jsonl = TF-IDF，都没有 = 未建库） |
  * | 就绪度 / 许可 / 概念数 | `<name>_intake/readiness.json` |
@@ -13,7 +14,7 @@
  * | 适配性灯 | `data/knowledge_base/fitness.json`（`scripts/corpus_fitness.py` 的产物，全库一份） |
  * | 各站更新时间 | 对应产物文件的 mtime |
  *
- * 为什么不走引擎 HTTP：这些全是静态产物文件，引擎自己也只是去读同一批文件；多一跳
+ * 为什么管线字段不走引擎 HTTP：这些全是静态产物文件，引擎自己也只是去读同一批文件；多一跳
  * 只多一个「引擎离线页面空白」的失败态。`lib/server/admin-overview.ts` 读同一个目录，
  * 沿用它的 `ENGINE_DATA_DIR` 约定。引擎停机时本页照常出全量数据（实测）。
  *
@@ -29,6 +30,58 @@ import { domainLabel } from '@/lib/knowledge/domain-labels';
 /** 引擎数据目录——唯一真源（admin-overview 也 import 这份；2026-08-28 清查 L5 前各抄一份）。 */
 export function engineDataDir(): string {
   return process.env.ENGINE_DATA_DIR || path.join(process.cwd(), '..', 'agent-engine', 'data');
+}
+
+function engineOwnershipApi(pathname = ''): { url: string; token: string } {
+  const base = process.env.GROUNDING_URL?.replace(/\/$/, '');
+  const token = process.env.GROUNDING_TOKEN;
+  if (!base || !token) throw new Error('知识库归属服务未配置');
+  return { url: `${base}/api/domain-intake/corpus-owners${pathname}`, token };
+}
+
+/** 成功入库链随语料产物写下的机构归属；没有标记的存量库仍是公共库。 */
+export async function readCorpusOwnerMarkers(): Promise<Map<string, string>> {
+  const endpoint = engineOwnershipApi();
+  const response = await fetch(endpoint.url, {
+    headers: { 'x-internal-token': endpoint.token },
+    signal: AbortSignal.timeout(10_000),
+    cache: 'no-store',
+  });
+  if (!response.ok) throw new Error(`知识库归属服务返回 HTTP ${response.status}`);
+  const body = (await response.json()) as { ownership?: Record<string, unknown> };
+  if (!body.ownership || typeof body.ownership !== 'object' || Array.isArray(body.ownership)) {
+    throw new Error('知识库归属服务响应格式错误');
+  }
+  const ownership = new Map<string, string>();
+  for (const [corpus, owner] of Object.entries(body.ownership)) {
+    if (!isValidCorpusName(corpus) || typeof owner !== 'string' || !owner.trim()) {
+      throw new Error('知识库归属服务返回非法归属');
+    }
+    ownership.set(corpus, owner.trim());
+  }
+  return ownership;
+}
+
+/** 请求引擎进程释放归属；404 表示只有兼容归属行，没有引擎标记。 */
+export async function releaseCorpusOwnerMarker(
+  corpus: string,
+  actorOrgId: string,
+): Promise<boolean> {
+  if (!isValidCorpusName(corpus) || !actorOrgId) return false;
+  const endpoint = engineOwnershipApi(`/${encodeURIComponent(corpus)}`);
+  const response = await fetch(endpoint.url, {
+    method: 'DELETE',
+    headers: {
+      'x-internal-token': endpoint.token,
+      'x-jizhi-owner-org': actorOrgId,
+    },
+    signal: AbortSignal.timeout(10_000),
+    cache: 'no-store',
+  });
+  if (response.status === 404) return true;
+  if (response.status === 403) return false;
+  if (!response.ok) throw new Error(`知识库归属释放返回 HTTP ${response.status}`);
+  return true;
 }
 
 /** 引擎相对路径（`data/...`）→ 本机绝对路径。展示时仍用引擎相对路径，便于复算。 */
@@ -274,30 +327,13 @@ export function indexPathOf(corpus: string): string {
     : `data/knowledge_base/corpora/${corpus}/knowledge_index.jsonl`;
 }
 
-/**
- * 语料库名单。
- *
- * 引擎的 `DOMAIN_CORPORA` 是写死的元组（`personalize_service.py`），产品侧拿不到它，
- * 唯一的落盘副本是部署时生成的 `public/skill-map.json`（`scripts/generate-skill-map-snapshot.mjs`）。
- * 只从那里取**名字**，所有数字仍现算——快照过期最多让名单少一个域，不会让数字失真。
- * 磁盘上真有语料目录、但名单里没有的，一并列出（否则刚建好的库在这一页上不存在）。
- */
-/** `public/skill-map.json` 的 `corpora`（部署时快照）。文件不存在返回 null。 */
-async function readSnapshotCorpora(): Promise<Array<{
-  corpus?: string;
-  available?: boolean;
-  chunk_count?: number;
-}> | null> {
-  const snapshot = await readJson<{
-    corpora?: Array<{ corpus?: string; available?: boolean; chunk_count?: number }>;
-  }>(path.join(process.cwd(), 'public', 'skill-map.json'));
-  return snapshot?.corpora ?? null;
-}
-
+/** 语料库名单：实时域注册表为主，磁盘目录补齐尚未登记的管理端可见库。 */
 async function corpusRoster(): Promise<string[]> {
   const names = new Set<string>(['ai']);
-  for (const c of (await readSnapshotCorpora()) ?? []) {
-    if (typeof c.corpus === 'string' && isValidCorpusName(c.corpus)) names.add(c.corpus);
+  const { readDomainRegistry } = await import('@/lib/server/domain-registry');
+  const registry = await readDomainRegistry();
+  for (const corpus of Object.keys(registry.entries)) {
+    if (isValidCorpusName(corpus)) names.add(corpus);
   }
   try {
     const dirs = await fs.readdir(path.join(engineDataDir(), 'knowledge_base', 'corpora'), {
@@ -305,7 +341,7 @@ async function corpusRoster(): Promise<string[]> {
     });
     for (const d of dirs) if (d.isDirectory() && isValidCorpusName(d.name)) names.add(d.name);
   } catch {
-    /* 没有 corpora 目录：只剩快照里的名单 */
+    /* 没有 corpora 目录：保留实时注册表中的名单 */
   }
   return [...names];
 }
@@ -346,9 +382,10 @@ async function stationsOf(corpus: string): Promise<{
   //   章级 = prereq_chapter_audit.json 里 passed 的边
   //   节级 = readiness.json 的 prereq_graph.clauses
   // ai 域没走入库链，它那一支在共享的 prereq_graph.json 里。
-  let prereqRel = corpus === 'ai'
-    ? 'data/knowledge_base/prereq_graph.json'
-    : `${intakeRel}/prereq_chapter_audit.json`;
+  let prereqRel =
+    corpus === 'ai'
+      ? 'data/knowledge_base/prereq_graph.json'
+      : `${intakeRel}/prereq_chapter_audit.json`;
   let chapterEdges: number | null = null;
   let nodeEdges: number | null = null;
   if (corpus === 'ai') {
@@ -421,7 +458,7 @@ async function stationsOf(corpus: string): Promise<{
       // kc_gold_derived 根，它恒存在，拿存在性亮灯等于给 ai 白送一站。
       built: (gold?.count ?? 0) > 0,
       path: goldRel,
-      updatedAt: (gold?.count ?? 0) > 0 ? gold?.newest ?? null : null,
+      updatedAt: (gold?.count ?? 0) > 0 ? (gold?.newest ?? null) : null,
       detail: gold ? `${gold.count} 个主题文件` : null,
     },
   ];
@@ -465,7 +502,10 @@ async function stationsOf(corpus: string): Promise<{
 export async function readCorpus(corpus: string): Promise<CorpusOverview | null> {
   if (!isValidCorpusName(corpus)) return null;
   const { stations, overview } = await stationsOf(corpus);
-  const stamps = stations.map((s) => s.updatedAt).filter((s): s is string => Boolean(s)).sort();
+  const stamps = stations
+    .map((s) => s.updatedAt)
+    .filter((s): s is string => Boolean(s))
+    .sort();
   return {
     corpus,
     indexPath: indexPathOf(corpus),
@@ -480,8 +520,7 @@ export async function readCorpus(corpus: string): Promise<CorpusOverview | null>
  *
  * 只管**显式选的库**（`profile.corpus`）。没选、或只填了培训领域（`domain`）的照旧
  * 放行——那三个赛题领域至今没有语料，今天本来就是裸生成加「未接地」徽章，拦下来等于
- * 把一条能用的路砍掉。判据用实时磁盘（`readCorpus`），不用 `skill-map.json` 快照：
- * 下拉菜单可以读过期快照，「能不能生成」这句话不行。
+ * 把一条能用的路砍掉。判据只用实时磁盘（`readCorpus`）。
  */
 export async function corpusUnavailableReason(corpus?: string): Promise<string | null> {
   const name = corpus?.trim();
@@ -490,62 +529,6 @@ export async function corpusUnavailableReason(corpus?: string): Promise<string |
   const row = await readCorpus(name);
   if (row?.available) return null;
   return `知识库「${domainLabel(name)}」还没建好检索索引（${indexPathOf(name)} 不存在或为空），换库生成会全程无据可依。请到知识库中心确认建库状态，或改用已建好的库。`;
-}
-
-/**
- * 快照与当前磁盘对不上的地方，每条一句人话。空数组 = 一致（或没有快照可比）。
- *
- * 为什么要有这一条：`/skills` 是公开页，它先渲染 `public/skill-map.json`（构建期产物）
- * 再用 `/api/skills` 的实时数据顶掉；引擎离线时访客看到的就是那份快照。新建/重建/删掉一个库
- * 之后快照不会自己变，页面上的「知识库可接地」条数就停在旧值上——**过期本身必须是可见的**，
- * 不能只有跑过脚本的人才知道。判据用块数而不只是名字：重建一个同名库（307 → 512 块）
- * 同样让快照失真。
- *
- * 只比「已建成」的库：没建索引的库两边都是灰的，没什么可提示。
- */
-export function snapshotDrift(
-  live: CorpusOverview[],
-  snapshot: Array<{ corpus?: string; available?: boolean; chunk_count?: number }> | null,
-): string[] {
-  if (!snapshot) return [];
-  const snapBuilt = new Map(
-    snapshot
-      .filter((c) => c.available && typeof c.corpus === 'string')
-      .map((c) => [c.corpus as string, Number(c.chunk_count ?? 0)]),
-  );
-  const liveBuilt = new Map(live.filter((c) => c.available).map((c) => [c.corpus, c.chunks ?? 0]));
-  const notes: string[] = [];
-  for (const [name, chunks] of liveBuilt) {
-    const was = snapBuilt.get(name);
-    if (was === undefined) notes.push(`新增「${domainLabel(name)}」（${chunks} 个证据块）`);
-    else if (was !== chunks) notes.push(`「${domainLabel(name)}」证据块 ${was} → ${chunks}`);
-  }
-  for (const name of snapBuilt.keys()) {
-    if (!liveBuilt.has(name)) notes.push(`「${domainLabel(name)}」已不在磁盘上`);
-  }
-  return notes;
-}
-
-/** 页面用：现算一次总览，顺手比一次快照；可见性同时约束实时行与漂移提示。 */
-export async function readCorporaWithDrift(
-  visible: (corpus: string) => boolean = () => true,
-): Promise<{
-  corpora: CorpusOverview[];
-  drift: string[];
-}> {
-  // 先灌域注册清单：这页的卡标题与漂移提示都走 domainLabel，而服务端那份
-  // 内存视图只有 /api/domains 或课程域推导被请求过才有人灌——没人灌时新库
-  // 上屏就是裸英文目录名（smart-manufacturing 第一次重投后实测撞上）。
-  // 动态 import 照抄 course-domains.ts：domain-registry 反向 import 本文件的
-  // enginePath，静态引会成环。
-  const { readDomainRegistry } = await import('@/lib/server/domain-registry');
-  await readDomainRegistry().catch(() => null);
-  const [allCorpora, snapshot] = await Promise.all([readCorpora(), readSnapshotCorpora()]);
-  const corpora = allCorpora.filter((corpus) => visible(corpus.corpus));
-  const visibleSnapshot =
-    snapshot?.filter((corpus) => typeof corpus.corpus !== 'string' || visible(corpus.corpus)) ??
-    null;
-  return { corpora, drift: snapshotDrift(corpora, visibleSnapshot) };
 }
 
 /** 总览：建好的排前面，同组按名字排。名单取不到时返回空数组，页面出空态。 */

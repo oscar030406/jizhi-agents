@@ -5,8 +5,8 @@
  * （§3 首屏右栏过程回放、§4 全页叙事线、§5 输入框行为），
  * 配色配方在 docs/03-design/ui/public-site-redesign-20260809.md §4。
  *
- * 信息架构：顶栏 → A Hero（承诺+输入框）→ A′ 过程回放 → B 学习路径三模块
- * → C 课程墙（按模块分组）→ 相关指标 → D 机制三卡「我们为什么可信」→ E FAQ
+ * 信息架构：顶栏 → A Hero（承诺+输入框）→ A′ 过程回放 → B 引擎学习路径
+ * → C 已发布课程墙 → 相关指标 → D 机制三卡「我们为什么可信」→ E FAQ
  * → 尾部 CTA → 页脚两列。
  * 路径升到课程区之前（2026-08-16）：先看「课是怎么排的」，再看「有哪些课」——
  * 原来第一眼给的是九门人工挑的课，看不出它们之间是什么关系。
@@ -16,14 +16,13 @@
  * 赛题六项要求区已撤出本页（08-10 用户红线：产品页禁赛题口吻）。
  * 组件文件 six-requirements.tsx 保留，答辩自用，不挂公共导航。
  *
- * 全区块零引擎依赖：只读 data/classrooms 落盘的课与页内常量，引擎离线首页照常。
- * 课程清单为空时整块不渲染——宁可少一块，不摆占位课。
+ * 路径只读引擎当前产物，课程墙只读已发布课程接口；失败时分别显示真实失败态。
  */
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowUp, BookOpen, Gavel, Hammer, PenLine, Quote, Route } from 'lucide-react';
+import { ArrowUp, BookOpen, Gavel, Hammer, PenLine, Quote } from 'lucide-react';
 import { annotate } from 'rough-notation';
 
 import { AccountMenu } from '@/components/account/account-menu';
@@ -32,89 +31,21 @@ import { FaqSection } from '@/components/home/faq';
 import { GenerationReplay, REPLAY_COURSE_ID } from '@/components/home/generation-replay';
 import { GenerativeCover } from '@/components/home/generative-cover';
 import { KeyMetrics } from '@/components/home/key-metrics';
+import { PathOrDomainCard } from '@/components/home/learning-overview';
 import { MechanismCards } from '@/components/home/mechanism-cards';
 import { PracticeHighlights } from '@/components/home/practice-highlights';
 import { SectionAnchor } from '@/components/home/section-anchor';
-import { projectsForCourse } from '@/components/skills/practice-projects';
+import {
+  projectsForCourse,
+  usePublishedPractice,
+  type PracticeProject,
+} from '@/components/skills/practice-projects';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Textarea } from '@/components/ui/textarea';
 import { createLogger } from '@/lib/logger';
 import { cn } from '@/lib/utils';
-import rawPathData from '@/data/learning-path.json';
 
 const log = createLogger('PublicLanding');
-
-/**
- * 课程墙与路径卡的排序、分组、数字，全部现读 data/learning-path.json。
- *
- * 之前这里写死过一份九门课的 id 数组，人工排的顺序。它的问题是：墙上看不出
- * 课与课之间是什么关系，而且路径改了这里不会跟着改。现在墙按模块分组、模块内按
- * tracks[].nodeIds 的顺序摆，跟 /path 是同一份数据同一个顺序——改路径这里自动跟。
- *
- * 数字口径（与 /path 逐字同源）：
- *   门数 = 模块挂的节点数；「已生成」= 节点的 courseId 在课程接口返回里真的存在；
- *   时长 = 已生成课的场景数 × 8 分钟，规划中的课不折算时长、单列门数。
- */
-const MINUTES_PER_SCENE = 8;
-
-interface PathNodeLite {
-  id: string;
-  title: string;
-  courseId?: string | null;
-}
-interface PathTrackLite {
-  id: string;
-  title: string;
-  hint?: string;
-  nodeIds: string[];
-}
-const PATH = rawPathData as {
-  nodes: PathNodeLite[];
-  tracks: PathTrackLite[];
-  extensionDomain?: { title: string; hint?: string; courseIds: string[] };
-};
-const NODE_BY_ID = new Map(PATH.nodes.map((n) => [n.id, n]));
-
-/** 每个模块一个色系，做视觉锚点；模块多于三个时循环取色。 */
-const MODULE_TONES = [
-  { bar: 'bg-purple-deep/50', chip: 'bg-purple-soft text-purple-deep' },
-  { bar: 'bg-blue-deep/40', chip: 'bg-blue-soft text-blue-deep' },
-  { bar: 'bg-green-deep/40', chip: 'bg-green-soft text-green-deep' },
-] as const;
-
-/** 一个模块在墙上要展示的东西：门数、时长、以及按路径顺序排好的已生成课。 */
-function summarizeModule(track: PathTrackLite, courses: ClassroomSummary[]) {
-  const byId = new Map(courses.map((c) => [c.id, c]));
-  const nodes = track.nodeIds
-    .map((id) => NODE_BY_ID.get(id))
-    .filter((n): n is PathNodeLite => Boolean(n));
-  const ready: ClassroomSummary[] = [];
-  for (const n of nodes) {
-    const c = n.courseId ? byId.get(n.courseId) : undefined;
-    if (c) ready.push(c);
-  }
-  const minutes = ready.reduce((a, c) => a + c.sceneCount * MINUTES_PER_SCENE, 0);
-  return {
-    id: track.id,
-    title: track.title,
-    hint: track.hint,
-    total: nodes.length,
-    ready,
-    planned: nodes.length - ready.length,
-    hours: Math.round(minutes / 60),
-  };
-}
-
-/**
- * 三条示例需求，每条写死它对应的课程 id（简报 §5：不赌模糊匹配）。
- * 点一下直接进那门课——不是把文字填进输入框再让人猜点哪个按钮。
- * 文案是那门课的原始需求（data/learning-path.json 对应节点的 requirement）的短句版。
- */
-const EXAMPLE_CHIPS = [
-  { text: 'RAG 检索质量怎么评估和改进', courseId: 'GsElavl9Nz' },
-  { text: '多 Agent 协作与编排怎么做', courseId: 'LnnLswdN1c' },
-  { text: '大模型怎么评测，榜单怎么看', courseId: '0K904gtPQP' },
-] as const;
 
 export interface ClassroomSummary {
   id: string;
@@ -230,47 +161,54 @@ function AuditBadges({ audit }: { audit: NonNullable<ClassroomSummary['audit']> 
 }
 
 /** 课程墙的一组卡（模块内一组、扩展域一组，卡面完全一样）。 */
-function CourseGrid({ courses }: { courses: ClassroomSummary[] }) {
+function CourseGrid({
+  courses,
+  practiceProjects,
+}: {
+  courses: ClassroomSummary[];
+  practiceProjects: PracticeProject[];
+}) {
   return (
     <ul className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      {courses.map((course) => (
-        <li key={course.id}>
-          <Link
-            href={`/classroom/${course.id}`}
-            className={cn(
-              CARD_RECIPE,
-              'group block overflow-hidden transition-[filter,border-color,transform] hover:-translate-y-1',
-            )}
-          >
-            {/* 生成式封面（§4.4）：hover 微缩放给「可进入」的物理暗示。
+      {courses.map((course) => {
+        const linkedProjects = projectsForCourse(practiceProjects, course.id);
+        return (
+          <li key={course.id}>
+            <Link
+              href={`/classroom/${course.id}`}
+              className={cn(
+                CARD_RECIPE,
+                'group block overflow-hidden transition-[filter,border-color,transform] hover:-translate-y-1',
+              )}
+            >
+              {/* 生成式封面（§4.4）：hover 微缩放给「可进入」的物理暗示。
                 saturate 提一档：封面的粉彩字母在纯白基底上显灰（农家感来源之一）。 */}
-            <div className="overflow-hidden saturate-[1.3]">
-              <GenerativeCover
-                name={course.title}
-                className="h-24 transition-transform duration-slow group-hover:scale-105"
-              />
-            </div>
-            {/* 卡面留白加大（WO-E1 §2）：p-4→p-5，课名 sm→base */}
-            <div className="p-5">
-              <h3 className="line-clamp-2 text-base font-semibold transition-colors group-hover:text-primary">
-                {course.title}
-              </h3>
-              <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <span>{course.sceneCount} 个场景</span>
-                {/* 「配 N 个实操」：边只落在 practice-projects.json 的 courseIds 上，
-                    这里运行时反查，不往课程 json 里写第二份数据。挂了实操的课才出这枚角标。 */}
-                {projectsForCourse(course.id).length > 0 && (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-green-soft px-2 py-0.5 text-foreground/80">
-                    <Hammer className="size-3" aria-hidden />
-                    配 {projectsForCourse(course.id).length} 个实操
-                  </span>
-                )}
-              </p>
-              {course.audit && <AuditBadges audit={course.audit} />}
-            </div>
-          </Link>
-        </li>
-      ))}
+              <div className="overflow-hidden saturate-[1.3]">
+                <GenerativeCover
+                  name={course.title}
+                  className="h-24 transition-transform duration-slow group-hover:scale-105"
+                />
+              </div>
+              {/* 卡面留白加大（WO-E1 §2）：p-4→p-5，课名 sm→base */}
+              <div className="p-5">
+                <h3 className="line-clamp-2 text-base font-semibold transition-colors group-hover:text-primary">
+                  {course.title}
+                </h3>
+                <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <span>{course.sceneCount} 个场景</span>
+                  {/* 课程边只由当前已发布项目的 courseIds 反查，不在课程数据里落第二份。 */}
+                  {linkedProjects.length > 0 && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-green-soft px-2 py-0.5 text-foreground/80">
+                      <Hammer className="size-3" aria-hidden />配 {linkedProjects.length} 个实操
+                    </span>
+                  )}
+                </p>
+                {course.audit && <AuditBadges audit={course.audit} />}
+              </div>
+            </Link>
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -320,6 +258,8 @@ const NAV_LINK =
 
 export function PublicLanding() {
   const router = useRouter();
+  const practiceState = usePublishedPractice('ai');
+  const practiceProjects = practiceState.kind === 'ready' ? practiceState.projects : [];
   const [requirement, setRequirement] = useState('');
   const [missed, setMissed] = useState(false);
   const [courses, setCourses] = useState<ClassroomSummary[]>([]);
@@ -355,14 +295,7 @@ export function PublicLanding() {
     };
   }, []);
 
-  // 课程墙按模块分组：顺序取自路径表，接口没返回的 id 直接漏掉，不补位、不回退排序
-  const modules = PATH.tracks.map((t) => summarizeModule(t, courses));
-  const extension = PATH.extensionDomain;
-  const extensionCourses = (extension?.courseIds ?? [])
-    .map((id) => courses.find((c) => c.id === id))
-    .filter((c): c is ClassroomSummary => Boolean(c));
-  const wallCount =
-    modules.reduce((a, m) => a + m.ready.length, 0) + extensionCourses.length;
+  const wallCount = courses.length;
   const replayCourse = courses.find((c) => c.id === REPLAY_COURSE_ID);
   // 实操卡上的「对口课程」要显示课名而不是裸 id。课程接口没返回时这里是空表，
   // 实操区照常渲染，只是不出那一行——沿用 PracticeCard 的做法。
@@ -390,14 +323,24 @@ export function PublicLanding() {
           </span>
         </div>
         <nav className="hidden items-center gap-3 text-sm text-muted-foreground md:flex">
-          <Link href="/path" className={NAV_LINK}>学习路径</Link>
-          <a href="#courses" className={NAV_LINK}>课程</a>
-          <Link href="/evidence" className={NAV_LINK}>审核实录</Link>
+          <Link href="/path" className={NAV_LINK}>
+            学习路径
+          </Link>
+          <a href="#courses" className={NAV_LINK}>
+            课程
+          </a>
+          <Link href="/evidence" className={NAV_LINK}>
+            审核实录
+          </Link>
           {/* 「课程对比」撤出导航（2026-08-16）：同题异人已经拆散内嵌——生成入口选画像时
               有「画像影响预览」，生成完在 /report 有「你的课为什么长这样」。让访客先去看
               一个抽象的双人对照，不如在他自己那门课上直接看到。/compare 路由仍在，可直达。 */}
-          <Link href="/agents" className={NAV_LINK}>智能体分工</Link>
-          <Link href="/skills" className={NAV_LINK}>岗位技能</Link>
+          <Link href="/agents" className={NAV_LINK}>
+            智能体分工
+          </Link>
+          <Link href="/skills" className={NAV_LINK}>
+            岗位技能
+          </Link>
         </nav>
         <div className="flex items-center gap-2">
           <AccountMenu />
@@ -415,7 +358,9 @@ export function PublicLanding() {
         <div
           aria-hidden
           className="pointer-events-none absolute inset-0 dark:opacity-30"
-          style={{ background: 'linear-gradient(to bottom, rgb(224,234,254), rgba(255,255,255,0) 82%)' }}
+          style={{
+            background: 'linear-gradient(to bottom, rgb(224,234,254), rgba(255,255,255,0) 82%)',
+          }}
         />
         <div className={`${CONTAINER} relative flex flex-col items-center pb-24 pt-16 text-center`}>
           {/* hero kicker：朱批色细下划线呼应评点本视觉 */}
@@ -472,26 +417,27 @@ export function PublicLanding() {
               </div>
             </div>
 
-            {/* 示例 chip：每条写死课程 id，点了直接进那门课 */}
-            <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5 text-xs">
-              <span className="text-muted-foreground">或者直接看这三门：</span>
-              {EXAMPLE_CHIPS.map((chip) => (
-                <Link
-                  key={chip.courseId}
-                  href={`/classroom/${chip.courseId}`}
-                  className="rounded-full border border-border/60 bg-muted/40 px-2.5 py-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                >
-                  {chip.text}
-                </Link>
-              ))}
-            </div>
+            {courses.length > 0 && (
+              <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5 text-xs">
+                <span className="text-muted-foreground">或者直接看已发布课程：</span>
+                {courses.slice(0, 3).map((course) => (
+                  <Link
+                    key={course.id}
+                    href={`/classroom/${course.id}`}
+                    className="rounded-full border border-border/60 bg-muted/40 px-2.5 py-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    {course.title}
+                  </Link>
+                ))}
+              </div>
+            )}
 
             {/* 没命中的诚实空态：不假装跳对了，把最接近的三门摆出来让人自己挑 */}
             {missed && (
               <div className="mt-4 rounded-lg border border-dashed border-border/70 p-4">
                 <p className="text-sm font-medium">还没有这门课</p>
                 <p className="mt-1 text-xs leading-[1.75] text-muted-foreground">
-                  课程墙上的课都是已经生成并落盘的。登录后可以按你这句需求定制生成一门。
+                  课程墙上的课都是已经生成并发布的。登录后可以按你这句需求定制生成一门。
                   下面是现有课里与你输入字面最接近的三门：
                 </p>
                 <ul className="mt-3 grid gap-2 sm:grid-cols-3">
@@ -528,68 +474,14 @@ export function PublicLanding() {
         </section>
       )}
 
-      {/* 区 B —— 学习路径三模块（升到课程墙之前）：先说清课是怎么排的，
-          再往下摆具体的课。每卡一个色系=视觉锚点；门数与时长现算，不写死。 */}
+      {/* 区 B —— 公共 AI 库的引擎路径；不读取旧静态路径。 */}
       <section className={SECTION}>
         <div className={CONTAINER}>
-          <div className="flex items-baseline justify-between">
-            <h2 className="flex items-center gap-2.5 text-[28px] font-semibold leading-snug">
-              <SectionAnchor icon={Route} />
-              从零基础到上手，三个模块走完
-            </h2>
-            <Link href="/path" className={cn('shrink-0 text-xs text-muted-foreground', NAV_LINK)}>
-              查看路径全景 →
-            </Link>
-          </div>
-          <p className="mt-1 text-sm text-muted-foreground">
-            模块一是共同底座，学完之后模块二和模块三可以并行走。
-            前置的高数和 Python 也在路径里，已经会的可以直接跳到后面。
-          </p>
-          <div className="mt-5 grid gap-4 sm:grid-cols-3">
-            {modules.map((m, i) => {
-              const tone = MODULE_TONES[i % MODULE_TONES.length];
-              return (
-                // transition-transform 会整个盖掉 CARD_RECIPE 里的
-                // transition-[filter,border-color]，hover 的阴影和边框变化因此是瞬时跳变。
-                // 三个属性一起写出来，过渡时长跟 CARD_RECIPE 的 150ms。
-                <Link
-                  key={m.id}
-                  href="/path"
-                  className={cn(
-                    CARD_RECIPE,
-                    'group block overflow-hidden transition-[filter,border-color,transform] hover:-translate-y-1',
-                  )}
-                >
-                  <span className={cn('block h-1 w-full', tone.bar)} />
-                  <div className="p-5">
-                    <h3 className="font-semibold group-hover:text-primary">{m.title}</h3>
-                    {m.hint && (
-                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{m.hint}</p>
-                    )}
-                    <p className="mt-3 text-xs tabular-nums text-muted-foreground">
-                      共 {m.total} 门课 · 已生成 {m.ready.length} 门，约 {m.hours} 小时
-                    </p>
-                    {m.planned > 0 && (
-                      <span
-                        className={cn(
-                          'mt-2 inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium tabular-nums',
-                          tone.chip,
-                        )}
-                      >
-                        其中 {m.planned} 门规划中
-                      </span>
-                    )}
-                  </div>
-                </Link>
-              );
-            })}
-          </div>
+          <PathOrDomainCard corpus="ai" />
         </div>
       </section>
 
-      {/* 区 C —— 课程墙，按模块分组（id 供页脚锚点，四态都渲染这个 section，
-          否则锚点会指向不存在的元素）。模块内顺序 = 路径表里的顺序。
-          规划中的课不上墙——墙上每一张卡都是能点开读的真课。 */}
+      {/* 区 C —— 已发布课程墙。列表本身已经过可见性与发布状态过滤。 */}
       <section id="courses" className={cn('scroll-mt-20', SECTION_WARM)}>
         <div className={CONTAINER}>
           <div className="flex items-baseline justify-between gap-3">
@@ -618,44 +510,22 @@ export function PublicLanding() {
             <div className="mt-5">
               <EmptyState
                 title="课程墙上还没有课"
-                hint="这套系统的课都是多智能体现场生成后落盘的，当前这个部署里还没有落盘的课程。登录后在工作台发起一次生成，课就会出现在这里。"
+                hint="这套系统的课程由多智能体现场生成并通过审核后发布。本站目前还没有已发布课程；登录后可在工作台发起生成。"
               />
             </div>
           )}
-          {modules.map(
-            (m) =>
-              m.ready.length > 0 && (
-                <div key={m.id} className="mt-8 first:mt-6">
-                  <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                    <h3 className="text-lg font-semibold">{m.title}</h3>
-                    <span className="text-xs tabular-nums text-muted-foreground">
-                      {m.ready.length} / {m.total} 门已生成
-                    </span>
-                  </div>
-                  <CourseGrid courses={m.ready} />
-                </div>
-              ),
-          )}
-          {extension && extensionCourses.length > 0 && (
-            <div className="mt-8">
-              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                <h3 className="text-lg font-semibold">{extension.title}</h3>
-                {extension.hint && (
-                  <span className="text-xs text-muted-foreground">{extension.hint}</span>
-                )}
-              </div>
-              <CourseGrid courses={extensionCourses} />
+          {listState === 'ready' && wallCount > 0 && (
+            <div className="mt-6">
+              <CourseGrid courses={courses} practiceProjects={practiceProjects} />
             </div>
           )}
         </div>
       </section>
 
-      {/* 动手实操 —— 摆在课程墙之后、指标之前：课程墙讲「学」，这一区讲「做」。
-          13 张实操卡此前只在 /skills 的岗位地图和课堂内的「动手做」区块里露出，
-          首页看不到「做」这一半。数据是静态 json，课程接口挂了这一区照常渲染。 */}
+      {/* 动手实操 —— 只消费 AI 域由引擎生成并经管理者审核发布的结果。 */}
       <section className={SECTION}>
         <div className={CONTAINER}>
-          <PracticeHighlights courseTitles={courseTitles} />
+          <PracticeHighlights state={practiceState} courseTitles={courseTitles} />
         </div>
       </section>
 
@@ -741,7 +611,9 @@ export function PublicLanding() {
             </ul>
           </div>
         </div>
-        <div className={`${CONTAINER} border-t border-border/60 py-4 text-center text-xs text-muted-foreground`}>
+        <div
+          className={`${CONTAINER} border-t border-border/60 py-4 text-center text-xs text-muted-foreground`}
+        >
           {/* ICP 备案位：全仓未找到本站备案号（nginx 配置不在本仓）。备案下来后
               在这里补：<a href="https://beian.miit.gov.cn/">X ICP 备 XXXXXXXX 号</a>，
               绝不先挂占位号。 */}

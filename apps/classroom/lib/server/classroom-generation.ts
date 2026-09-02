@@ -33,12 +33,14 @@ import { boundedRunner } from '@/lib/utils/concurrency';
 import { corpusUnavailableReason } from '@/lib/server/knowledge-center';
 import {
   fetchEvidence,
+  requireEvidenceWhenConfigured,
   zeroEvidenceReason,
   evidenceDirective,
   evidenceForJudge,
   excerptDirective,
   injectExcerpts,
   type ExcerptPlacement,
+  type EvidenceBundle,
   type EvidenceChunk,
 } from '@/lib/generation/evidence-grounding';
 import {
@@ -63,6 +65,8 @@ import {
   auditCourseContent,
   auditSceneContent,
   extractTeachingText,
+  hashCourseScenes,
+  hashLearningContractPlan,
 } from '@/lib/generation/hallucination-audit';
 import { extractContentVerifiables, verifyContent } from '@/lib/generation/content-verify';
 import { buildAuditPanel } from '@/lib/server/audit-panel';
@@ -475,6 +479,9 @@ async function generateClassroomInner(
   }
 
   const { languageDirective, courseTitle, outlines, learningContract } = outlinesResult.data;
+  if (!learningContract) {
+    throw new Error('Teaching-quality contract missing after enforced outline generation');
+  }
   log.info(
     `Generated ${outlines.length} scene outlines (languageDirective: ${languageDirective}, courseTitle: ${courseTitle ?? 'n/a'})`,
   );
@@ -511,9 +518,7 @@ async function generateClassroomInner(
     videoManifest: buildVideoManifestFromOutlines(outlines),
     style: 'interactive',
     ...(vocationalActive ? { taskEngineMode: true } : {}),
-    ...(learningContract
-      ? { learningContract: buildLearningContractPlan(learningContract, outlines) }
-      : {}),
+    learningContract: buildLearningContractPlan(learningContract, outlines),
     createdAt: Date.now(),
     updatedAt: Date.now(),
     // 这门课出自哪个域/库，随课落盘。
@@ -613,7 +618,7 @@ async function generateClassroomInner(
     index: number;
     safeOutline: SceneOutline;
     content: NonNullable<Awaited<ReturnType<typeof generateSceneContent>>>;
-    sceneEvidence: Awaited<ReturnType<typeof fetchEvidence>>;
+    sceneEvidence: EvidenceBundle | null;
     sceneCorpus: string | undefined;
     grounding: { placements: ExcerptPlacement[]; candidates?: number } | undefined;
   };
@@ -929,7 +934,8 @@ async function generateClassroomInner(
       // 显式选的知识库优先，否则沿用培训领域；未建的库返回空而不是拿别的领域
       // 语料顶上（见 fetchEvidence）。检索、审核标注共用这一个值。
       const sceneCorpus = effectiveCorpus;
-      const sceneEvidence = await fetchEvidence(
+      const sceneEvidence = requireEvidenceWhenConfigured(
+        await fetchEvidence(
           `${courseTitle ?? ''} ${safeOutline.title} ${safeOutline.description ?? ''}`.trim(),
           sceneCorpus,
           undefined,
@@ -940,7 +946,8 @@ async function generateClassroomInner(
             : undefined,
           // 摘录代码形态也跟姿态档走：难度档管不住代码长度，零基础档限 5 行
           requirements.learnerProfile ? excerptCodeLineCap(requirements.learnerProfile) : undefined,
-        );
+        ),
+      );
       const scenePlan = courseBlueprint;
       const assemblyMode = sceneEvidence != null && process.env.EXCERPT_ASSEMBLY !== '0';
       // 四段指令**只给正文生成器**，攒在这里，不往 `safeOutline.description` 上原地累加。
@@ -1194,6 +1201,7 @@ async function generateClassroomInner(
         actions: scene.actions,
         audit: scene.audit,
       })),
+      learningContract: stage.learningContract!,
       judgeCalls: auditPanel.judgeCalls,
       ...(auditPanel.arbiterCall ? { arbiterCall: auditPanel.arbiterCall } : {}),
       defendCall: auditPanel.defendCall,
@@ -1221,7 +1229,12 @@ async function generateClassroomInner(
 
   // Recheck the exact final scene payload immediately before persistence. A failed scene stays
   // absent and therefore keeps the course as a draft; this gate never fabricates replacement work.
-  const contractFulfillment = validateLearningContractFulfillment(stage.learningContract, scenes);
+  const contractFulfillment = validateLearningContractFulfillment(stage.learningContract, scenes, {
+    requireSemanticAlignment: true,
+    alignment: stage.courseAudit?.learningAlignment,
+    currentCourseContentHash: hashCourseScenes(scenes),
+    currentLearningContractHash: hashLearningContractPlan(stage.learningContract),
+  });
   if (!contractFulfillment.fulfilled) {
     log.warn(
       `Course kept as draft: teaching contract unfulfilled — ${contractFulfillment.violations.join('; ')}`,

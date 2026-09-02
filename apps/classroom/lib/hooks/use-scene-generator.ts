@@ -17,8 +17,13 @@ import type {
 } from '@/lib/types/generation';
 import { useWorkshopStore } from '@/lib/store/workshop';
 import { useLectureDraftStore } from '@/lib/store/lecture-draft';
-import { hashCourseScenes, type SceneAudit } from '@/lib/generation/hallucination-audit';
+import {
+  hashCourseScenes,
+  hashLearningContractPlan,
+  type SceneAudit,
+} from '@/lib/generation/hallucination-audit';
 import { decideCourseLearnerRelease } from '@/lib/generation/learner-release';
+import type { LearningContractPlan } from '@/lib/generation/learning-contract';
 import type { AgentInfo } from '@/lib/generation/generation-pipeline';
 import type { Scene } from '@/lib/types/stage';
 import type { SpeechAction } from '@/lib/types/action';
@@ -30,6 +35,7 @@ import { generateMediaForOutlines } from '@/lib/media/media-orchestrator';
 import { lazyBoundedMap } from '@/lib/utils/concurrency';
 import { createLogger } from '@/lib/logger';
 import { redactCaliber } from '@/lib/metrics/redact-caliber';
+import { projectProfileToDomain } from '@/lib/knowledge/domain-context';
 import {
   isAbortError,
   withGenerationRetry,
@@ -477,7 +483,12 @@ export async function fetchSceneAudit(
 }
 
 export async function fetchCourseAudit(
-  params: { courseTitle: string; corpus?: string; scenes: Scene[] },
+  params: {
+    courseTitle: string;
+    corpus?: string;
+    scenes: Scene[];
+    learningContract: LearningContractPlan;
+  },
   signal?: AbortSignal,
 ): Promise<CourseAuditResult> {
   try {
@@ -825,13 +836,14 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
       const run = (async () => {
         const state = store.getState();
         const stage = state.stage;
-        if (!stage || state.scenes.length === 0) return false;
+        if (!stage?.learningContract || state.scenes.length === 0) return false;
 
         const result = await fetchCourseAudit(
           {
             courseTitle: stage.name,
             corpus: stage.origin?.corpus,
             scenes: state.scenes,
+            learningContract: stage.learningContract,
           },
           signal,
         );
@@ -1458,7 +1470,13 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
       }
       const completedOrders = new Set(state.scenes.map((scene) => scene.order));
       if (state.outlines.some((outline) => !completedOrders.has(outline.order))) return;
-      if (state.stage?.courseAudit?.courseContentHash === hashCourseScenes(state.scenes)) return;
+      if (
+        state.stage?.courseAudit?.courseContentHash === hashCourseScenes(state.scenes) &&
+        state.stage.courseAudit.learningAlignment?.learningContractHash ===
+          hashLearningContractPlan(state.stage.learningContract)
+      ) {
+        return;
+      }
 
       useStageStore.setState({ generationComplete: false, generationStatus: 'generating' });
       void finalizeCourse().then((released) => {
@@ -1530,14 +1548,15 @@ function withCourseOrigin(stored?: LearnerProfileFields): LearnerProfileFields |
   const corpus = origin?.corpus?.trim();
   const domain = origin?.domain?.trim();
   if (!corpus && !domain) return stored;
-  // 课记了什么就用什么：`corpusOf` 的口径是 corpus 优先、缺了才看 domain，
-  // 所以两格都按课记的覆盖，不与浏览器里那份混着用——混出来的组合
-  // （这门课的库 + 上一门课的域）盘上从来没存在过。
-  return {
-    ...(stored ?? {}),
-    ...(corpus ? { corpus } : { corpus: undefined }),
-    ...(domain ? { domain } : {}),
-  } as LearnerProfileFields;
+  const projected = projectProfileToDomain(stored ?? {}, corpus || domain!);
+  // 画像桶按实际语料库投影，但课程元数据里的 domain/corpus 是两个不同维度。
+  // 例如 software 领域可以由 iotdb 语料库供给，不能把二者强行写成同一个值；
+  // 课程只记了 domain 时，也必须清掉浏览器上一门课遗留的 corpus。
+  if (domain) projected.domain = domain;
+  else delete projected.domain;
+  if (corpus) projected.corpus = corpus;
+  else delete projected.corpus;
+  return projected;
 }
 
 /**

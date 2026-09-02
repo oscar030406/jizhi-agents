@@ -101,11 +101,24 @@ beforeEach(() => {
   window.localStorage.setItem('learnerProfile', JSON.stringify({ domain: 'ai', role: '学生' }));
   vi.stubGlobal(
     'fetch',
-    vi.fn(async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ blueprint: BLUEPRINT }),
-    })),
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/profile') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ fields: { domain: 'ai', role: '学生' } }),
+        };
+      }
+      if (url === '/api/adaptive/blueprint') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ blueprint: BLUEPRINT }),
+        };
+      }
+      throw new Error(`未预期的请求：${url}`);
+    }),
   );
 });
 

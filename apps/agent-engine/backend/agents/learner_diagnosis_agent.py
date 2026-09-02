@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
-from backend.schemas.learner import DiagnosisResult, LearnerProfile, PretestResult
+from backend.schemas.learner import DiagnosisCoverage, DiagnosisResult, LearnerProfile, PretestResult
+from backend.services.concept_graph import load_graph
 from backend.services.feasibility import assess_feasibility
+from backend.services.goal_concepts import domain_concepts
 
 from backend.services.llm_gateway import LLMGateway, llm_gateway
 from backend.services.personalization_service import build_personalization_blueprint
@@ -28,38 +27,11 @@ DEFAULT_CONCEPT_FLOOR = 0.45
 
 from backend.rag.retriever import DEFAULT_CORPUS_ALIASES as _MAIN_CORPUS  # 真源见 retriever（M3）
 
-#: ⑤ 站冻结金标的根目录。抽成常量是为了测试能把它指到 tmp——
-#: 否则测试只能自己重实现一遍查找逻辑，那就成了测自己的副本。
-GOLD_ROOT = Path(__file__).resolve().parents[2] / "data" / "eval" / "kc_gold_derived"
-
-
-#: 一个主题至少要有几个知识成分才算数。投目录树时金标会给每层目录都建一条，
-#: 父目录那几条（`智能制造/d2l-ros2`、`…/docs`）没有实质成分，是路径中间节点不是主题。
-MIN_TOPIC_COMPONENTS = 2
-
-
-def _topic_display_name(raw: str) -> str:
-    """主题名要能给人看。
-
-    投目录树时金标拿目录路径当主题名，长这样
-    「智能制造/d2l-ros2/docs/foxy/chapt1」。原样写进学情报告，
-    等于把我们的目录结构摊给学习者看。
-
-    **取末两段，不是末一段。** 只取末段会丢掉上下文——线上实测出来的是
-    「advance」「basic」「bt」这种，单看根本认不出是什么，
-    「你在 bt 上比较弱」和没说一样。两段是「foxy/chapt1」，勉强能读。
-    """
-    parts = [x for x in raw.replace("\\", "/").split("/") if x.strip()]
-    if not parts:
-        return raw
-    return "/".join(parts[-2:]) if len(parts) >= 2 else parts[-1]
-
-
 def concept_floors_for(corpus: str | None) -> dict[str, float]:
     """这个域的概念闸线表。
 
     - 主域 ai：用手工调过的 `CONCEPT_FLOORS`
-    - 其它域：读该库 ⑤ 站冻结金标里的 knowledge_components，统一闸线
+    - 其它域：只读该库 `<corpus>_intake/readiness.json` 的概念 ID，统一闸线
     - 读不到：**返回空表**——诚实无先验，绝不拿别的域的概念顶上
 
     空表意味着 `weak_concepts` 为空，大纲侧「薄弱概念：无」的分支会接住它，
@@ -67,38 +39,11 @@ def concept_floors_for(corpus: str | None) -> dict[str, float]:
     """
     name = (corpus or "").strip().lower()
     if name in _MAIN_CORPUS:
-        return dict(CONCEPT_FLOORS)
+        floors = {concept: DEFAULT_CONCEPT_FLOOR for concept in load_graph()}
+        floors.update(CONCEPT_FLOORS)
+        return floors
 
-    gold_dir = GOLD_ROOT / name
-    if not gold_dir.is_dir():
-        return {}
-
-    # **取主题层，不取成分层。** 一个金标文件是一个主题，里面的
-    # `knowledge_components` 是它的成分。
-    #
-    # 实测 smart-manufacturing 的成分有 370 个（`1-Nav2规划器` 这种），
-    # 而学习者的 mastery 里一个都没有——`get(c, 0.0)` 全返回 0，**370 个全判弱**。
-    # 两个实害：与学习端证据键（场景级概念）不在一个空间，永远判全弱；
-    # 以及「你有 370 个薄弱概念」这种诊断等于什么都没说。
-    #
-    # 主题层（该库 18 个）与 ai 域那 7 个概念粒度可比，也才是人读得懂的结论。
-    # 成分级留给覆盖复测——那里正需要细粒度。
-    topics: set[str] = set()
-    for topic_file in sorted(gold_dir.glob("*.json")):
-        if topic_file.name.startswith("_"):
-            continue  # `_freeze.json` 存的是计数与元信息，不是概念本身
-        try:
-            payload = json.loads(topic_file.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        components = payload.get("knowledge_components") or []
-        if len(components) < MIN_TOPIC_COMPONENTS:
-            # 投目录树时金标会给每层目录都建一条，父目录那几条没有实质成分。
-            # 它们不是主题，只是路径上的中间节点。
-            continue
-        raw = str(payload.get("topic") or "").strip() or topic_file.stem
-        topics.add(_topic_display_name(raw))
-    return {t: DEFAULT_CONCEPT_FLOOR for t in sorted(topics)}
+    return {concept: DEFAULT_CONCEPT_FLOOR for concept in domain_concepts(name)}
 
 SUMMARY_SYSTEM = (
     "你是学情诊断分析师。基于给定的掌握度向量、薄弱概念和推荐难度，"
@@ -124,23 +69,35 @@ class LearnerDiagnosisAgent:
         pretest: PretestResult,
         learning_goal: str | None = None,
     ) -> DiagnosisResult:
-        mastery = dict(pretest.concept_scores)
-        mastery.setdefault("agent_basics", profile.agent_level / 4)
-        mastery.setdefault("rag", profile.rag_level / 4)
-        mastery.setdefault("tool_calling", max(profile.agent_level, profile.python_level) / 4)
-        mastery.setdefault("langgraph", min(profile.agent_level, profile.engineering_level) / 4)
-        mastery.setdefault("evaluation", min(profile.engineering_level, profile.rag_level + 1) / 4)
-        mastery.setdefault("guardrails", min(profile.agent_level + 1, 4) / 4)
-        mastery.setdefault("deployment", profile.engineering_level / 4)
+        corpus = (profile.corpus or "ai").strip().lower()
+        raw_mastery = dict(pretest.concept_scores)
+        floors = concept_floors_for(corpus)
+        out_of_domain: list[str] = []
+        allowed = set(floors)
+        out_of_domain = sorted(set(raw_mastery) - allowed)
+        mastery = {concept: score for concept, score in raw_mastery.items() if concept in allowed}
+        if corpus in _MAIN_CORPUS:
+            mastery.setdefault("agent_basics", profile.agent_level / 4)
+            mastery.setdefault("rag", profile.rag_level / 4)
+            mastery.setdefault("tool_calling", max(profile.agent_level, profile.python_level) / 4)
+            mastery.setdefault("langgraph", min(profile.agent_level, profile.engineering_level) / 4)
+            mastery.setdefault(
+                "evaluation", min(profile.engineering_level, profile.rag_level + 1) / 4
+            )
+            mastery.setdefault("guardrails", min(profile.agent_level + 1, 4) / 4)
+            mastery.setdefault("deployment", profile.engineering_level / 4)
         mastery = {key: round(min(1.0, max(0.0, value)), 3) for key, value in mastery.items()}
 
-        floors = concept_floors_for(getattr(profile, "corpus", None))
-        weak_concepts = [c for c, floor in floors.items() if mastery.get(c, 0.0) < floor]
-        # 概念表非空却一条都没判弱，才挑两个最弱的当重点。
-        # **表本身是空的（这个域没有金标概念）时不许凑数**——凑出来的必然是
-        # `mastery` 里那几个 AI 概念，那正是跨域污染的来源。
-        if not weak_concepts and floors:
-            weak_concepts = sorted(mastery, key=mastery.get)[:2]
+        weak_concepts = [c for c, floor in floors.items() if c in mastery and mastery[c] < floor]
+        unmeasured_concepts = [c for c in floors if c not in mastery]
+        measured_count = len(floors) - len(unmeasured_concepts)
+        coverage = DiagnosisCoverage(
+            corpus=corpus,
+            total_concepts=len(floors),
+            measured_concepts=measured_count,
+            ratio=round(measured_count / len(floors), 3) if floors else 0.0,
+            out_of_domain_concepts=out_of_domain,
+        )
 
         difficulty = self._recommend_difficulty(mastery, learning_goal, profile)
 
@@ -153,12 +110,21 @@ class LearnerDiagnosisAgent:
             risks.append("cannot_self_verify_outputs")
 
         summary = (
-            f"建议 {profile.name} 从 {difficulty} 难度起步。"
-            f"薄弱概念：{'、'.join(weak_concepts)}。"
-            f"学习计划应以证据约束的实操任务为主，并保持评测结果可见。"
+            f"尚无「{corpus}」领域可用于诊断的测量证据；"
+            "未测量概念不会被判为薄弱，当前只给出保守起步难度。"
+            if measured_count == 0
+            else (
+                f"建议 {profile.name} 从 {difficulty} 难度起步。"
+                f"薄弱概念：{'、'.join(weak_concepts) or '无'}。"
+                f"已测量 {measured_count}/{len(floors)} 个领域概念。"
+            )
         )
         self.last_engine = "deterministic"
-        llm_summary, llm_risks = self._llm_interpretation(profile, mastery, weak_concepts, difficulty)
+        llm_summary, llm_risks = (
+            self._llm_interpretation(profile, mastery, weak_concepts, difficulty)
+            if measured_count > 0
+            else (None, [])
+        )
         if llm_summary:
             summary = llm_summary
             risks = list(dict.fromkeys(risks + llm_risks))
@@ -167,6 +133,7 @@ class LearnerDiagnosisAgent:
             profile,
             learning_goal or profile.learning_goal,
             mastery,
+            corpus,
         )
         # 时间预算够不够是确定性判定，不问模型。要补的知识点数优先取蓝图里 gap>0 的，
         # 蓝图缺席才退回薄弱概念——前者是目标闭包算出来的，更贴这个目标真正的工作量。
@@ -181,6 +148,8 @@ class LearnerDiagnosisAgent:
         return DiagnosisResult(
             mastery_vector=mastery,
             weak_concepts=weak_concepts,
+            unmeasured_concepts=unmeasured_concepts,
+            coverage=coverage,
             recommended_difficulty=difficulty,
             learning_risks=risks,
             diagnosis_summary=summary,
@@ -207,7 +176,7 @@ class LearnerDiagnosisAgent:
             return readiness
         from backend.services.concept_difficulty import goal_difficulty
 
-        goal_level = goal_difficulty(learning_goal)  # 1-4
+        goal_level = goal_difficulty(learning_goal, profile.corpus or "ai")  # 1-4
         readiness_int = ["L1", "L2", "L3", "L4"].index(readiness) + 1
         return f"L{min(readiness_int, goal_level)}"
 

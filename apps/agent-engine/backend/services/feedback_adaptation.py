@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from backend.schemas.learner import DiagnosisResult, FeedbackInput, LearnerProfile
+from backend.schemas.learner import DiagnosisCoverage, DiagnosisResult, FeedbackInput, LearnerProfile
 from backend.schemas.resources import FeedbackAdaptation, FeedbackDecision, WorkflowRun
+from backend.agents.learner_diagnosis_agent import concept_floors_for
 from backend.services.personalization_service import build_personalization_blueprint
 
-WEAK_MASTERY_THRESHOLD = 0.65
 MAX_FOCUS_CONCEPTS = 3
 
 
@@ -16,6 +16,20 @@ def adapt_feedback(
 ) -> FeedbackAdaptation:
     """根据可复算规则更新掌握度，并生成下一轮检索与生成约束。"""
     old_mastery = dict(parent_run.diagnosis.mastery_vector)
+    blueprint = parent_run.diagnosis.personalization_blueprint
+    required_concepts = {
+        skill.concept for skill in blueprint.required_skills
+    } if blueprint else set()
+    allowed = (
+        set(old_mastery)
+        | set(parent_run.diagnosis.unmeasured_concepts)
+        | required_concepts
+    )
+    unknown_feedback = sorted(set(feedback.concept_scores) - allowed)
+    if unknown_feedback:
+        raise ValueError(
+            "反馈概念不属于当前领域裁决蓝图：" + ", ".join(unknown_feedback)
+        )
     focus_concepts = _focus_concepts(parent_run, feedback)
     updated_mastery = dict(old_mastery)
 
@@ -33,13 +47,17 @@ def adapt_feedback(
         concept: round(updated_mastery.get(concept, 0.0) - old_mastery.get(concept, 0.0), 3)
         for concept in focus_concepts
     }
+    floors = concept_floors_for(profile.corpus or "ai")
     weak_concepts = [
         concept
         for concept, score in sorted(updated_mastery.items(), key=lambda item: (item[1], item[0]))
-        if score < WEAK_MASTERY_THRESHOLD
+        if concept in floors and score < floors[concept]
     ]
-    if not weak_concepts and updated_mastery:
-        weak_concepts = [min(updated_mastery, key=updated_mastery.get)]
+    expected = set(parent_run.diagnosis.mastery_vector) | set(
+        parent_run.diagnosis.unmeasured_concepts
+    ) | required_concepts
+    unmeasured = sorted(expected - set(updated_mastery))
+    measured_count = len(expected) - len(unmeasured)
 
     risks = list(parent_run.diagnosis.learning_risks)
     if decision.decision == "downgrade_explanation":
@@ -51,10 +69,19 @@ def adapt_feedback(
         profile,
         parent_run.learning_goal,
         updated_mastery,
+        profile.corpus or "ai",
     )
     diagnosis = DiagnosisResult(
         mastery_vector=updated_mastery,
         weak_concepts=weak_concepts[:5],
+        unmeasured_concepts=unmeasured,
+        coverage=DiagnosisCoverage(
+            corpus=(profile.corpus or "ai").strip().lower(),
+            total_concepts=len(expected),
+            measured_concepts=measured_count,
+            ratio=round(measured_count / len(expected), 3) if expected else 0.0,
+            out_of_domain_concepts=list(parent_run.diagnosis.coverage.out_of_domain_concepts),
+        ),
         recommended_difficulty=decision.updated_difficulty,
         learning_risks=risks,
         diagnosis_summary=(
@@ -89,7 +116,9 @@ def _focus_concepts(parent_run: WorkflowRun, feedback: FeedbackInput) -> list[st
 
 def _feedback_delta(feedback: FeedbackInput) -> float:
     quiz_signal = feedback.quiz_score - 0.5
-    confidence_signal = (feedback.confidence - 3) / 10
+    confidence_signal = (
+        (feedback.confidence - 3) / 10 if feedback.confidence is not None else 0.0
+    )
     return max(-0.18, min(0.18, quiz_signal * 0.3 + confidence_signal))
 
 

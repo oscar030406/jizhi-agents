@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from backend.orchestration.workflow import AgentTrainingWorkflow
 from backend.schemas.learner import DiagnosisResult
 from backend.schemas.resources import (
@@ -6,7 +9,6 @@ from backend.schemas.resources import (
     LearningResources,
 )
 from backend.services.data_loader import get_learner_profile
-from backend.services.personalization_service import build_personalization_blueprint
 from backend.services.claim_dispute_service import build_claim_disputes
 
 
@@ -74,7 +76,7 @@ def test_resource_mix_preference_changes_ratio_only():
     assert visual_mix.quiz_difficulty_band == coder_mix.quiz_difficulty_band
 
 
-def test_old_diagnosis_json_remains_compatible_without_blueprint():
+def test_diagnosis_json_requires_measurement_coverage():
     payload = {
         "mastery_vector": {"rag": 0.2},
         "weak_concepts": ["rag"],
@@ -83,9 +85,8 @@ def test_old_diagnosis_json_remains_compatible_without_blueprint():
         "diagnosis_summary": "old",
     }
 
-    diagnosis = DiagnosisResult.model_validate(payload)
-
-    assert diagnosis.personalization_blueprint is None
+    with pytest.raises(ValidationError):
+        DiagnosisResult.model_validate(payload)
 
 
 def test_resource_structure_changes_by_learner_type_for_same_goal():

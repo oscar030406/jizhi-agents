@@ -3,7 +3,11 @@ import path from 'path';
 import { NextRequest, NextResponse } from 'next/server';
 import { corpusOwnership } from '@/lib/accounts/org-store';
 import { isCourseLearnerReleased } from '@/lib/generation/learner-release';
-import { courseVisibleToOrg, viewerOrgId } from '@/lib/server/course-access';
+import {
+  canReadCourse,
+  courseReaderForRequest,
+  courseVisibleToOrg,
+} from '@/lib/server/course-access';
 import { CLASSROOMS_DIR, isValidClassroomId, readClassroom } from '@/lib/server/classroom-storage';
 import { parseRangeHeader } from '@/lib/server/http-range';
 import { createLogger } from '@/lib/logger';
@@ -71,15 +75,15 @@ export async function GET(
   }
 
   try {
-    const [classroom, ownership, orgId] = await Promise.all([
+    const [classroom, ownership, reader] = await Promise.all([
       readClassroom(classroomId),
       corpusOwnership(),
-      viewerOrgId(req),
+      courseReaderForRequest(req),
     ]);
     if (
       !classroom ||
       !isCourseLearnerReleased(classroom) ||
-      !courseVisibleToOrg(classroom, orgId, ownership)
+      !canReadCourse(classroomId, classroom, reader, ownership)
     ) {
       return notFound();
     }

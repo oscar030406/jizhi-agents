@@ -83,13 +83,18 @@ export function DependencyEdges({
   }, [edges]);
 
   useEffect(() => {
-    draw();
+    const frame = window.requestAnimationFrame(draw);
     const host = hostRef.current;
-    if (!host || typeof ResizeObserver === 'undefined') return;
+    if (!host || typeof ResizeObserver === 'undefined') {
+      return () => window.cancelAnimationFrame(frame);
+    }
     // 卡片高度随字体加载/换行变化都会改容器尺寸，观察容器即可覆盖
     const ro = new ResizeObserver(draw);
     ro.observe(host);
-    return () => ro.disconnect();
+    return () => {
+      window.cancelAnimationFrame(frame);
+      ro.disconnect();
+    };
   }, [draw]);
 
   return (

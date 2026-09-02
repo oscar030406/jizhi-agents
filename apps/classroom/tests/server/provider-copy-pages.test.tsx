@@ -30,7 +30,7 @@ describe('领域泛化页的提供方文案', () => {
     expect(html).toContain('真实生成端');
     expect(html).toContain('平台维护人员');
     expect(html).not.toMatch(
-      /data[\\/]|knowledge_base[\\/]|trial_courses[\\/]|readiness\.json|sources_manifest\.csv|本站运维|服务器上|复算命令/i,
+      /data[\\/]|knowledge_base[\\/]|trial_courses[\\/]|readiness\.json|sources_manifest\.csv|本站运维|服务器上|复算命令|检索桥|管道故障|索引文件时间/i,
     );
   });
 });

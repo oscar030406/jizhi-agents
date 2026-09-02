@@ -16,6 +16,7 @@
 import { useState } from 'react';
 import { Eye, EyeOff, ExternalLink } from 'lucide-react';
 import { domainLabel } from '@/lib/knowledge/domain-labels';
+import { redactCaliber } from '@/lib/metrics/redact-caliber';
 
 export function CorpusPreviewButton({ corpus }: { corpus: string }) {
   const [busy, setBusy] = useState(false);
@@ -86,7 +87,9 @@ export function CorpusPreviewButton({ corpus }: { corpus: string }) {
           ? `预览中：学习端会按「${domainLabel(corpus)}」的视角显示。预览是只读的——这期间学习端不写画像，改画像要先退出。30 分钟后自动失效。`
           : '开新标签进入学习端，按这个库的视角看首页、学习路径与课程墙。只改你自己浏览器里的视角，不动任何人的画像。'}
       </p>
-      {error && <p className="mt-1 text-[11px] text-red-600 dark:text-red-400">{error}</p>}
+      {error && (
+        <p className="mt-1 text-[11px] text-red-600 dark:text-red-400">{redactCaliber(error)}</p>
+      )}
     </div>
   );
 }

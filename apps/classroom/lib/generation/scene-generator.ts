@@ -516,13 +516,26 @@ function processLatexElements(
  * 失败返回 null，调用方回退模板槽位。LECTURE_SCENE_MODE=0 全局关。
  */
 /** 讲义 prompt 构建——流式路由（scene-content?stream）与本文件共用。 */
+function objectiveAwareDescription(outline: SceneOutline): string {
+  if (!outline.learningObjectives?.length) return outline.description;
+  const contracts = outline.learningObjectives
+    .map(
+      (objective) =>
+        `${objective.id}: 学习者要${objective.action}；条件：${objective.condition}；` +
+        `达标：${objective.successCriterion}`,
+    )
+    .join('\n');
+  return `${outline.description}\n\n【本场景必须履约的学习目标】\n${contracts}\n` +
+    '正文与活动必须给出服务这些目标的真实证据，不能只复述目标词语。';
+}
+
 export function buildLecturePrompts(
   outline: SceneOutline,
   languageDirective?: string,
 ): { system: string; user: string } | null {
   return buildPrompt(PROMPT_IDS.LECTURE_SCENE_CONTENT, {
     title: outline.title,
-    description: outline.description,
+    description: objectiveAwareDescription(outline),
     keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
     languageDirective: languageDirective || '',
   });
@@ -698,7 +711,7 @@ async function generateSlideBySlots(
 ): Promise<GeneratedSlideContent | null> {
   const prompts = buildPrompt(PROMPT_IDS.SLIDE_CONTENT_SLOTS, {
     title: outline.title,
-    description: outline.description,
+    description: objectiveAwareDescription(outline),
     keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
     teacherContext,
     languageDirective: languageDirective || '',
@@ -919,7 +932,7 @@ async function generateSlideContentRaw(
 
   const prompts = buildPrompt(PROMPT_IDS.SLIDE_CONTENT, {
     title: outline.title,
-    description: outline.description,
+    description: objectiveAwareDescription(outline),
     keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
     elements: '（根据要点自动生成）',
     assignedImages: assignedImagesText,
@@ -1070,7 +1083,7 @@ async function generateQuizContent(
 
   const prompts = buildPrompt(PROMPT_IDS.QUIZ_CONTENT, {
     title: outline.title,
-    description: outline.description,
+    description: objectiveAwareDescription(outline),
     keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
     questionCount: quizConfig.questionCount,
     difficulty: quizConfig.difficulty,
@@ -1228,11 +1241,19 @@ async function generatePBLSceneContent(
   }
 
   if (!v2Disabled) {
+    const plannerOutline: SceneOutline = {
+      ...outline,
+      description: objectiveAwareDescription(outline),
+      pblConfig: {
+        ...pblConfig,
+        projectDescription: `${pblConfig.projectDescription}\n\n${objectiveAwareDescription(outline)}`,
+      },
+    };
     const plannerInput: PBLPlannerV2Input = {
-      outline,
+      outline: plannerOutline,
       courseContext: {
         // Keep the planner scoped to the active PBL outline.
-        allOutlines: [outline],
+        allOutlines: [plannerOutline],
         languageDirective: languageDirective || DEFAULT_LANGUAGE_DIRECTIVE,
       },
       user: userRequirements
@@ -1298,7 +1319,7 @@ async function generatePBLSceneContent(
     const projectConfig = await generatePBLContent(
       {
         projectTopic: pblConfig.projectTopic,
-        projectDescription: pblConfig.projectDescription,
+        projectDescription: `${pblConfig.projectDescription}\n\n${objectiveAwareDescription(outline)}`,
         targetSkills: pblConfig.targetSkills,
         issueCount: pblConfig.issueCount,
         languageDirective: languageDirective || DEFAULT_LANGUAGE_DIRECTIVE,
@@ -1373,7 +1394,7 @@ export async function generateTemplateWidgetContent(
 ): Promise<GeneratedInteractiveContent | null> {
   const prompts = buildPrompt(PROMPT_IDS.INTERACTIVE_TEMPLATE_SELECT, {
     title: outline.title,
-    description: outline.description,
+    description: objectiveAwareDescription(outline),
     keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
     templateCatalog: buildTemplateCatalogText(usedTemplateIds),
     languageDirective: languageDirective || '',
@@ -1454,7 +1475,7 @@ export async function generateWidgetContent(
       variables = {
         title: outline.title,
         diagramType: widgetOutline.diagramType || 'flowchart',
-        description: outline.description,
+        description: objectiveAwareDescription(outline),
         keyPoints: (outline.keyPoints || []).join('\n'),
         nodeCount: widgetOutline.nodeCount ?? prescribedNodes.length,
         prescribedNodes,
@@ -1470,7 +1491,7 @@ export async function generateWidgetContent(
       variables = {
         title: outline.title,
         programmingLanguage: widgetOutline.language || 'python',
-        description: outline.description,
+        description: objectiveAwareDescription(outline),
         keyPoints: (outline.keyPoints || []).join('\n'),
         starterCode: '',
         testCases: '', // AI generates appropriate test cases based on challenge
@@ -1484,7 +1505,7 @@ export async function generateWidgetContent(
       variables = {
         title: outline.title,
         gameType: widgetOutline.gameType || 'quiz',
-        description: outline.description,
+        description: objectiveAwareDescription(outline),
         keyPoints: (outline.keyPoints || []).join('\n'),
         scoring: { correctPoints: 10, speedBonus: 5 },
         languageDirective: languageDirective || '',
@@ -1496,7 +1517,7 @@ export async function generateWidgetContent(
       variables = {
         title: outline.title,
         visualizationType: widgetOutline.visualizationType || 'custom',
-        description: outline.description,
+        description: objectiveAwareDescription(outline),
         keyPoints: (outline.keyPoints || []).join('\n'),
         objects: widgetOutline.objects || [],
         interactions: widgetOutline.interactions || [],
@@ -1514,7 +1535,7 @@ export async function generateWidgetContent(
         title: outline.title,
         procedureType: widgetOutline.procedureType || 'custom',
         task: widgetOutline.task || widgetOutline.concept || outline.title,
-        description: outline.description,
+        description: objectiveAwareDescription(outline),
         keyPoints: (outline.keyPoints || []).join('\n'),
         tools: widgetOutline.tools || [],
         steps: widgetOutline.steps || [],
@@ -1883,7 +1904,7 @@ export async function generateSceneActions(
     const prompts = buildPrompt(PROMPT_IDS.SLIDE_ACTIONS, {
       title: outline.title,
       keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
-      description: outline.description,
+      description: objectiveAwareDescription(outline),
       elements: elementsText,
       courseContext: buildCourseContext(ctx),
       agents: agentsText,
@@ -1913,7 +1934,7 @@ export async function generateSceneActions(
     const prompts = buildPrompt(PROMPT_IDS.QUIZ_ACTIONS, {
       title: outline.title,
       keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
-      description: outline.description,
+      description: objectiveAwareDescription(outline),
       questions: questionsText,
       courseContext: buildCourseContext(ctx),
       agents: agentsText,
@@ -1966,7 +1987,7 @@ export async function generateSceneActions(
     const prompts = buildPrompt(PROMPT_IDS.INTERACTIVE_ACTIONS, {
       title: outline.title,
       keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
-      description: outline.description,
+      description: objectiveAwareDescription(outline),
       conceptName: config?.conceptName || outline.title,
       designIdea: config?.designIdea || '',
       widgetType: content.widgetType || outline.widgetType || '',
@@ -2001,7 +2022,7 @@ export async function generateSceneActions(
     const prompts = buildPrompt(PROMPT_IDS.PBL_ACTIONS, {
       title: outline.title,
       keyPoints: (outline.keyPoints || []).map((p, i) => `${i + 1}. ${p}`).join('\n'),
-      description: outline.description,
+      description: objectiveAwareDescription(outline),
       projectTopic: pblConfig?.projectTopic || outline.title,
       projectDescription: pblConfig?.projectDescription || outline.description,
       courseContext: buildCourseContext(ctx),

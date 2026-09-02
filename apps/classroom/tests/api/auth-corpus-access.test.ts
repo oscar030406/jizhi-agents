@@ -12,7 +12,7 @@ vi.mock('@/lib/accounts/store', () => ({
   accountForSession: mocks.accountForSession,
   readProfile: mocks.readProfile,
   writeProfile: mocks.writeProfile,
-  authenticate: vi.fn(),
+  authenticateAndCreateSession: vi.fn(),
   createAccount: vi.fn(),
   createSession: vi.fn(),
   destroySession: vi.fn(),

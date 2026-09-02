@@ -50,15 +50,7 @@ export default async function IntakeRunsPage() {
   // run 行的库名走 domainLabel，先灌域注册清单（同 admin 总览页的补法）
   const { readDomainRegistry } = await import('@/lib/server/domain-registry');
   await readDomainRegistry().catch(() => null);
-  const runs = org
-    ? await listRuns(
-        30,
-        org.id,
-        (run) =>
-          !isScratchCorpus(run.corpus) &&
-          !/(?:fullprobe|fullpath[-_]?probe|(?:^|[-_])probe(?:[-_]|$))/i.test(run.corpus),
-      )
-    : [];
+  const runs = org ? await listRuns(30, org.id, (run) => !isScratchCorpus(run.corpus)) : [];
 
   return (
     <>

@@ -36,7 +36,10 @@ function sourceLabel(dir: string): string {
 }
 
 function tierRangeLabel(range: string): string {
-  const parts = range.split('-').map((s) => s.trim()).filter(Boolean);
+  const parts = range
+    .split('-')
+    .map((s) => s.trim())
+    .filter(Boolean);
   if (parts.length === 0) return '—';
   return [...new Set(parts.map(tierLabel))].join(' – ');
 }
@@ -56,16 +59,15 @@ function Gate({ ok, label }: { readonly ok: boolean; readonly label: string }) {
 }
 
 export function DomainIntakeTable({ intakes }: { readonly intakes: readonly DomainIntake[] }) {
-  const visibleIntakes = intakes.filter(
-    (intake) =>
-      !isScratchCorpus(intake.domain) &&
-      !/(?:fullprobe|fullpath[-_]?probe|(?:^|[-_])probe(?:[-_]|$))/i.test(intake.domain),
-  );
+  const visibleIntakes = intakes.filter((intake) => !isScratchCorpus(intake.domain));
   if (visibleIntakes.length === 0) {
     return (
       <p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
         还没有接入过领域。请由所属机构管理者在{' '}
-        <Link href="/admin/knowledge" className="underline underline-offset-2 hover:text-foreground">
+        <Link
+          href="/admin/knowledge"
+          className="underline underline-offset-2 hover:text-foreground"
+        >
           知识库页面
         </Link>{' '}
         使用“接入新知识库”；系统处理后会显示就绪度报告。
@@ -96,7 +98,10 @@ export function DomainIntakeTable({ intakes }: { readonly intakes: readonly Doma
 
           <dl className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
             {[
-              ['收进的文件', `${d.acceptedFiles}${d.rejectedFiles ? ` （退回 ${d.rejectedFiles}）` : ''}`],
+              [
+                '收进的文件',
+                `${d.acceptedFiles}${d.rejectedFiles ? ` （退回 ${d.rejectedFiles}）` : ''}`,
+              ],
               ['入库可检索', d.chunks ? `${d.chunks} 个片段` : '未入库'],
               ['切块', `${d.sections} 节`],
               ['概念词表', `${d.conceptCount} 个`],
@@ -104,9 +109,7 @@ export function DomainIntakeTable({ intakes }: { readonly intakes: readonly Doma
               ['章级概念面', d.chapterCount ? `${d.chapterCount} 个` : '—'],
               [
                 '章级前置边',
-                d.candidateEdges
-                  ? `${d.chapterEdges} / ${d.candidateEdges} 结构候选`
-                  : '—',
+                d.candidateEdges ? `${d.chapterEdges} / ${d.candidateEdges} 结构候选` : '—',
               ],
               ['节级前置边', d.nodeEdges ? `${d.nodeEdges} 个概念有前置` : '—'],
               ['原文出自', sourceLabel(d.sourceDir)],

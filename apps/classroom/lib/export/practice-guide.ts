@@ -10,6 +10,7 @@
 import type { Scene } from '@/lib/types/stage';
 import type { SceneOutline, LearnerProfileFields } from '@/lib/types/generation';
 import type { ProceduralSkillConfig } from '@/lib/types/widgets';
+import { projectProfileToDomain } from '@/lib/knowledge/domain-context';
 import { redact } from '@/lib/privacy/redact';
 
 export function isProceduralScene(scene: Scene): boolean {
@@ -94,7 +95,9 @@ export function buildPracticeGuideMarkdown(
     if (config?.steps && config.steps.length > 0) {
       lines.push('### 操作步骤', '');
       config.steps.forEach((step, n) => {
-        lines.push(`${n + 1}. **${step.title}**${step.description ? ` — ${step.description}` : ''}`);
+        lines.push(
+          `${n + 1}. **${step.title}**${step.description ? ` — ${step.description}` : ''}`,
+        );
         if (step.tools?.length) lines.push(`   - 所需工具：${step.tools.join('、')}`);
         for (const check of step.successCriteria ?? []) lines.push(`   - 验收点：${check}`);
       });
@@ -117,10 +120,12 @@ export function exportPracticeGuide(
   stageName: string,
   scenes: Scene[],
   outlines: SceneOutline[],
+  domain?: string,
 ): boolean {
   let profile: LearnerProfileFields | null = null;
   try {
-    profile = JSON.parse(localStorage.getItem('learnerProfile') ?? 'null');
+    const stored = JSON.parse(localStorage.getItem('learnerProfile') ?? 'null');
+    profile = stored && domain ? projectProfileToDomain(stored, domain) : null;
   } catch {
     // 画像损坏就不带画像行
   }

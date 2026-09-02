@@ -17,7 +17,6 @@ import PrivacyPage from '@/app/privacy/page';
 import EvidencePage from '@/app/evidence/page';
 import { StationRow } from '@/components/admin/knowledge-center';
 import { SourceFilesPanel } from '@/components/admin/knowledge-source';
-import { MyPathCard } from '@/components/home/learning-overview';
 import { PublicLanding } from '@/components/home/public-landing';
 import type { SourceView } from '@/lib/server/knowledge-source';
 
@@ -28,10 +27,13 @@ describe('面向使用者的部署文案', () => {
     const html = render(<PrivacyPage />);
 
     expect(html).toContain('当前浏览器');
-    expect(html).toContain('学习者端不提供服务商或模型选择');
+    expect(html).toContain('平台不会向浏览器下发服务端密钥');
     expect(html).toContain('平台模型连接信息');
     expect(html).toContain('所属机构管理者');
     expect(html).not.toMatch(/本机|硅基流动|本机默认模型|访客可选择|data\/knowledge_base/i);
+    expect(html).not.toMatch(
+      /account_sessions|runtime_\*|maic:device|settings-storage|programming_level/i,
+    );
   });
 
   it('公开审核回放保留审核与导学证据，但没有底部指标台账', () => {
@@ -47,13 +49,7 @@ describe('面向使用者的部署文案', () => {
 
     expect(html).toContain('aria-label="学习需求"');
     expect(html).not.toContain('课堂角色');
-  });
-
-  it('首页学习路径空态引导等待机构课程规划，不展示内部数据文件', () => {
-    const html = render(<MyPathCard progressByCourseId={{}} path={{ nodes: [], tracks: [] }} />);
-
-    expect(html).toContain('所属机构补齐课程规划后');
-    expect(html).not.toMatch(/data[\\/]learning-path\.json|tracks 为空/i);
+    expect(html).not.toMatch(/落盘|当前这个部署/);
   });
 
   it('知识库管线显示接收状态与最近处理时间，不显示服务器路径或测试产物名', () => {
@@ -112,6 +108,6 @@ describe('面向使用者的部署文案', () => {
     expect(html).toContain('系统当前无法读取这批原件');
     expect(html).toContain('导出原件清单 CSV');
     expect(html).toContain('看原文');
-    expect(html).not.toMatch(/D:\\|data[\\/]|fullprobe|本机|盘上/i);
+    expect(html).not.toMatch(/D:\\|data[\\/]|fullprobe|本机|盘上|source_id|slug|为空数组|写死/i);
   });
 });

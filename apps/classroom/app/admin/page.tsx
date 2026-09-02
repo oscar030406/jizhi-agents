@@ -57,11 +57,7 @@ import {
   readHeadlineMetrics,
   rollup,
 } from '@/lib/server/admin-overview';
-import {
-  readCoverageRuns,
-  readDifficultySupply,
-  readDomainMaps,
-} from '@/lib/server/knowledge-map';
+import { readCoverageRuns, readDifficultySupply, readDomainMaps } from '@/lib/server/knowledge-map';
 import { Caliber } from '@/components/admin/caliber';
 import { AdminCourseTable } from '@/components/admin/course-table';
 import { CoveragePanel, DifficultySupply } from '@/components/admin/coverage-panel';
@@ -132,7 +128,7 @@ function Section({
 
 export default async function AdminPage() {
   if (!accountsEnabled()) {
-    return <Denied reason="本部署未配置数据库，账户与管理端未启用。" />;
+    return <Denied reason="本站暂未启用账户系统与管理端。" />;
   }
   const account = await accountForSession((await cookies()).get(SESSION_COOKIE)?.value);
   if (!account) {
@@ -144,7 +140,7 @@ export default async function AdminPage() {
 
   // 先灌域注册清单：本页语料卡标题走 domainLabel，服务端内存视图没人灌时
   // 新库上屏就是裸英文目录名（smart-manufacturing 08-30 线上实测撞上，
-  // 同病 knowledge-center.ts readCorporaWithDrift 已修过一次——兄弟页这里补上）。
+  // 与知识库中心同样先灌实时域注册表，避免首屏显示裸目录名。
   const { readDomainRegistry } = await import('@/lib/server/domain-registry');
   await readDomainRegistry().catch(() => null);
 
@@ -188,7 +184,7 @@ export default async function AdminPage() {
             原来它是标题右边一颗 pill，和「领域泛化」并排，读起来像次级导航；
             首屏被四张对外指标卡占满，管理者进来第一眼看到的是评测数字而不是能做的事。
             现在换库独占标题正下方一条段落带，按钮是全页唯一的实心大按钮，
-            接入记录（流水线直播）与领域泛化降为它下面的文字链跟随。
+            三个常驻入口另设独立工作台区，与接入操作并列。
             动线：进管理端 →「接入新知识库」→ 填表「发起接入」→「确认发起」= 3 次点击。 */}
         <section className={cn('py-10 sm:py-12', BAND_SOFT)}>
           <div className={cn(CONTAINER, 'flex flex-wrap items-center justify-between gap-6')}>
@@ -209,9 +205,17 @@ export default async function AdminPage() {
               接入新知识库
             </Link>
           </div>
-          {/* 三个常驻工作台入口。08-30 用户验收：原来是按钮下三条 text-xs 文字链，
-              「应该放在明显的位置而不是依附在下面」——升级为并排功能卡。 */}
-          <div className={cn(CONTAINER, 'mt-8 grid gap-4 sm:grid-cols-3')}>
+        </section>
+
+        {/* 常驻工作台独立成区，不依附于「接入新知识库」操作。 */}
+        <section className="border-b border-border/70 py-10 sm:py-12">
+          <div className={CONTAINER}>
+            <h2 className="text-[28px] font-semibold leading-snug tracking-tight">管理工作台</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              接入记录、跨域体检和机构供给分别进入独立工作区。
+            </p>
+          </div>
+          <div className={cn(CONTAINER, 'mt-6 grid gap-4 sm:grid-cols-3')}>
             {(
               [
                 {
@@ -237,14 +241,16 @@ export default async function AdminPage() {
               <Link
                 key={href}
                 href={href}
-                className="group flex items-center gap-4 rounded-xl border border-border bg-white p-5 shadow-card transition-colors hover:border-foreground/30 dark:bg-background"
+                className="group flex items-center gap-4 rounded-xl border border-border bg-white p-6 shadow-card transition-colors hover:border-foreground/30 dark:bg-background"
               >
                 <span className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-blue-soft text-blue-deep dark:bg-muted dark:text-foreground">
                   <Icon className="size-5" />
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block text-[15px] font-semibold leading-snug">{title}</span>
-                  <span className="mt-0.5 block truncate text-xs text-muted-foreground">{desc}</span>
+                  <span className="block text-lg font-semibold leading-snug">{title}</span>
+                  <span className="mt-1 block text-sm leading-relaxed text-muted-foreground">
+                    {desc}
+                  </span>
                 </span>
                 <ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
               </Link>
@@ -280,9 +286,8 @@ export default async function AdminPage() {
           <MetricBand metrics={metrics} totals={totals} />
           <Caliber summary="展开口径：这一页的数字从哪来">
             <p>
-              本页所有数字来自 <code className="font-mono">metrics.json</code> 的口径台账，
-              或打开页面时从课程文件实时计算，两者之外不取值、读不到就显示「—」。
-              每张卡的折叠里有该指标的口径原文与复算命令。
+              本页数字只采用平台已归档的评测结果与当前课程审核记录；无法读取时显示「—」，
+              不使用旧结果补位。每张卡均可展开查看指标口径与来源。
             </p>
           </Caliber>
         </Section>
@@ -295,8 +300,8 @@ export default async function AdminPage() {
               压成一个「抓错数」会抹平语义。
             </p>
             <p>
-              覆盖率只对有金标清单的课出数，其余「—」；生成时长是墙钟，
-              <strong className="font-medium">带并发标记的那几门不能当单课成本读</strong>。
+              覆盖率只对有金标清单的课出数，其余「—」；生成时长为任务实际经过时间，
+              <strong className="font-medium">带并发标记的课程不能当作独占运行耗时</strong>。
             </p>
           </Caliber>
         </Section>
@@ -313,9 +318,7 @@ export default async function AdminPage() {
             </div>
           </div>
           <Caliber summary="展开口径：覆盖缺口说的是资源，不是学情">
-            <p>
-              覆盖缺口 = 金标里有、生成的课没讲到的知识成分；难度供给 = 概念图谱各难度档的量。
-            </p>
+            <p>覆盖缺口 = 金标里有、生成的课没讲到的知识成分；难度供给 = 概念图谱各难度档的量。</p>
             <p>
               这是<strong className="font-medium">资源</strong>的缺口，
               不是学习者的知识盲区——后者是个人维度，在 <code className="font-mono">/report</code>。
@@ -330,8 +333,8 @@ export default async function AdminPage() {
         <Section icon={Route} title="学习路径规划图">
           {maps.length === 0 ? (
             <p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-xs leading-relaxed text-muted-foreground">
-              读不到引擎数据。这张图来自服务器上的引擎产物，本站当前取不到。
-              刷新页面重试；反复出现请联系本站运维检查引擎连接。
+              系统暂时无法读取学习路径图所需的领域数据，因此不展示旧图。
+              请刷新页面重试；反复出现请联系平台维护人员。
             </p>
           ) : (
             <div className="space-y-8">

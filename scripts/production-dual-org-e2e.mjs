@@ -1,16 +1,22 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import process from "node:process";
 
 const DEFAULT_BASE = "https://jizhi.chenmingkun.cn";
 const REQUEST_TIMEOUT_MS = 75_000;
 const BLUEPRINT_TIMEOUT_MS = 45_000;
 const GENERATION_TIMEOUT_MS = 55 * 60_000;
+const PRACTICE_DRAFT_TIMEOUT_MS = 510_000;
 const POLL_INTERVAL_MS = 5_000;
-const HONEST_JOB_EMPTY =
-  "本机构管理者在接入该领域时未提供岗位/技能清单";
+const HONEST_JOB_EMPTY = "本机构管理者在接入该领域时未提供岗位/技能清单";
+const DOMAIN_BUCKET_CONCEPT = "跨域同名概念验收";
+const DOMAIN_BUCKET_VALUES = Object.freeze({
+  ai: 0.23,
+  "smart-manufacturing": 0.81,
+});
+const DOCUMENT_REJECTION_STATUSES = new Set([401, 403, 404]);
 
 const ACTORS = Object.freeze({
   A: { username: "orgdemo_mgr_vf1", role: "manager", orgRole: "owner" },
@@ -79,13 +85,10 @@ const AI_JOB_TERMS =
   /(?:\bagents?\b|智能体|\brag\b|检索增强|向量检索|\bllm\b|大模型)/iu;
 const SMART_ONLY_TERMS =
   /(?:智能制造|工业视觉|视觉检测|装配|工位|plc|s7[- ]?1200|ros ?2|设备运维|故障诊断|工业机器人)/iu;
-const PATH_SOURCES = new Set(["intake", "index-tags"]);
-const AI_CURATED_PATH_MARKERS = Object.freeze([
-  "学习路径全景",
-  "课程按三个模块排",
-  "主线合计",
-]);
+const PATH_SOURCES = new Set(["index-graph", "intake", "index-tags"]);
 const REPORT_PAGE_MARKERS = Object.freeze(["个人学情与资源匹配度报告"]);
+const SCRATCH_DOMAIN =
+  /(?:fullprobe|fullpath[-_]?probe|(?:^|[-_])probe(?:[-_]|$))/iu;
 const PAGE_REJECTION =
   /(?:无权访问|没有访问权限|请先登录后|登录已失效|access denied)/iu;
 const CONTRACT_PHASES = Object.freeze([
@@ -118,12 +121,22 @@ function scenarioRequiredCheckIds(key) {
   ];
 }
 
+function remediationRequiredCheckIds(key) {
+  return [
+    `remediation.${key}.real-wrong.graded`,
+    `remediation.${key}.real-wrong.evidence-changed`,
+    `remediation.${key}.real-wrong.mastery-changed`,
+    `remediation.${key}.real-wrong.next-resource-changed`,
+  ];
+}
+
 function requiredCheckIds(mode) {
   const ids = [
     "cli.password",
     ...Object.keys(ACTORS).map((actor) => `auth.${actor}`),
     ...Object.keys(ACTORS).map((actor) => `org.${actor}.membership`),
     "org.dual-org-matrix",
+    "hygiene.no-scratch-domains",
     ...Object.keys(ACTORS).flatMap((actor) =>
       ["assignments", "course-domains", "domains", "classrooms"].map(
         (source) => `source.${actor}.${source}`,
@@ -137,6 +150,9 @@ function requiredCheckIds(mode) {
   ];
   if (mode === "generate") {
     ids.push(
+      "persistence.owned-document.nonowner-get-rejected",
+      "persistence.owned-document.nonowner-put-rejected",
+      "persistence.owned-document.nonowner-delete-rejected",
       "generate.safety-preflight",
       ...SCENARIOS.flatMap((scenario) => [
         `profile.${scenario.key}.saved`,
@@ -144,11 +160,19 @@ function requiredCheckIds(mode) {
         `generate.${scenario.key}.accepted`,
         `generate.${scenario.key}.completed`,
         `assign.${scenario.key}.created`,
+        `practice.${scenario.key}.drafted`,
+        `practice.${scenario.key}.published`,
+        `practice.${scenario.key}.restored`,
       ]),
       "negative-assignment.A-to-D.rejected",
       "negative-assignment.A-to-D.unchanged",
       "negative-assignment.C-to-B.rejected",
       "negative-assignment.C-to-B.unchanged",
+      "report.same-concept.profile-buckets",
+      "report.same-concept.evidence-buckets",
+      ...SCENARIOS.flatMap((scenario) =>
+        remediationRequiredCheckIds(scenario.key),
+      ),
     );
   }
   return Object.freeze(ids);
@@ -169,7 +193,9 @@ function usage() {
 安全边界：
   默认模式只创建登录会话并读取/计算验收数据，不改业务数据。
   只有 --generate 会通过 /api/profile 保存并复读 B/D 的目标领域画像，
-  让 A/C 并发生成两门课，分别定向指派给 B/D，并验证跨机构指派被拒绝；
+  让 A/C 并发生成两门课，分别定向指派给 B/D，重建并审核各域实操项目，
+  再验证跨机构指派、文档越权、同名概念分桶与答错补救；
+  临时文档、证据 session 与同名概念字段均按精确 ID/键回收；
   不创建账号、不改密码/知识库归属，也不删除或撤回任何生产数据。
 
 输出：stdout 仅输出最终 JSON 报告；生成进度写 stderr。任一检查失败时退出码非零。`;
@@ -188,6 +214,19 @@ function normalizeBase(value) {
     throw new Error("--base 不得携带用户名或密码");
   if (url.search || url.hash) throw new Error("--base 不得携带 query 或 hash");
   url.pathname = url.pathname.replace(/\/+$/, "") || "/";
+  if (url.pathname !== "/") throw new Error("--base 只允许站点根地址");
+  const production =
+    url.protocol === "https:" &&
+    url.hostname === "jizhi.chenmingkun.cn" &&
+    (!url.port || url.port === "443");
+  const local =
+    url.protocol === "http:" &&
+    ["localhost", "127.0.0.1", "[::1]", "::1"].includes(url.hostname);
+  if (!production && !local) {
+    throw new Error(
+      "--base 只允许生产站 https://jizhi.chenmingkun.cn 或本机 HTTP 地址",
+    );
+  }
   return url.toString().replace(/\/$/, "");
 }
 
@@ -249,8 +288,26 @@ function runSelfTest() {
   );
   test(() =>
     assert.equal(
-      parseArgs(["--base=https://example.com/"]).base,
-      "https://example.com",
+      parseArgs(["--base=https://jizhi.chenmingkun.cn/"]).base,
+      DEFAULT_BASE,
+    ),
+  );
+  test(() =>
+    assert.throws(
+      () => parseArgs(["--base=https://example.com/"]),
+      /只允许生产站/,
+    ),
+  );
+  test(() =>
+    assert.throws(
+      () => parseArgs(["--base=http://jizhi.chenmingkun.cn/"]),
+      /只允许生产站/,
+    ),
+  );
+  test(() =>
+    assert.throws(
+      () => parseArgs(["--base=http://localhost:3000/nested"]),
+      /站点根地址/,
     ),
   );
   test(() => assert.throws(() => parseArgs(["--base"]), /缺少 URL/));
@@ -279,36 +336,139 @@ function runSelfTest() {
       "invalid-empty",
     ),
   );
-
-  const curatedPathFixture = {
-    status: 200,
-    contentType: "text/html; charset=utf-8",
-    body: [
-      "<h1>学习路径全景</h1>",
-      "<p>课程按三个模块排</p>",
-      "<p>主线合计 2 门课</p>",
-      '<svg aria-label="课程路径图，1 门课、0 条先修边"></svg>'.repeat(3),
-      '<script>self.__next_f.push([1,"{\\\"nodes\\\":[{\\\"id\\\":\\\"node-a\\\",\\\"title\\\":\\\"运行时课程甲\\\",\\\"layer\\\":0,\\\"slot\\\":0,\\\"difficulty\\\":1,\\\"courseId\\\":\\\"course-a\\\"},{\\\"id\\\":\\\"node-b\\\",\\\"title\\\":\\\"运行时课程乙\\\",\\\"layer\\\":1,\\\"slot\\\":0,\\\"difficulty\\\":2,\\\"courseId\\\":null}]}"])</script>',
-    ].join(""),
-  };
-  const curatedPath = inspectCuratedAiPathPage(curatedPathFixture);
-  test(() => assert.equal(curatedPath.accepted, true));
-  test(() => assert.equal(curatedPath.provenanceAccepted, true));
+  test(() => assert.equal(SCRATCH_DOMAIN.test("fullprobe"), true));
+  test(() => assert.equal(SCRATCH_DOMAIN.test("smart-manufacturing"), false));
   test(() =>
-    assert.deepEqual(curatedPath.concepts, [
-      "node-a",
-      "运行时课程甲",
-      "node-b",
-      "运行时课程乙",
-    ]),
+    assert.equal(
+      documentRequestRejected({
+        status: 404,
+        body: { error: { code: "DOCUMENT_NOT_FOUND" } },
+      }),
+      true,
+    ),
+  );
+  test(() => assert.equal(documentRequestRejected({ status: 204 }), false));
+  test(() =>
+    assert.equal(
+      runtimeSessionMissing({
+        status: 404,
+        body: { error: { code: "SESSION_NOT_FOUND" } },
+      }),
+      true,
+    ),
+  );
+  test(() => assert.equal(runtimeSessionMissing({ status: 204 }), false));
+  test(() =>
+    assert.equal(
+      inspectDomainBuckets({
+        conceptMasteryByDomain: {
+          ai: { [DOMAIN_BUCKET_CONCEPT]: DOMAIN_BUCKET_VALUES.ai },
+          "smart-manufacturing": {
+            [DOMAIN_BUCKET_CONCEPT]:
+              DOMAIN_BUCKET_VALUES["smart-manufacturing"],
+          },
+        },
+      }).accepted,
+      true,
+    ),
   );
   test(() =>
     assert.equal(
-      inspectCuratedAiPathPage({
-        ...curatedPathFixture,
-        body: curatedPathFixture.body.replace("主线合计", "合计"),
-      }).accepted,
+      inspectDomainBuckets(
+        {
+          domain: "ai",
+          corpus: "ai",
+          conceptMasteryByDomain: {
+            ai: { [DOMAIN_BUCKET_CONCEPT]: DOMAIN_BUCKET_VALUES.ai },
+            "smart-manufacturing": {
+              [DOMAIN_BUCKET_CONCEPT]:
+                DOMAIN_BUCKET_VALUES["smart-manufacturing"],
+            },
+          },
+        },
+        "ai",
+      ).accepted,
+      true,
+    ),
+  );
+  test(() =>
+    assert.equal(
+      inspectDomainBuckets(
+        {
+          domain: "smart-manufacturing",
+          corpus: "smart-manufacturing",
+          conceptMasteryByDomain: {
+            ai: { [DOMAIN_BUCKET_CONCEPT]: DOMAIN_BUCKET_VALUES.ai },
+            "smart-manufacturing": {
+              [DOMAIN_BUCKET_CONCEPT]:
+                DOMAIN_BUCKET_VALUES["smart-manufacturing"],
+            },
+          },
+        },
+        "ai",
+      ).accepted,
       false,
+    ),
+  );
+  test(() =>
+    assert.equal(
+      changedDimensions({ evidence: true, mastery: false, nextResource: true }),
+      2,
+    ),
+  );
+  test(() =>
+    assert.equal(
+      profileMasteryDigest({ conceptMastery: { beta: 0.2, alpha: 0.1 } }),
+      profileMasteryDigest({ conceptMastery: { alpha: 0.1, beta: 0.2 } }),
+    ),
+  );
+
+  const practiceFixture = {
+    id: "project-runtime",
+    approved: true,
+    provenance: { source: "github-api" },
+    links: [{ url: "https://github.com/example/project" }],
+    steps: ["准备环境", "完成联调", "按标准验收"],
+    acceptance: "三项检查全部通过",
+    deliverable: "运行记录与说明文档",
+    courseIds: ["course-runtime"],
+    jobIds: ["job-runtime"],
+  };
+  const practiceBounds = {
+    allowedCourseIds: new Set(["course-runtime"]),
+    allowedJobIds: new Set(["job-runtime"]),
+  };
+  test(() =>
+    assert.equal(
+      inspectPracticeProject(practiceFixture, practiceBounds).accepted,
+      true,
+    ),
+  );
+  test(() =>
+    assert.equal(
+      inspectPracticeProject(
+        { ...practiceFixture, steps: practiceFixture.steps.slice(0, 2) },
+        practiceBounds,
+      ).accepted,
+      false,
+    ),
+  );
+  test(() =>
+    assert.equal(
+      inspectPracticeProject(
+        { ...practiceFixture, courseIds: ["course-other"] },
+        practiceBounds,
+      ).accepted,
+      false,
+    ),
+  );
+  test(() =>
+    assert.equal(
+      inspectPracticeProject(
+        { ...practiceFixture, jobIds: [] },
+        { ...practiceBounds, allowedJobIds: new Set() },
+      ).accepted,
+      true,
     ),
   );
 
@@ -359,7 +519,103 @@ function runSelfTest() {
   const payload = buildBlueprintPayload("AI 入门", profile);
   test(() => assert.deepEqual(payload.profile, profile));
   test(() => assert.notEqual(payload.profile, profile));
-  test(() => assert.equal(requiredCheckIds("read-only").length, 68));
+  const assignmentFixture = [{ courseId: "historical-ai", domain: "ai" }];
+  const domainFixture = { "historical-ai": { domain: "ai" } };
+  test(() =>
+    assert.equal(
+      selectScenarioCourseId(
+        "generate",
+        "current-ai",
+        assignmentFixture,
+        domainFixture,
+        "ai",
+      ),
+      "current-ai",
+    ),
+  );
+  test(() =>
+    assert.equal(
+      selectScenarioCourseId(
+        "generate",
+        null,
+        assignmentFixture,
+        domainFixture,
+        "ai",
+      ),
+      null,
+    ),
+  );
+  test(() =>
+    assert.equal(
+      selectScenarioCourseId(
+        "read-only",
+        null,
+        assignmentFixture,
+        domainFixture,
+        "ai",
+      ),
+      "historical-ai",
+    ),
+  );
+  test(() =>
+    assert.equal(
+      selectScenarioCourseId(
+        "read-only",
+        null,
+        [{ courseId: "missing-domain" }],
+        { "missing-domain": { domain: "ai" } },
+        "ai",
+      ),
+      null,
+    ),
+  );
+  test(() =>
+    assert.equal(
+      requiredCheckIds("read-only").includes(
+        "persistence.owned-document.nonowner-delete-rejected",
+      ),
+      false,
+    ),
+  );
+  test(() =>
+    assert.equal(
+      requiredCheckIds("generate").includes(
+        "persistence.owned-document.nonowner-delete-rejected",
+      ),
+      true,
+    ),
+  );
+  test(() =>
+    assert.deepEqual(
+      requiredCheckIds("generate").filter((id) =>
+        id.startsWith("remediation."),
+      ),
+      SCENARIOS.flatMap((scenario) =>
+        remediationRequiredCheckIds(scenario.key),
+      ),
+    ),
+  );
+  test(() => assert.equal(buildBoundaryContract([]).ok, true));
+  test(() =>
+    assert.deepEqual(
+      buildBoundaryContract([
+        { id: "informational", required: false },
+        { id: "browser-required", required: true },
+      ]),
+      { required: ["browser-required"], ok: false },
+    ),
+  );
+  test(() =>
+    assert.equal(
+      finalize({
+        startedAt: new Date().toISOString(),
+        mode: "read-only",
+        checks: requiredCheckIds("read-only").map((id) => ({ id, ok: true })),
+        boundaries: [{ id: "browser-required", required: true }],
+      }).ok,
+      false,
+    ),
+  );
 
   for (const mode of ["read-only", "generate"]) {
     const required = requiredCheckIds(mode);
@@ -597,11 +853,19 @@ function runSelfTest() {
   );
   test(() => {
     const json = reportJson(
-      { error: "secret", cookie: "jizhi_session=cookie-value; Path=/" },
+      {
+        error: "secret",
+        cookie: "jizhi_session=cookie-value; Path=/",
+        nested: { inviteCode: "JZ-ABC12345", apiKey: "provider-key" },
+        token: "access-token",
+      },
       ["secret"],
     );
     assert.equal(json.includes("secret"), false);
     assert.equal(json.includes("cookie-value"), false);
+    assert.equal(json.includes("JZ-ABC12345"), false);
+    assert.equal(json.includes("provider-key"), false);
+    assert.equal(json.includes("access-token"), false);
     assert.doesNotThrow(() => JSON.parse(json));
   });
   return {
@@ -654,8 +918,25 @@ function buildCheckContract(checks, mode) {
   };
 }
 
+function buildBoundaryContract(boundaries) {
+  const required = boundaries
+    .filter((boundary) => boundary?.required === true)
+    .map((boundary) => boundary.id)
+    .filter(Boolean);
+  return { required, ok: required.length === 0 };
+}
+
 function reportJson(value, secrets = []) {
-  let json = JSON.stringify(value, null, 2);
+  let json = JSON.stringify(
+    value,
+    (key, child) =>
+      /(?:authorization|cookie|invite.?code|api.?key|password|secret|token)/iu.test(
+        key,
+      )
+        ? "[REDACTED]"
+        : child,
+    2,
+  );
   for (const secret of secrets) {
     if (typeof secret === "string" && secret) {
       json = json.replaceAll(secret, "[REDACTED]");
@@ -679,13 +960,103 @@ function addSkipped(report, id, reason, meta = {}) {
 function summarizeHttp(result) {
   if (!result) return { status: 0, error: "未发起请求" };
   const body = isObject(result.body) ? result.body : null;
+  const nestedError = isObject(body?.error) ? body.error : null;
   return {
     status: result.status,
     ...(result.error ? { error: result.error } : {}),
     ...(typeof body?.error === "string" ? { apiError: body.error } : {}),
+    ...(typeof nestedError?.code === "string"
+      ? { errorCode: nestedError.code }
+      : {}),
     ...(typeof body?.errorCode === "string"
       ? { errorCode: body.errorCode }
       : {}),
+  };
+}
+
+function documentRequestRejected(result) {
+  if (!DOCUMENT_REJECTION_STATUSES.has(result?.status)) return false;
+  const error = isObject(result?.body?.error) ? result.body.error : null;
+  const code = normalizedString(error?.code ?? result?.body?.errorCode);
+  return [
+    "DOCUMENT_NOT_FOUND",
+    "FORBIDDEN_DOCUMENTS",
+    "UNAUTHENTICATED",
+  ].includes(code);
+}
+
+function runtimeSessionMissing(result) {
+  const error = isObject(result?.body?.error) ? result.body.error : null;
+  return Boolean(
+    result?.status === 404 &&
+    normalizedString(error?.code ?? result?.body?.errorCode) ===
+      "SESSION_NOT_FOUND",
+  );
+}
+
+function markFatal(report, message) {
+  report.fatalError = [report.fatalError, message].filter(Boolean).join("；");
+}
+
+function inspectDomainBuckets(fields, effectiveDomain = null) {
+  const byDomain = isObject(fields?.conceptMasteryByDomain)
+    ? fields.conceptMasteryByDomain
+    : {};
+  const ai = isObject(byDomain.ai)
+    ? byDomain.ai[DOMAIN_BUCKET_CONCEPT]
+    : undefined;
+  const manufacturing = isObject(byDomain["smart-manufacturing"])
+    ? byDomain["smart-manufacturing"][DOMAIN_BUCKET_CONCEPT]
+    : undefined;
+  const effectiveValue = effectiveDomain
+    ? byDomain[effectiveDomain]?.[DOMAIN_BUCKET_CONCEPT]
+    : undefined;
+  const effectiveDomainMatches = effectiveDomain
+    ? profileMatchesDomain(fields, effectiveDomain)
+    : true;
+  return {
+    accepted:
+      ai === DOMAIN_BUCKET_VALUES.ai &&
+      manufacturing === DOMAIN_BUCKET_VALUES["smart-manufacturing"] &&
+      ai !== manufacturing &&
+      effectiveDomainMatches &&
+      (!effectiveDomain ||
+        effectiveValue === DOMAIN_BUCKET_VALUES[effectiveDomain]),
+    ai: typeof ai === "number" ? ai : null,
+    smartManufacturing:
+      typeof manufacturing === "number" ? manufacturing : null,
+    effectiveDomain,
+    effectiveDomainMatches,
+    effectiveValue: typeof effectiveValue === "number" ? effectiveValue : null,
+  };
+}
+
+function changedDimensions(values) {
+  return Object.values(values).filter(Boolean).length;
+}
+
+function documentProbeFixture(stageId) {
+  const now = Date.now();
+  return {
+    stage: {
+      id: stageId,
+      name: "生产隔离验收临时文档",
+      createdAt: now,
+      updatedAt: now,
+    },
+    scenes: [
+      {
+        id: `${stageId}-scene`,
+        stageId,
+        title: "隔离验收",
+        order: 0,
+        type: "slide",
+        content: {
+          type: "slide",
+          canvas: { id: `${stageId}-canvas`, elements: [] },
+        },
+      },
+    ],
   };
 }
 
@@ -776,15 +1147,921 @@ function responseObject(result, key) {
   return result?.status === 200 && isObject(value) ? value : null;
 }
 
+async function validateOwnedDocumentIsolation(report, options, sessions) {
+  const checkIds = {
+    GET: "persistence.owned-document.nonowner-get-rejected",
+    PUT: "persistence.owned-document.nonowner-put-rejected",
+    DELETE: "persistence.owned-document.nonowner-delete-rejected",
+  };
+  if (!options.generate) return;
+
+  {
+    const stageId = `e2e-owned-control-${randomUUID()}`;
+    const path = `/api/persistence/documents/${encodeURIComponent(stageId)}`;
+    const create = await request(options.base, sessions.A, path, {
+      method: "PUT",
+      json: documentProbeFixture(stageId),
+    });
+    let control = null;
+    try {
+      if (create.status === 204) {
+        const get = await request(options.base, sessions.B, path);
+        const put = await request(options.base, sessions.B, path, {
+          method: "PUT",
+          json: documentProbeFixture(stageId),
+        });
+        const remove = await request(options.base, sessions.B, path, {
+          method: "DELETE",
+        });
+        control = {
+          stageId,
+          created: summarizeHttp(create),
+          GET: summarizeHttp(get),
+          PUT: summarizeHttp(put),
+          DELETE: summarizeHttp(remove),
+          rejected: {
+            GET: documentRequestRejected(get),
+            PUT: documentRequestRejected(put),
+            DELETE: documentRequestRejected(remove),
+          },
+        };
+      } else {
+        control = { stageId, created: summarizeHttp(create) };
+      }
+    } finally {
+      const cleanup = await request(options.base, sessions.A, path, {
+        method: "DELETE",
+      });
+      const [ownerReread, nonOwnerReread] = await Promise.all([
+        request(options.base, sessions.A, path),
+        request(options.base, sessions.B, path),
+      ]);
+      const cleanupVerified =
+        create.status === 204
+          ? documentRequestRejected(ownerReread) &&
+            documentRequestRejected(nonOwnerReread)
+          : null;
+      report.operations.push({
+        type: "cleanup-document-probe",
+        actor: "A",
+        stageId,
+        status: cleanup.status,
+        rereadStatuses: {
+          owner: ownerReread.status,
+          nonOwner: nonOwnerReread.status,
+        },
+        verified: cleanupVerified,
+      });
+      if (control) {
+        control.cleanup = {
+          delete: summarizeHttp(cleanup),
+          ownerReread: summarizeHttp(ownerReread),
+          nonOwnerReread: summarizeHttp(nonOwnerReread),
+          verified: cleanupVerified,
+        };
+      }
+      if (cleanupVerified === false) {
+        markFatal(
+          report,
+          `临时文档 ${stageId} 删除后仍可读取；脚本只记录该精确 ID，不扩大清理范围`,
+        );
+      }
+    }
+    report.probes.ownedDocumentIsolation = control;
+    for (const method of Object.keys(checkIds)) {
+      addCheck(report, checkIds[method], control?.rejected?.[method] === true, {
+        actor: "B",
+        owner: "A",
+        sampleKind: "temporary-owned-document",
+        stageId,
+        expected: `B 对 A 文档的 ${method} 返回 401/403/404`,
+        actual: control?.[method] ?? control?.created ?? null,
+      });
+    }
+    return;
+  }
+}
+
+function profileWithDomainBucketProbe(fields, activeDomain) {
+  const next = structuredClone(fields);
+  for (const key of [
+    "conceptMasteryByDomain",
+    "conceptConfidenceByDomain",
+    "conceptRecallByDomain",
+  ]) {
+    const table = isObject(next[key]) ? structuredClone(next[key]) : {};
+    for (const domain of Object.keys(DOMAIN_BUCKET_VALUES)) {
+      const bucket = isObject(table[domain]) ? { ...table[domain] } : {};
+      bucket[DOMAIN_BUCKET_CONCEPT] = DOMAIN_BUCKET_VALUES[domain];
+      table[domain] = bucket;
+    }
+    next[key] = table;
+  }
+  const opposite = activeDomain === "ai" ? "smart-manufacturing" : "ai";
+  for (const key of ["conceptMastery", "conceptConfidence", "conceptRecall"]) {
+    next[key] = {
+      ...(isObject(next[key]) ? next[key] : {}),
+      [DOMAIN_BUCKET_CONCEPT]: DOMAIN_BUCKET_VALUES[opposite],
+    };
+  }
+  return next;
+}
+
+function evidenceProbeEntry({
+  accountId,
+  domain,
+  concept,
+  resourceId,
+  at,
+  probeId,
+}) {
+  const score = DOMAIN_BUCKET_VALUES[domain] ?? 0;
+  return {
+    id: `evidence-record-${probeId}-${domain}`,
+    sessionId: `evidence-probe-${probeId}`,
+    sceneId: resourceId,
+    createdAt: at,
+    payload: {
+      payloadVersion: 1,
+      type: "evidence",
+      evidence: {
+        id: `evidence:${probeId}:${domain}`,
+        learnerKey: accountId,
+        source: {
+          interactionId: `interaction-${probeId}`,
+          resourceId,
+          at,
+        },
+        measured: { kind: "concept", domain, concept },
+        verdict: {
+          outcome: score >= 0.5 ? "correct" : "incorrect",
+          score,
+          because: {
+            hit: score >= 0.5 ? ["命中验收测项"] : [],
+            missed: score < 0.5 ? ["未命中验收测项"] : [],
+          },
+        },
+        verdictScope: "per-kc",
+        context: {
+          encounter: 1,
+          modality: "quiz",
+          elapsedMs: 1000,
+          difficulty: 0.5,
+        },
+      },
+    },
+  };
+}
+
+async function createEvidenceProbe(base, session, accountId, resourceId) {
+  const probeId = randomUUID();
+  const sessionId = `evidence-probe-${probeId}`;
+  const now = new Date().toISOString();
+  const created = await request(
+    base,
+    session,
+    "/api/persistence/runtime/sessions",
+    {
+      method: "POST",
+      json: {
+        id: sessionId,
+        kind: "evidence",
+        stageId: "evidence-ledger",
+        learnerKey: accountId,
+        status: "active",
+        createdAt: now,
+        updatedAt: now,
+      },
+    },
+  );
+  const appends = [];
+  if (created.status === 201) {
+    for (const domain of Object.keys(DOMAIN_BUCKET_VALUES)) {
+      appends.push(
+        await request(
+          base,
+          session,
+          `/api/persistence/runtime/sessions/${encodeURIComponent(sessionId)}/records`,
+          {
+            method: "POST",
+            json: evidenceProbeEntry({
+              accountId,
+              domain,
+              concept: DOMAIN_BUCKET_CONCEPT,
+              resourceId,
+              at: now,
+              probeId,
+            }),
+          },
+        ),
+      );
+    }
+  }
+  const listed = await request(
+    base,
+    session,
+    `/api/persistence/runtime/sessions/${encodeURIComponent(sessionId)}/records`,
+  );
+  const records = Array.isArray(listed.body) ? listed.body : [];
+  const domains = records
+    .map((record) => record?.payload?.evidence?.measured)
+    .filter(
+      (measured) =>
+        measured?.kind === "concept" &&
+        measured?.concept === DOMAIN_BUCKET_CONCEPT,
+    )
+    .map((measured) => measured.domain)
+    .sort();
+  return {
+    sessionId,
+    accepted:
+      created.status === 201 &&
+      appends.length === 2 &&
+      appends.every((item) => item.status === 201) &&
+      listed.status === 200 &&
+      JSON.stringify(domains) === JSON.stringify(["ai", "smart-manufacturing"]),
+    statuses: {
+      create: created.status,
+      append: appends.map((item) => item.status),
+      list: listed.status,
+    },
+    domains,
+    recordCount: records.length,
+  };
+}
+
+async function validateSameConceptDomainBuckets(
+  report,
+  base,
+  sessions,
+  accounts,
+  scenarioResults,
+) {
+  const targets = [
+    { actor: "B", domain: "ai", scenarioKey: "ai" },
+    {
+      actor: "D",
+      domain: "smart-manufacturing",
+      scenarioKey: "smartManufacturing",
+    },
+  ].map((target) => ({
+    ...target,
+    courseId:
+      scenarioResults.find((item) => item?.scenario?.key === target.scenarioKey)
+        ?.courseId ?? null,
+  }));
+  if (targets.some((target) => !target.courseId)) {
+    for (const id of [
+      "report.same-concept.profile-buckets",
+      "report.same-concept.evidence-buckets",
+    ]) {
+      addSkipped(report, id, "两域课程不完整，未执行同名概念写入探针");
+    }
+    return;
+  }
+
+  const snapshots = await Promise.all(
+    targets.map(async (target) => {
+      const response = await request(
+        base,
+        sessions[target.actor],
+        "/api/profile",
+      );
+      return {
+        ...target,
+        activeId: normalizedString(response.body?.activeId),
+        fields: isObject(response.body?.fields)
+          ? structuredClone(response.body.fields)
+          : null,
+        status: response.status,
+      };
+    }),
+  );
+  if (
+    snapshots.some(
+      (item) => item.status !== 200 || !item.activeId || !item.fields,
+    )
+  ) {
+    for (const id of [
+      "report.same-concept.profile-buckets",
+      "report.same-concept.evidence-buckets",
+    ]) {
+      addSkipped(report, id, "B/D 当前画像无法完整快照，未执行可回滚写入探针");
+    }
+    return;
+  }
+
+  const evidenceProbes = [];
+  try {
+    const writes = await Promise.all(
+      snapshots.map((item) =>
+        request(base, sessions[item.actor], "/api/profile", {
+          method: "POST",
+          json: {
+            action: "update",
+            id: item.activeId,
+            fields: profileWithDomainBucketProbe(item.fields, item.domain),
+          },
+        }),
+      ),
+    );
+    const rereads = await Promise.all(
+      snapshots.map((item) =>
+        request(base, sessions[item.actor], "/api/profile"),
+      ),
+    );
+    const profileInspections = rereads.map((response, index) =>
+      inspectDomainBuckets(response.body?.fields, snapshots[index].domain),
+    );
+    addCheck(
+      report,
+      "report.same-concept.profile-buckets",
+      writes.every((item) => item.status === 200) &&
+        rereads.every((item) => item.status === 200) &&
+        profileInspections.every((item) => item.accepted),
+      {
+        expected:
+          "B/D 服务端画像均同时保存同名概念的 AI=0.23、智能制造=0.81 两个独立桶",
+        actual: snapshots.map((item, index) => ({
+          actor: item.actor,
+          writeStatus: writes[index].status,
+          readStatus: rereads[index].status,
+          ...profileInspections[index],
+        })),
+      },
+    );
+
+    evidenceProbes.push(
+      ...(await Promise.all(
+        snapshots.map((item) =>
+          createEvidenceProbe(
+            base,
+            sessions[item.actor],
+            accounts[item.actor].id,
+            item.courseId,
+          ).then((probe) => ({ ...probe, actor: item.actor })),
+        ),
+      )),
+    );
+    addCheck(
+      report,
+      "report.same-concept.evidence-buckets",
+      evidenceProbes.every((probe) => probe.accepted),
+      {
+        expected:
+          "B/D 各自证据账本的隔离 session 均包含同名概念的 ai 与 smart-manufacturing 两条可复读记录",
+        actual: evidenceProbes.map(
+          ({ sessionId: _sessionId, ...probe }) => probe,
+        ),
+      },
+    );
+
+    const pages = await Promise.all(
+      snapshots.map((item) =>
+        request(
+          base,
+          sessions[item.actor],
+          `/report?stageId=${encodeURIComponent(item.courseId)}`,
+        ),
+      ),
+    );
+    report.probes.sameConceptReportPages = snapshots.map((item, index) => ({
+      actor: item.actor,
+      domain: item.domain,
+      status: pages[index].status,
+      contentType: pages[index].contentType ?? "",
+    }));
+    report.boundaries.push({
+      id: "same-concept-report-browser-render",
+      required: true,
+      reason:
+        "报告页在浏览器挂载后读取领域画像和证据；本脚本只验服务端双桶写入与复读，真实渲染由 playwright.production.config.ts 的 B/D 学习端用例作为独立必跑门禁。",
+    });
+  } finally {
+    const profileCleanup = await Promise.all(
+      snapshots.map((item) =>
+        request(base, sessions[item.actor], "/api/profile", {
+          method: "POST",
+          json: {
+            action: "update",
+            id: item.activeId,
+            fields: item.fields,
+          },
+        }),
+      ),
+    );
+    const evidenceCleanup = await Promise.all(
+      evidenceProbes.map((probe) =>
+        request(
+          base,
+          sessions[probe.actor],
+          `/api/persistence/runtime/sessions/${encodeURIComponent(probe.sessionId)}`,
+          { method: "DELETE" },
+        ),
+      ),
+    );
+    const [profileRereads, evidenceRereads] = await Promise.all([
+      Promise.all(
+        snapshots.map((item) =>
+          request(base, sessions[item.actor], "/api/profile"),
+        ),
+      ),
+      Promise.all(
+        evidenceProbes.map((probe) =>
+          request(
+            base,
+            sessions[probe.actor],
+            `/api/persistence/runtime/sessions/${encodeURIComponent(probe.sessionId)}`,
+          ),
+        ),
+      ),
+    ]);
+    const profilesRestored = snapshots.every((item, index) => {
+      const reread = profileRereads[index];
+      return Boolean(
+        reread?.status === 200 &&
+        reread.body?.activeId === item.activeId &&
+        JSON.stringify(canonicalizeForHash(reread.body?.fields)) ===
+          JSON.stringify(canonicalizeForHash(item.fields)),
+      );
+    });
+    const evidenceRemoved = evidenceRereads.every(runtimeSessionMissing);
+    report.operations.push({
+      type: "cleanup-same-concept-probe",
+      profileStatuses: profileCleanup.map((item) => item.status),
+      evidenceSessionStatuses: evidenceCleanup.map((item) => item.status),
+      profileRereadStatuses: profileRereads.map((item) => item.status),
+      evidenceRereadStatuses: evidenceRereads.map((item) => item.status),
+      profilesRestored,
+      evidenceRemoved,
+    });
+    if (!profilesRestored || !evidenceRemoved) {
+      markFatal(
+        report,
+        "同名概念探针未完整回滚：只记录本次画像 activeId 与临时 evidence session，不扩大清理范围",
+      );
+    }
+  }
+}
+
+function firstQuizQuestion(classroom) {
+  const scenes = Array.isArray(classroom?.scenes) ? classroom.scenes : [];
+  for (const scene of scenes) {
+    if (scene?.type !== "quiz") continue;
+    const questions = Array.isArray(scene?.content?.questions)
+      ? scene.content.questions
+      : [];
+    const question = questions.find((item) => normalizedString(item?.question));
+    if (question) return { scene, question };
+  }
+  return null;
+}
+
+function profileMasteryDigest(fields) {
+  const value = {
+    conceptMastery: fields?.conceptMastery ?? null,
+    conceptConfidence: fields?.conceptConfidence ?? null,
+    conceptRecall: fields?.conceptRecall ?? null,
+    conceptMasteryByDomain: fields?.conceptMasteryByDomain ?? null,
+    conceptConfidenceByDomain: fields?.conceptConfidenceByDomain ?? null,
+    conceptRecallByDomain: fields?.conceptRecallByDomain ?? null,
+    derivedFrom: fields?.derivedFrom ?? null,
+  };
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalizeForHash(value)), "utf8")
+    .digest("hex");
+}
+
+async function validateWrongAnswerRemediation(
+  report,
+  base,
+  sessions,
+  accounts,
+  scenarioResult,
+) {
+  const scenario = scenarioResult.scenario;
+  const checkIds = remediationRequiredCheckIds(scenario.key);
+  const dimensionCheckIds = checkIds.slice(1);
+  const skipDimensions = (reason, meta = {}) => {
+    for (const id of dimensionCheckIds) addSkipped(report, id, reason, meta);
+  };
+  if (!scenarioResult.courseId) {
+    addSkipped(
+      report,
+      checkIds[0],
+      `没有本轮生成且可访问的 ${scenario.domain} 指派课程，无法选择真实测验题`,
+    );
+    skipDimensions(`没有本轮生成且可访问的 ${scenario.domain} 课程`);
+    return;
+  }
+
+  const actor = scenario.learner;
+  const courseId = scenarioResult.courseId;
+  const [courseResponse, profileBefore] = await Promise.all([
+    request(
+      base,
+      sessions[actor],
+      `/api/classroom?id=${encodeURIComponent(courseId)}`,
+    ),
+    request(base, sessions[actor], "/api/profile"),
+  ]);
+  const classroom = responseObject(courseResponse, "classroom");
+  const picked = firstQuizQuestion(classroom);
+  const sceneId = normalizedString(picked?.scene?.id);
+  const beforeFields = isObject(profileBefore.body?.fields)
+    ? structuredClone(profileBefore.body.fields)
+    : null;
+  const activeId = normalizedString(profileBefore.body?.activeId);
+  if (!picked || !sceneId || !beforeFields || !activeId) {
+    const reason = !picked
+      ? "目标课程没有可作答的真实 quiz 题"
+      : !sceneId
+        ? "真实 quiz 场景缺少可持久化 sceneId"
+        : "学习者画像 activeId/fields 不可完整读取";
+    addSkipped(report, checkIds[0], reason, {
+      actor,
+      courseId,
+      domain: scenario.domain,
+    });
+    skipDimensions(reason, { actor, courseId });
+    return;
+  }
+
+  const question = picked.question;
+  const scene = picked.scene;
+  const points = Math.max(
+    1,
+    Number.isFinite(question.points) && question.points > 0
+      ? question.points
+      : 1,
+  );
+  const grade = await request(base, sessions[actor], "/api/quiz-grade", {
+    method: "POST",
+    json: {
+      question: question.question,
+      userAnswer: "我不知道，无法作答。",
+      points,
+      commentPrompt: question.commentPrompt,
+      language: "zh-CN",
+    },
+  });
+  const score = Number(grade.body?.score);
+  const knownFallbackScore = Math.round(points * 0.5);
+  const wrong = Boolean(
+    grade.status === 200 &&
+    Number.isFinite(score) &&
+    score === 0 &&
+    score !== knownFallbackScore,
+  );
+  addCheck(report, checkIds[0], wrong, {
+    actor,
+    courseId,
+    domain: scenario.domain,
+    sceneId,
+    questionId: question.id ?? null,
+    expected: `真实课程题经 /api/quiz-grade 明确判 0 分，且排除该路由解析失败时的固定半分回退 ${knownFallbackScore}/${points}`,
+    actual:
+      grade.status === 200
+        ? {
+            status: grade.status,
+            score: Number.isFinite(score) ? score : null,
+            points,
+            knownFallbackScore,
+          }
+        : summarizeHttp(grade),
+  });
+  if (!wrong) {
+    skipDimensions("真实答错未被明确判错，不执行后续三维验收", {
+      actor,
+      courseId,
+    });
+    return;
+  }
+
+  const probeId = randomUUID();
+  const sessionId = `evidence-remediation-${scenario.key}-${probeId}`;
+  const now = new Date().toISOString();
+  const sessionPath = `/api/persistence/runtime/sessions/${encodeURIComponent(sessionId)}`;
+  const created = await request(
+    base,
+    sessions[actor],
+    "/api/persistence/runtime/sessions",
+    {
+      method: "POST",
+      json: {
+        id: sessionId,
+        kind: "evidence",
+        stageId: "evidence-ledger",
+        learnerKey: accounts[actor].id,
+        status: "active",
+        createdAt: now,
+        updatedAt: now,
+      },
+    },
+  );
+  let probe = null;
+  try {
+    const beforeRecords = await request(
+      base,
+      sessions[actor],
+      `${sessionPath}/records`,
+    );
+    let append = null;
+    if (created.status === 201) {
+      const recordId = `evidence-record-remediation-${probeId}`;
+      append = await request(base, sessions[actor], `${sessionPath}/records`, {
+        method: "POST",
+        json: {
+          id: recordId,
+          sessionId,
+          sceneId,
+          createdAt: now,
+          payload: {
+            payloadVersion: 1,
+            type: "evidence",
+            evidence: {
+              id: `evidence:remediation:${probeId}`,
+              learnerKey: accounts[actor].id,
+              source: {
+                interactionId: `interaction-remediation-${probeId}`,
+                resourceId: sceneId,
+                at: now,
+              },
+              measured: {
+                kind: "concept",
+                domain: scenario.domain,
+                concept:
+                  normalizedString(scene.title) ||
+                  normalizedString(question.question),
+              },
+              verdict: {
+                outcome: score === 0 ? "incorrect" : "partial",
+                score: score / points,
+                because: {
+                  hit: [],
+                  missed: [normalizedString(question.question)],
+                },
+              },
+              verdictScope: "item-level",
+              context: {
+                encounter: 1,
+                modality: "quiz",
+                elapsedMs: 1000,
+                difficulty: 0.5,
+              },
+            },
+          },
+        },
+      });
+    }
+    const afterRecords = await request(
+      base,
+      sessions[actor],
+      `${sessionPath}/records`,
+    );
+    const beforeCount = Array.isArray(beforeRecords.body)
+      ? beforeRecords.body.length
+      : -1;
+    const afterCount = Array.isArray(afterRecords.body)
+      ? afterRecords.body.length
+      : -1;
+    const evidenceChanged = Boolean(
+      created.status === 201 &&
+      append?.status === 201 &&
+      beforeCount === 0 &&
+      afterCount === 1,
+    );
+
+    const decision = await request(
+      base,
+      sessions[actor],
+      "/api/adaptive/quiz-decision",
+      {
+        method: "POST",
+        json: {
+          quizScore: score / points,
+          currentDifficulty: beforeFields.currentDifficulty,
+          conceptScores: {
+            [normalizedString(scene.title) || "当前测验"]: score / points,
+          },
+        },
+      },
+    );
+    const decisionKind = normalizedString(decision.body?.decision);
+    let remediation = null;
+    if (
+      ["downgrade_explanation", "add_practice", "advance_challenge"].includes(
+        decisionKind,
+      )
+    ) {
+      remediation = await request(
+        base,
+        sessions[actor],
+        "/api/adaptive/remediation",
+        {
+          method: "POST",
+          json: {
+            decision: decisionKind,
+            sceneTitle: scene.title,
+            courseTitle: classroom.stage?.name,
+            missedPoints: [question.question],
+            learnerProfile: beforeFields,
+            order:
+              Number.isFinite(scene.order) && scene.order >= 0
+                ? scene.order + 1
+                : 1,
+          },
+        },
+      );
+    }
+    const outline = isObject(remediation?.body?.outline)
+      ? remediation.body.outline
+      : null;
+    const nextResourcePlanned = Boolean(
+      remediation?.status === 200 &&
+      Number(remediation.body?.evidenceCount) > 0 &&
+      normalizedString(outline?.id).startsWith("remediation_") &&
+      normalizedString(outline?.title) &&
+      normalizedString(outline?.description),
+    );
+    const courseAfter = await request(
+      base,
+      sessions[actor],
+      `/api/classroom?id=${encodeURIComponent(courseId)}`,
+    );
+    const afterClassroom = responseObject(courseAfter, "classroom");
+    const nextResourceChanged = Boolean(
+      nextResourcePlanned &&
+      Array.isArray(afterClassroom?.scenes) &&
+      afterClassroom.scenes.some((item) => item?.id === outline.id),
+    );
+
+    const profileAfter = await request(base, sessions[actor], "/api/profile");
+    const afterFields = isObject(profileAfter.body?.fields)
+      ? profileAfter.body.fields
+      : null;
+    const masteryChanged = Boolean(
+      afterFields &&
+      profileMasteryDigest(afterFields) !== profileMasteryDigest(beforeFields),
+    );
+    const dimensions = {
+      evidence: evidenceChanged,
+      mastery: masteryChanged,
+      nextResource: nextResourceChanged,
+    };
+    addCheck(report, dimensionCheckIds[0], evidenceChanged, {
+      actor,
+      courseId,
+      domain: scenario.domain,
+      expected: "真实答错新增一条可复读证据",
+      actual: { beforeCount, afterCount, appendStatus: append?.status ?? null },
+    });
+    addCheck(report, dimensionCheckIds[1], masteryChanged, {
+      actor,
+      courseId,
+      domain: scenario.domain,
+      expected: "真实答错后目标领域掌握度由证据重算并发生变化",
+      actual: { changed: masteryChanged },
+    });
+    addCheck(report, dimensionCheckIds[2], nextResourceChanged, {
+      actor,
+      courseId,
+      domain: scenario.domain,
+      expected: "补救资源经生成与审核后写入本轮课程",
+      actual: {
+        planned: nextResourcePlanned,
+        persistedInCourse: nextResourceChanged,
+        outlineId: outline?.id ?? null,
+      },
+    });
+    const changed = changedDimensions(dimensions);
+    report.probes.remediationApiDimensions ??= {};
+    report.probes.remediationApiDimensions[scenario.key] = {
+      actor,
+      courseId,
+      domain: scenario.domain,
+      changed,
+      dimensions,
+      evidence: {
+        createStatus: created.status,
+        appendStatus: append?.status ?? null,
+        beforeCount,
+        afterCount,
+      },
+      profile: {
+        beforeStatus: profileBefore.status,
+        afterStatus: profileAfter.status,
+        changed: masteryChanged,
+      },
+      nextResource: {
+        decisionStatus: decision.status,
+        decision: decisionKind || null,
+        remediationStatus: remediation?.status ?? null,
+        groundingEvidenceCount: Number.isFinite(
+          Number(remediation?.body?.evidenceCount),
+        )
+          ? Number(remediation.body.evidenceCount)
+          : null,
+        outlineId: outline?.id ?? null,
+        planned: nextResourcePlanned,
+        persistedInCourse: nextResourceChanged,
+        courseRereadStatus: courseAfter.status,
+      },
+    };
+    if (!masteryChanged) {
+      report.boundaries.push({
+        id: `remediation-${scenario.key}-profile-refresh-browser-boundary`,
+        required: false,
+        reason:
+          "画像重算由浏览器 refreshDerivedProfile() 在写入证据后触发；生产没有单独的服务端重算 API。本次 API 链因此只把证据持久化并取得补救资源计划，没有伪写掌握度。",
+      });
+    }
+    if (
+      remediation?.status === 200 &&
+      !(Number(remediation.body?.evidenceCount) > 0)
+    ) {
+      report.boundaries.push({
+        id: `remediation-${scenario.key}-ungrounded-fallback-rejected`,
+        required: true,
+        reason:
+          "补救接口返回了零知识库证据的 outline；脚本把它视为未接地回退，不计入下一资源变化。",
+      });
+    }
+    if (nextResourcePlanned && !nextResourceChanged) {
+      report.boundaries.push({
+        id: `remediation-${scenario.key}-resource-insertion-browser-boundary`,
+        required: true,
+        reason:
+          "补救 API 只返回 outline；完整正文生成、双审核与插入课程由浏览器 generateRemediationScene() 驱动。复读 /api/classroom 未出现该 outline ID，因此不把“计划已返回”冒充“下一资源已变化”。",
+      });
+    }
+    probe = {
+      actor,
+      courseId,
+      domain: scenario.domain,
+      sceneId,
+      questionId: question.id ?? null,
+      grade: { status: grade.status, score, points },
+      dimensions,
+      changed,
+    };
+  } finally {
+    const [cleanup, profileRestore] = await Promise.all([
+      request(base, sessions[actor], sessionPath, { method: "DELETE" }),
+      request(base, sessions[actor], "/api/profile", {
+        method: "POST",
+        json: { action: "update", id: activeId, fields: beforeFields },
+      }),
+    ]);
+    const [cleanupReread, profileReread] = await Promise.all([
+      request(base, sessions[actor], sessionPath),
+      request(base, sessions[actor], "/api/profile"),
+    ]);
+    const cleanupVerified = runtimeSessionMissing(cleanupReread);
+    const profileRestored = Boolean(
+      profileRestore.status === 200 &&
+      profileReread.status === 200 &&
+      profileReread.body?.activeId === activeId &&
+      JSON.stringify(canonicalizeForHash(profileReread.body?.fields)) ===
+        JSON.stringify(canonicalizeForHash(beforeFields)),
+    );
+    report.operations.push({
+      type: "cleanup-remediation-evidence-probe",
+      actor,
+      domain: scenario.domain,
+      sessionId,
+      status: cleanup.status,
+      rereadStatus: cleanupReread.status,
+      verified: cleanupVerified,
+      profileRestoreStatus: profileRestore.status,
+      profileRereadStatus: profileReread.status,
+      profileRestored,
+    });
+    if (probe) {
+      probe.cleanupStatus = cleanup.status;
+      probe.cleanupRereadStatus = cleanupReread.status;
+      probe.cleanupVerified = cleanupVerified;
+    }
+    if (!cleanupVerified || !profileRestored) {
+      markFatal(
+        report,
+        `答错补救回滚不完整：只处理临时 evidence session ${sessionId} 与画像 ${activeId}，未扩大清理范围`,
+      );
+    }
+    report.probes.wrongAnswerRemediation ??= {};
+    report.probes.wrongAnswerRemediation[scenario.key] = probe;
+  }
+}
+
 function inspectHtmlPage(result, markers) {
   const html = typeof result?.body === "string" ? result.body : "";
   const missingMarkers = markers.filter((marker) => !html.includes(marker));
   const rejection = html.match(PAGE_REJECTION)?.[0] ?? null;
   const nonRejected = Boolean(
     result?.status === 200 &&
-      result?.contentType?.includes("text/html") &&
-      html &&
-      !rejection,
+    result?.contentType?.includes("text/html") &&
+    html &&
+    !rejection,
   );
   return {
     accepted: nonRejected && missingMarkers.length === 0,
@@ -797,36 +2074,6 @@ function inspectHtmlPage(result, markers) {
   };
 }
 
-function inspectCuratedAiPathPage(result) {
-  const page = inspectHtmlPage(result, AI_CURATED_PATH_MARKERS);
-  const searchable = page.html.replaceAll('\\"', '"');
-  const nodes = [];
-  const pattern =
-    /"id":"([^"\\]+)","title":"([^"\\]+)","layer":\d+,"slot":\d+,"difficulty":\d+,"courseId":(?:(?:"([^"\\]+)")|null)/gu;
-  for (const match of searchable.matchAll(pattern)) {
-    nodes.push({ id: match[1], title: match[2], courseId: match[3] ?? null });
-  }
-  const uniqueNodes = [...new Map(nodes.map((node) => [node.id, node])).values()];
-  const mapCount = (page.html.match(/aria-label="课程路径图，/gu) ?? []).length;
-  const generatedCourseIds = [
-    ...new Set(uniqueNodes.map((node) => node.courseId).filter(Boolean)),
-  ];
-  const concepts = uniqueNodes.flatMap((node) => [node.id, node.title]);
-  return {
-    accepted: page.accepted && mapCount >= 3 && uniqueNodes.length > 0,
-    provenanceAccepted:
-      page.accepted &&
-      uniqueNodes.length > 0 &&
-      generatedCourseIds.length > 0 &&
-      uniqueNodes.every((node) => node.id && node.title),
-    page,
-    mapCount,
-    nodeCount: uniqueNodes.length,
-    generatedCourseCount: generatedCourseIds.length,
-    concepts,
-  };
-}
-
 function inspectReportPage(result, context) {
   const page = inspectHtmlPage(result, REPORT_PAGE_MARKERS);
   const courseId = normalizedString(context.courseId);
@@ -836,18 +2083,18 @@ function inspectReportPage(result, context) {
   );
   const targetMentioned = Boolean(
     (courseId && page.html.includes(courseId)) ||
-      (title && page.html.includes(title)),
+    (title && page.html.includes(title)),
   );
   const courseMatches = Boolean(
     courseId && title && returnedCourseId === courseId,
   );
   const assignmentMatches = Boolean(
     context.assignment?.courseId === courseId &&
-      context.assignment?.learnerAccountId === context.learnerAccountId,
+    context.assignment?.learnerAccountId === context.learnerAccountId,
   );
   const domainMatches = Boolean(
     profileMatchesDomain(context.fields, context.domain) &&
-      context.effectiveDomain === context.domain,
+    context.effectiveDomain === context.domain,
   );
   return {
     accepted:
@@ -866,6 +2113,29 @@ function entryDomain(entry) {
   if (!isObject(entry)) return null;
   const value = entry.domain ?? entry.corpus;
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function assignmentDomain(assignment, courseDomains) {
+  const stored = normalizedString(assignment?.domain);
+  const mapped = entryDomain(courseDomains?.[assignment?.courseId]);
+  return stored && mapped && stored === mapped ? stored : null;
+}
+
+function selectScenarioCourseId(
+  mode,
+  generatedId,
+  learnerAssignments,
+  courseDomains,
+  domain,
+) {
+  if (mode === "generate") {
+    return normalizedString(generatedId) || null;
+  }
+  return (
+    learnerAssignments.find(
+      (assignment) => assignmentDomain(assignment, courseDomains) === domain,
+    )?.courseId ?? null
+  );
 }
 
 function normalizeConcept(value) {
@@ -1374,6 +2644,48 @@ function projectHasSource(project) {
   return Boolean(source && hasUrl);
 }
 
+function inspectPracticeProject(
+  project,
+  { allowedCourseIds, allowedJobIds, requireApproved = true },
+) {
+  const courseIds = normalizedStrings(project?.courseIds);
+  const jobIds = normalizedStrings(project?.jobIds);
+  const steps = normalizedStrings(project?.steps);
+  const courseEdgesValid = Boolean(
+    courseIds.length > 0 &&
+    courseIds.every((courseId) => allowedCourseIds.has(courseId)),
+  );
+  const jobEdgesValid = allowedJobIds.size
+    ? jobIds.length > 0 && jobIds.every((jobId) => allowedJobIds.has(jobId))
+    : jobIds.length === 0;
+  const result = {
+    id: normalizedString(project?.id) || null,
+    approved: project?.approved === true,
+    source: projectHasSource(project),
+    stepCount: steps.length,
+    acceptance: Boolean(normalizedString(project?.acceptance)),
+    deliverable: Boolean(normalizedString(project?.deliverable)),
+    courseIds,
+    jobIds,
+    courseEdgesValid,
+    jobEdgesValid,
+  };
+  return {
+    ...result,
+    accepted: Boolean(
+      result.id &&
+      (!requireApproved || result.approved) &&
+      result.source &&
+      result.stepCount >= 3 &&
+      result.stepCount <= 6 &&
+      result.acceptance &&
+      result.deliverable &&
+      result.courseEdgesValid &&
+      result.jobEdgesValid,
+    ),
+  };
+}
+
 function matchingAiJobs(jobs) {
   return jobs.filter((job) => AI_JOB_TERMS.test(JSON.stringify(job)));
 }
@@ -1655,14 +2967,20 @@ async function assignCourse(
   const ok =
     response.status === 200 &&
     assignment?.courseId === courseId &&
-    assignment?.learnerAccountId === learnerAccountId;
+    assignment?.learnerAccountId === learnerAccountId &&
+    assignment?.domain === scenario.domain;
   addCheck(report, `assign.${scenario.key}.created`, ok, {
     actor: scenario.manager,
     learner: scenario.learner,
     domain: scenario.domain,
-    expected: { courseId, learnerAccountId },
+    expected: { courseId, learnerAccountId, domain: scenario.domain },
     actual: ok
-      ? { id: assignment.id, courseId, learnerAccountId }
+      ? {
+          id: assignment.id,
+          courseId,
+          learnerAccountId,
+          domain: assignment.domain,
+        }
       : summarizeHttp(response),
   });
   if (ok) {
@@ -1675,6 +2993,218 @@ async function assignCourse(
     });
   }
   return ok;
+}
+
+async function generatePracticeProjects(
+  report,
+  base,
+  sessions,
+  scenario,
+  courseId,
+) {
+  const actor = scenario.manager;
+  const response = await request(
+    base,
+    sessions[actor],
+    `/api/practice-scout/${encodeURIComponent(scenario.domain)}/draft`,
+    {
+      method: "POST",
+      json: { count: 6 },
+      timeoutMs: PRACTICE_DRAFT_TIMEOUT_MS,
+    },
+  );
+  const draft = responseObject(response, "draft");
+  const projects = Array.isArray(draft?.projects) ? draft.projects : [];
+  const allowedCourseIds = new Set(
+    Array.isArray(draft?.course_candidates)
+      ? draft.course_candidates
+          .map((item) => normalizedString(item?.id))
+          .filter(Boolean)
+      : [],
+  );
+  const allowedJobIds = new Set(
+    Array.isArray(draft?.job_candidates)
+      ? draft.job_candidates
+          .map((item) => normalizedString(item?.id))
+          .filter(Boolean)
+      : [],
+  );
+  const projectChecks = projects.map((project) =>
+    inspectPracticeProject(project, {
+      allowedCourseIds,
+      allowedJobIds,
+      requireApproved: false,
+    }),
+  );
+  const projectIds = projectChecks.map((project) => project.id).filter(Boolean);
+  const drafted = Boolean(
+    response.status === 200 &&
+    draft?.version === 3 &&
+    draft?.corpus === scenario.domain &&
+    /^sha256:[0-9a-f]{64}$/.test(normalizedString(draft?.snapshot_id)) &&
+    allowedCourseIds.has(courseId) &&
+    projectIds.length > 0 &&
+    new Set(projectIds).size === projectIds.length &&
+    projectChecks.every((project) => project.accepted) &&
+    projectChecks.some((project) => project.courseIds.includes(courseId)),
+  );
+  addCheck(report, `practice.${scenario.key}.drafted`, drafted, {
+    actor,
+    domain: scenario.domain,
+    expected:
+      "v3 不可变初稿逐项满足真实来源、3–6 步、验收/交付物及当前域课程/岗位候选边，并至少一项关联新课",
+    actual: draft
+      ? {
+          version: draft.version ?? null,
+          corpus: draft.corpus ?? null,
+          projectCount: projects.length,
+          currentCourseCandidate: allowedCourseIds.has(courseId),
+          currentCourseLinked: projectChecks.some((project) =>
+            project.courseIds.includes(courseId),
+          ),
+          projects: projectChecks,
+        }
+      : summarizeHttp(response),
+  });
+  if (!drafted) {
+    addSkipped(
+      report,
+      `practice.${scenario.key}.published`,
+      "实操初稿未通过与发布端相同的结构门禁",
+      { actor, domain: scenario.domain },
+    );
+    addSkipped(
+      report,
+      `practice.${scenario.key}.restored`,
+      "实操初稿未通过，未创建可恢复发布版本",
+      { actor, domain: scenario.domain },
+    );
+    return false;
+  }
+  report.operations.push({
+    type: "draft-practice-projects",
+    actor,
+    domain: scenario.domain,
+    projectIds,
+  });
+
+  const approve = await request(
+    base,
+    sessions[actor],
+    `/api/practice-scout/${encodeURIComponent(scenario.domain)}/approve`,
+    {
+      method: "POST",
+      json: { projectIds, draftSnapshotId: draft.snapshot_id },
+    },
+  );
+  const publication = responseObject(approve, "publication");
+  const release = publication?.release;
+  const publishedIds = Array.isArray(release?.projects)
+    ? release.projects
+        .filter((project) => project?.approved === true)
+        .map((project) => normalizedString(project?.id))
+        .filter(Boolean)
+        .sort()
+    : [];
+  const expectedIds = [...projectIds].sort();
+  const published = Boolean(
+    approve.status === 200 &&
+    Number.isInteger(publication?.current_version) &&
+    publication.current_version > 0 &&
+    release?.version === publication.current_version &&
+    release?.status === "published" &&
+    /^sha256:[0-9a-f]{64}$/.test(normalizedString(release?.snapshot_id)) &&
+    JSON.stringify(publishedIds) === JSON.stringify(expectedIds),
+  );
+  addCheck(report, `practice.${scenario.key}.published`, published, {
+    actor,
+    domain: scenario.domain,
+    expected: { status: "published", projectIds: expectedIds },
+    actual: release
+      ? {
+          status: release.status ?? null,
+          version: release.version ?? null,
+          snapshotId: release.snapshot_id ?? null,
+          projectIds: publishedIds,
+        }
+      : summarizeHttp(approve),
+  });
+  if (published) {
+    report.operations.push({
+      type: "publish-practice-projects",
+      actor,
+      domain: scenario.domain,
+      projectIds: expectedIds,
+    });
+  } else {
+    addSkipped(
+      report,
+      `practice.${scenario.key}.restored`,
+      "实操发布未通过，无法验证版本恢复",
+      { actor, domain: scenario.domain },
+    );
+    return false;
+  }
+
+  const sourceVersion = publication.current_version;
+  const historyBefore = await request(
+    base,
+    sessions[actor],
+    `/api/practice-scout/${encodeURIComponent(scenario.domain)}/releases`,
+  );
+  const beforePublication = responseObject(historyBefore, "publication");
+  const restore = await request(
+    base,
+    sessions[actor],
+    `/api/practice-scout/${encodeURIComponent(scenario.domain)}/restore`,
+    { method: "POST", json: { version: sourceVersion } },
+  );
+  const restoredPublication = responseObject(restore, "publication");
+  const restoredRelease = restoredPublication?.release;
+  const restoredIds = Array.isArray(restoredRelease?.projects)
+    ? restoredRelease.projects
+        .filter((project) => project?.approved === true)
+        .map((project) => normalizedString(project?.id))
+        .filter(Boolean)
+        .sort()
+    : [];
+  const restored = Boolean(
+    historyBefore.status === 200 &&
+    beforePublication?.current_version === sourceVersion &&
+    Array.isArray(beforePublication?.versions) &&
+    beforePublication.versions.some(
+      (item) => item?.version === sourceVersion,
+    ) &&
+    restore.status === 200 &&
+    restoredPublication?.current_version === sourceVersion + 1 &&
+    restoredRelease?.version === sourceVersion + 1 &&
+    restoredRelease?.restored_from_version === sourceVersion &&
+    restoredRelease?.snapshot_id === release.snapshot_id &&
+    JSON.stringify(restoredIds) === JSON.stringify(expectedIds),
+  );
+  addCheck(report, `practice.${scenario.key}.restored`, restored, {
+    actor,
+    domain: scenario.domain,
+    expected: { restoredFromVersion: sourceVersion, projectIds: expectedIds },
+    actual: restoredRelease
+      ? {
+          version: restoredRelease.version ?? null,
+          restoredFromVersion: restoredRelease.restored_from_version ?? null,
+          snapshotId: restoredRelease.snapshot_id ?? null,
+          projectIds: restoredIds,
+        }
+      : summarizeHttp(restore),
+  });
+  if (restored) {
+    report.operations.push({
+      type: "restore-practice-release",
+      actor,
+      domain: scenario.domain,
+      sourceVersion,
+      newVersion: restoredRelease.version,
+    });
+  }
+  return restored;
 }
 
 async function validateForbiddenAssignment(
@@ -1763,13 +3293,13 @@ async function validateScenario(
   const courseDomains = isObject(domains) ? domains : {};
   const learnerAccountId = accounts[scenario.learner].id;
 
-  const courseId =
-    generatedId ??
-    learnerAssignments.find(
-      (assignment) =>
-        entryDomain(courseDomains[assignment?.courseId]) === scenario.domain,
-    )?.courseId ??
-    null;
+  const courseId = selectScenarioCourseId(
+    report.mode,
+    generatedId,
+    learnerAssignments,
+    courseDomains,
+    scenario.domain,
+  );
 
   addCheck(
     report,
@@ -1838,22 +3368,34 @@ async function validateScenario(
     report,
     `assignment.${scenario.key}.learner-scope`,
     learnerAssignments.every(
-      (item) => item?.learnerAccountId === learnerAccountId,
+      (item) =>
+        item?.learnerAccountId === learnerAccountId &&
+        assignmentDomain(item, courseDomains) === scenario.domain,
     ),
     {
       actor: scenario.learner,
-      expected: `所有返回指派 learnerAccountId=${learnerAccountId}`,
-      actual: learnerAssignments.map((item) => item?.learnerAccountId ?? null),
+      expected: `所有返回指派 learnerAccountId=${learnerAccountId}，且 assignment.domain 与课程域都明确等于 ${scenario.domain}`,
+      actual: learnerAssignments.map((item) => ({
+        learnerAccountId: item?.learnerAccountId ?? null,
+        assignmentDomain: item?.domain ?? null,
+        mappedDomain: entryDomain(courseDomains[item?.courseId]),
+      })),
     },
   );
   addCheck(
     report,
     `assignment.${scenario.key}.effective-domain`,
-    effectiveDomain === scenario.domain,
+    effectiveDomain === scenario.domain &&
+      managerAssignment?.domain === scenario.domain &&
+      learnerAssignment?.domain === scenario.domain,
     {
       actor: scenario.learner,
       expected: scenario.domain,
-      actual: effectiveDomain,
+      actual: {
+        courseDomain: effectiveDomain,
+        managerAssignmentDomain: managerAssignment?.domain ?? null,
+        learnerAssignmentDomain: learnerAssignment?.domain ?? null,
+      },
       detail: "按这门具体指派课程核对学习端领域，不以公共域可见性代替",
     },
   );
@@ -1880,9 +3422,7 @@ async function validateScenario(
     request(
       base,
       sessions[scenario.learner],
-      scenario.domain === "ai"
-        ? "/path"
-        : `/api/domain-path/${encodeURIComponent(scenario.domain)}`,
+      `/api/domain-path/${encodeURIComponent(scenario.domain)}`,
     ),
     request(
       base,
@@ -1996,118 +3536,101 @@ async function validateScenario(
     actual: coverage,
   });
 
-  let pathBody = null;
-  let concepts = [];
-  let pathStageCount = 0;
-  let pathSource = null;
-  if (scenario.domain === "ai") {
-    const curated = inspectCuratedAiPathPage(path);
-    concepts = curated.concepts;
-    pathStageCount = curated.mapCount;
-    pathSource = "curated-learning-path-page";
-    addCheck(report, `path.${scenario.key}.acceptance`, curated.accepted, {
-      actor: scenario.learner,
-      domain: scenario.domain,
-      expected:
-        "AI 主域直接验收 /path 的策展全景：页面契约完整、三模块课程图与运行时节点非空",
-      actual: {
-        status: curated.page.status,
-        contentType: curated.page.contentType,
-        missingMarkers: curated.page.missingMarkers,
-        rejection: curated.page.rejection,
-        moduleMapCount: curated.mapCount,
-        nodeCount: curated.nodeCount,
-        generatedCourseCount: curated.generatedCourseCount,
-      },
-    });
-    addCheck(
-      report,
-      `path.${scenario.key}.provenance`,
-      curated.provenanceAccepted,
-      {
-        actor: scenario.learner,
-        domain: scenario.domain,
-        expected:
-          "策展页从已部署 learning-path 数据渲染出唯一节点 ID、标题与真实课程引用；AI 主域不要求 intake run",
-        actual: {
-          source: pathSource,
-          nodeCount: curated.nodeCount,
-          generatedCourseCount: curated.generatedCourseCount,
-        },
-      },
+  const pathBody = responseObject(path, "path");
+  const concepts = pathConcepts(pathBody);
+  const pathStageCount = Array.isArray(pathBody?.stages)
+    ? pathBody.stages.length
+    : 0;
+  const pathSource = pathBody?.source ?? null;
+  const deepLearningCovered =
+    scenario.domain !== "ai" ||
+    concepts.some((concept) =>
+      ["deeplearning", "深度学习"].includes(normalizeConcept(concept)),
     );
-  } else {
-    pathBody = responseObject(path, "path");
-    concepts = pathConcepts(pathBody);
-    pathStageCount = Array.isArray(pathBody?.stages)
-      ? pathBody.stages.length
-      : 0;
-    pathSource = pathBody?.source ?? null;
-    const pathOk = Boolean(
-      path.status === 200 &&
-        pathBody &&
-        pathBody.corpus === scenario.domain &&
-        PATH_SOURCES.has(pathBody.source) &&
-        pathStageCount > 0 &&
-        concepts.length > 0,
-    );
-    addCheck(report, `path.${scenario.key}.acceptance`, pathOk, {
-      actor: scenario.learner,
-      domain: scenario.domain,
-      expected:
-        "非 AI 域引擎路径仅来自 intake/index-tags，有阶段、有概念且不回退其它领域",
-      actual: pathBody
-        ? {
-            status: path.status,
-            corpus: pathBody.corpus,
-            source: pathBody.source,
-            stageCount: pathStageCount,
-            conceptCount: concepts.length,
-            reason: pathBody.reason,
-          }
-        : summarizeHttp(path),
-    });
-    const pathProvenanceOk = Boolean(
-      pathBody &&
-        isValidGeneratedAt(pathBody.generated_at) &&
-        /^[0-9A-Za-z:-]{1,128}$/u.test(normalizedString(pathBody.run_id)),
-    );
-    addCheck(report, `path.${scenario.key}.provenance`, pathProvenanceOk, {
-      actor: scenario.learner,
-      domain: scenario.domain,
-      expected: "非 AI 域路径带可解析 generated_at 与非空接入 run_id",
-      actual: pathBody
-        ? {
-            generatedAt: pathBody.generated_at ?? null,
-            runId: pathBody.run_id ?? null,
-            source: pathBody.source ?? null,
-          }
-        : summarizeHttp(path),
-    });
-  }
+  const pathOk = Boolean(
+    path.status === 200 &&
+    pathBody &&
+    pathBody.corpus === scenario.domain &&
+    PATH_SOURCES.has(pathBody.source) &&
+    pathStageCount > 0 &&
+    concepts.length > 0 &&
+    deepLearningCovered,
+  );
+  addCheck(report, `path.${scenario.key}.acceptance`, pathOk, {
+    actor: scenario.learner,
+    domain: scenario.domain,
+    expected:
+      "本域路径仅来自引擎 index-graph/intake/index-tags 产物，有阶段、有概念且不回退手工或其它领域路径；AI 主域必须覆盖深度学习",
+    actual: pathBody
+      ? {
+          status: path.status,
+          corpus: pathBody.corpus,
+          source: pathBody.source,
+          stageCount: pathStageCount,
+          conceptCount: concepts.length,
+          deepLearningCovered,
+          reason: pathBody.reason,
+        }
+      : summarizeHttp(path),
+  });
+  const pathProvenanceOk = Boolean(
+    pathBody &&
+    isValidGeneratedAt(pathBody.generated_at) &&
+    (normalizedString(pathBody.run_id) ||
+      /^sha256:[0-9a-f]{16}$/u.test(normalizedString(pathBody.artifact_id))),
+  );
+  addCheck(report, `path.${scenario.key}.provenance`, pathProvenanceOk, {
+    actor: scenario.learner,
+    domain: scenario.domain,
+    expected: "路径带可解析 generated_at，以及接入 run_id 或根引擎产物哈希",
+    actual: pathBody
+      ? {
+          generatedAt: pathBody.generated_at ?? null,
+          runId: pathBody.run_id ?? null,
+          artifactId: pathBody.artifact_id ?? null,
+          source: pathBody.source ?? null,
+        }
+      : summarizeHttp(path),
+  });
 
+  const jobRows = responseArray(jobs, "jobs");
+  const jobReason =
+    typeof jobs.body?.reason === "string" ? jobs.body.reason : "";
+  const jobState =
+    jobs.status === 200
+      ? classifyJobState(scenario.domain, jobRows, jobReason)
+      : "error";
+  const allowedCourseIds = new Set(
+    classroomList
+      .map((item) => normalizedString(item?.id))
+      .filter(
+        (candidate) =>
+          candidate &&
+          entryDomain(courseDomains[candidate]) === scenario.domain,
+      ),
+  );
+  const allowedJobIds = new Set(
+    jobRows
+      .map((job) => normalizedString(job?.job_id ?? job?.id))
+      .filter(Boolean),
+  );
   const projects = responseArray(practice, "projects");
-  const projectChecks = projects.map((project) => ({
-    id: project?.id ?? null,
-    approved: project?.approved === true,
-    source: projectHasSource(project),
-    executableSteps: executableStepCount(project),
-  }));
+  const projectChecks = projects.map((project) =>
+    inspectPracticeProject(project, { allowedCourseIds, allowedJobIds }),
+  );
   const practiceOk = Boolean(
     practice.status === 200 &&
     practice.body?.corpus === scenario.domain &&
     practice.body?.status === "ready" &&
     projects.length > 0 &&
-    projectChecks.every(
-      (project) =>
-        project.approved && project.source && project.executableSteps >= 2,
-    ),
+    projectChecks.every((project) => project.accepted) &&
+    projectChecks.some((project) => project.courseIds.includes(courseId)),
   );
   addCheck(report, `practice.${scenario.key}.acceptance`, practiceOk, {
     actor: scenario.learner,
     domain: scenario.domain,
     expected:
-      "目标 corpus 的已发布/ready 项目，逐项含真实来源与至少两步可执行步骤",
+      "目标 corpus 的已发布项目逐项含真实来源、3–6 步、验收/交付物与有效课程/岗位边，且至少一项关联当前指派课",
     actual:
       practice.status === 200
         ? {
@@ -2119,14 +3642,6 @@ async function validateScenario(
           }
         : summarizeHttp(practice),
   });
-
-  const jobRows = responseArray(jobs, "jobs");
-  const jobReason =
-    typeof jobs.body?.reason === "string" ? jobs.body.reason : "";
-  const jobState =
-    jobs.status === 200
-      ? classifyJobState(scenario.domain, jobRows, jobReason)
-      : "error";
   const aiJobMatches = matchingAiJobs(jobRows);
   const jobsOk = Boolean(
     jobs.status === 200 &&
@@ -2446,6 +3961,7 @@ function finalize(report) {
   report.durationMs =
     Date.parse(report.finishedAt) - Date.parse(report.startedAt);
   report.checkContract = buildCheckContract(report.checks, report.mode);
+  report.boundaryContract = buildBoundaryContract(report.boundaries);
   const failed = report.checks.filter((check) => !check.ok).length;
   report.summary = {
     total: report.checks.length,
@@ -2453,7 +3969,11 @@ function finalize(report) {
     failed,
     skipped: report.checks.filter((check) => check.skipped).length,
   };
-  report.ok = failed === 0 && report.checkContract.ok && !report.fatalError;
+  report.ok =
+    failed === 0 &&
+    report.checkContract.ok &&
+    report.boundaryContract.ok &&
+    !report.fatalError;
   return report;
 }
 
@@ -2461,6 +3981,7 @@ async function run(options) {
   const report = {
     schemaVersion: 2,
     command: "production-dual-org-e2e",
+    runId: randomUUID(),
     mode: options.generate ? "generate" : "read-only",
     base: options.base,
     startedAt: new Date().toISOString(),
@@ -2472,6 +3993,7 @@ async function run(options) {
             "A/C 生成课程",
             "A→B 与 C→D 定向指派",
             "A→D 与 C→B 跨机构拒绝探针",
+            "临时文档/证据 session 与同名概念字段验收后精确回收",
           ]
         : [],
       forbiddenWrites: [
@@ -2485,7 +4007,10 @@ async function run(options) {
     },
     actors: {},
     courses: {},
+    generatedCourses: {},
     operations: [],
+    probes: {},
+    boundaries: [],
     checks: [],
   };
 
@@ -2616,6 +4141,8 @@ async function run(options) {
     },
   });
 
+  await validateOwnedDocumentIsolation(report, options, sessions);
+
   const generatedIds = {};
   if (options.generate) {
     addCheck(report, "generate.safety-preflight", orgMatrixOk, {
@@ -2657,6 +4184,15 @@ async function run(options) {
         );
         if (assignmentResults.every(Boolean)) {
           await Promise.all([
+            ...SCENARIOS.map((scenario) =>
+              generatePracticeProjects(
+                report,
+                options.base,
+                sessions,
+                scenario,
+                generatedIds[scenario.key],
+              ),
+            ),
             validateForbiddenAssignment(
               report,
               options.base,
@@ -2683,6 +4219,26 @@ async function run(options) {
             ),
           ]);
         } else {
+          for (const scenario of SCENARIOS) {
+            addSkipped(
+              report,
+              `practice.${scenario.key}.drafted`,
+              "正常课程指派未全部成功，不生成实践项目",
+              { actor: scenario.manager, domain: scenario.domain },
+            );
+            addSkipped(
+              report,
+              `practice.${scenario.key}.published`,
+              "正常课程指派未全部成功，不发布实践项目",
+              { actor: scenario.manager, domain: scenario.domain },
+            );
+            addSkipped(
+              report,
+              `practice.${scenario.key}.restored`,
+              "正常课程指派未全部成功，不验证实践项目恢复",
+              { actor: scenario.manager, domain: scenario.domain },
+            );
+          }
           for (const label of ["A-to-D", "C-to-B"]) {
             addSkipped(
               report,
@@ -2707,6 +4263,24 @@ async function run(options) {
               learner: scenario.learner,
               domain: scenario.domain,
             },
+          );
+          addSkipped(
+            report,
+            `practice.${scenario.key}.drafted`,
+            "两门课程未全部生成成功",
+            { actor: scenario.manager, domain: scenario.domain },
+          );
+          addSkipped(
+            report,
+            `practice.${scenario.key}.published`,
+            "两门课程未全部生成成功",
+            { actor: scenario.manager, domain: scenario.domain },
+          );
+          addSkipped(
+            report,
+            `practice.${scenario.key}.restored`,
+            "两门课程未全部生成成功",
+            { actor: scenario.manager, domain: scenario.domain },
           );
         }
         for (const label of ["A-to-D", "C-to-B"]) {
@@ -2764,6 +4338,24 @@ async function run(options) {
             domain: scenario.domain,
           },
         );
+        addSkipped(
+          report,
+          `practice.${scenario.key}.drafted`,
+          "写入安全预检失败",
+          { actor: scenario.manager, domain: scenario.domain },
+        );
+        addSkipped(
+          report,
+          `practice.${scenario.key}.published`,
+          "写入安全预检失败",
+          { actor: scenario.manager, domain: scenario.domain },
+        );
+        addSkipped(
+          report,
+          `practice.${scenario.key}.restored`,
+          "写入安全预检失败",
+          { actor: scenario.manager, domain: scenario.domain },
+        );
       }
       for (const label of ["A-to-D", "C-to-B"]) {
         addSkipped(
@@ -2779,6 +4371,26 @@ async function run(options) {
       }
     }
   }
+
+  report.generatedCourses = Object.fromEntries(
+    SCENARIOS.flatMap((scenario) => {
+      const courseId = generatedIds[scenario.key];
+      return courseId
+        ? [
+            [
+              scenario.key,
+              {
+                runId: report.runId,
+                courseId,
+                domain: scenario.domain,
+                manager: scenario.manager,
+                learner: scenario.learner,
+              },
+            ],
+          ]
+        : [];
+    }),
+  );
 
   const shared = {
     assignments: {},
@@ -2816,6 +4428,24 @@ async function run(options) {
       });
     }
   }
+  const scratchByActor = Object.fromEntries(
+    Object.keys(ACTORS).map((actor) => {
+      const entries = isObject(shared.domains[actor]?.body?.entries)
+        ? Object.keys(shared.domains[actor].body.entries)
+        : [];
+      return [actor, entries.filter((domain) => SCRATCH_DOMAIN.test(domain))];
+    }),
+  );
+  addCheck(
+    report,
+    "hygiene.no-scratch-domains",
+    Object.values(scratchByActor).every((domains) => domains.length === 0),
+    {
+      expected:
+        "四个真实账号的领域清单均不出现 fullprobe/fullpath-probe/probe 临时库",
+      actual: scratchByActor,
+    },
+  );
 
   const scenarioResults = await Promise.all(
     SCENARIOS.map((scenario) =>
@@ -2843,6 +4473,26 @@ async function run(options) {
       ),
     ),
   );
+  if (options.generate) {
+    await validateSameConceptDomainBuckets(
+      report,
+      options.base,
+      sessions,
+      accounts,
+      scenarioResults,
+    );
+    await Promise.all(
+      scenarioResults.map((scenarioResult) =>
+        validateWrongAnswerRemediation(
+          report,
+          options.base,
+          sessions,
+          accounts,
+          scenarioResult,
+        ),
+      ),
+    );
+  }
 
   return finalize(report);
 }

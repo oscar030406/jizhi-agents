@@ -4,6 +4,7 @@ import type { SceneOutline } from '@/lib/types/generation';
 
 const callLLMMock = vi.hoisted(() => vi.fn());
 const resolveModelFromRequestMock = vi.hoisted(() => vi.fn());
+const fetchEvidenceMock = vi.hoisted(() => vi.fn());
 const VOCATIONAL_FLAG = 'OPENMAIC_ENABLE_VOCATIONAL';
 let originalVocationalFlag: string | undefined;
 
@@ -19,11 +20,22 @@ vi.mock('@/lib/server/corpus-access', () => ({
   requireCorpusVisible: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
+vi.mock('@/lib/generation/evidence-grounding', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/generation/evidence-grounding')>()),
+  fetchEvidence: fetchEvidenceMock,
+}));
+
 describe('scene-content vocational gate', () => {
   beforeEach(() => {
     originalVocationalFlag = process.env[VOCATIONAL_FLAG];
     delete process.env[VOCATIONAL_FLAG];
     callLLMMock.mockReset();
+    fetchEvidenceMock.mockReset();
+    fetchEvidenceMock.mockResolvedValue({
+      status: 'unavailable',
+      configured: false,
+      reason: 'test runtime has no evidence bridge',
+    });
     resolveModelFromRequestMock.mockReset();
     resolveModelFromRequestMock.mockResolvedValue({
       model: { provider: 'test.chat', modelId: 'test-model' },

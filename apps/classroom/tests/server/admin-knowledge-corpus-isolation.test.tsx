@@ -53,14 +53,11 @@ vi.mock('@/lib/accounts/org-store', () => ({
 
 vi.mock('@/lib/server/knowledge-center', () => ({
   isValidCorpusName: (corpus: string) => /^[a-z0-9-]+$/.test(corpus),
-  readCorporaWithDrift: async (visible: (corpus: string) => boolean = () => true) => ({
-    corpora: [
-      { corpus: 'public-corpus', available: true },
-      { corpus: 'private-a', available: true },
-      { corpus: 'private-b', available: true },
-    ].filter((row) => visible(row.corpus)),
-    drift: [],
-  }),
+  readCorpora: async () => [
+    { corpus: 'public-corpus', available: true },
+    { corpus: 'private-a', available: true },
+    { corpus: 'private-b', available: true },
+  ],
   readCorpus: mocks.readCorpus,
 }));
 

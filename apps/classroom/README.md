@@ -256,8 +256,8 @@ and PostgreSQL. The persistence HTTP server is embedded in the app at
 
 ```bash
 cp .env.example .env.local
-printf '\nDATABASE_URL=postgres://openmaic:openmaic-dev@postgres:5432/openmaic\nPERSISTENCE_DEV_TOKEN=openmaic-local-dev\n' >> .env.local
-NEXT_PUBLIC_PERSISTENCE=1 NEXT_PUBLIC_PERSISTENCE_TOKEN=openmaic-local-dev docker compose --profile server-persistence up --build
+printf '\nDATABASE_URL=postgres://openmaic:openmaic-dev@postgres:5432/openmaic\n' >> .env.local
+NEXT_PUBLIC_PERSISTENCE=1 docker compose --profile server-persistence up --build
 ```
 
 Add your provider API keys to `.env.local` as usual. Runtime sessions and course
@@ -269,26 +269,10 @@ path as browser persistence.
 
 `NEXT_PUBLIC_PERSISTENCE` is a **build-time switch** compiled into the browser
 bundle. A build with it enabled must be deployed with a working runtime
-`DATABASE_URL` and `PERSISTENCE_DEV_TOKEN`, while
-`NEXT_PUBLIC_PERSISTENCE_TOKEN` must match that server token at build time.
-Otherwise the browser selects HTTP persistence but the embedded endpoint
-returns configuration/authentication/initialization errors; the home page shows
-a persistence-unavailable toast and keeps the prior course list instead of
-misleadingly displaying an empty library.
-
-`PERSISTENCE_DEV_TOKEN` and `NEXT_PUBLIC_PERSISTENCE_TOKEN` are **not a
-secret in any meaningful sense**: the `NEXT_PUBLIC_` token is compiled into
-the public JavaScript bundle, fully visible to every visitor, and therefore
-provides **no confidentiality and no user isolation whatsoever** — anyone who
-can load the page can extract it and read or write **every** learner partition
-and **all** documents by choosing an `x-learner-key`. Its only purpose is to
-keep unrelated network scanners out of an endpoint on a trusted network. This
-is suitable only for localhost or trusted-network, single-user deployments. Before production,
-replace
-[`lib/persistence/server-auth.ts`](lib/persistence/server-auth.ts) with real
-session verification that derives the learner partition from server-controlled
-identity, and change the document/merge/admin authorization policies as
-appropriate.
+`DATABASE_URL`. Server persistence accepts authenticated accounts only and
+derives the partition from the signed httpOnly session cookie; client headers
+cannot select another account. Unauthenticated records remain in browser
+storage and are not uploaded.
 
 `PERSISTENCE_POSTGRES_PASSWORD` initializes the PostgreSQL role only when the
 data directory is empty; changing it later does not rotate an existing

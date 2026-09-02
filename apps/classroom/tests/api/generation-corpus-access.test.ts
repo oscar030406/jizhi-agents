@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NextRequest } from 'next/server';
 
 const mocks = vi.hoisted(() => ({
+  authorizeInternalCorpusService: vi.fn(),
   requireCorpusVisible: vi.fn(),
   createClassroomGenerationJob: vi.fn(),
   runClassroomGenerationJob: vi.fn(),
@@ -10,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@/lib/server/corpus-access', () => ({
+  authorizeInternalCorpusService: mocks.authorizeInternalCorpusService,
   requireCorpusVisible: mocks.requireCorpusVisible,
 }));
 vi.mock('@/lib/server/classroom-job-store', () => ({
@@ -37,7 +39,10 @@ function request(path: string, body: unknown) {
   }) as NextRequest;
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.authorizeInternalCorpusService.mockResolvedValue({ attempted: false });
+});
 
 describe('external generation corpus access gate', () => {
   it('generate-classroom 原样返回 403 且不创建或运行 job', async () => {

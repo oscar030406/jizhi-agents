@@ -31,12 +31,11 @@ New-Item -ItemType Directory -Force -Path $stage | Out-Null
 # ---- ① 材料文档 --------------------------------------------------------------
 $mat = Join-Path $stage '01-材料文档'
 New-Item -ItemType Directory -Force -Path $mat | Out-Null
-# 方案文档真源 = 技术实现文档-终版.docx（2026-08-29 起，由用户手改版+当日口径修正合成；
-# design-implementation.md 是它的前身草稿，不再入包——两份技术文档等于口径分裂）。
-# 2026-09-01 起真源切换为历程版（拿到题→被谁启发→做成什么→否掉踩过什么→现在什么水平；含封面目录论文格式）
+# 方案文档真源 = 技术实现文档-历程版.docx；design-implementation.md 是前身草稿，
+# 不再入包，避免两份技术文档口径分裂。
 $techDoc = Join-Path $defense '技术实现文档-历程版.docx'
 if (-not (Test-Path $techDoc)) {
-    Write-Host "[阻断] 未找到技术实现文档（docs\06-defense\技术实现文档-终版.docx）" -ForegroundColor Red; exit 1
+    Write-Host "[阻断] 未找到技术实现文档（docs\06-defense\技术实现文档-历程版.docx）" -ForegroundColor Red; exit 1
 }
 Copy-Item $techDoc (Join-Path $mat '技术实现文档.docx')
 $required = @('product-intro.md')

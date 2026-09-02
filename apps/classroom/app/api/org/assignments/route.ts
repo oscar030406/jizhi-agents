@@ -21,6 +21,7 @@ import {
 } from '@/lib/generation/learner-release';
 import { API_ERROR_CODES, apiError, apiSuccess } from '@/lib/server/api-response';
 import { courseVisibleToOrg } from '@/lib/server/course-access';
+import { readCourseDomains, RETIRED_DOMAIN, UNKNOWN_DOMAIN } from '@/lib/server/course-domains';
 import { readClassroom } from '@/lib/server/classroom-storage';
 import { createLogger } from '@/lib/logger';
 
@@ -28,6 +29,20 @@ const log = createLogger('OrgAssignments API');
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const COURSE_UNAVAILABLE =
+  '机构课程暂不可用：课程内容目前无法读取或已不在本机构可见范围，请联系管理者检查课程状态。';
+const COURSE_UNRELEASED = '机构课程暂不可用：课程尚未通过发布审核，请联系管理者完成复核。';
+
+function unavailable<T extends object>(assignment: T, reason: string) {
+  return { ...assignment, availability: 'unavailable' as const, unavailableReason: reason };
+}
+
+function normalizeAssignmentDomain(value: string | null | undefined) {
+  const domain = value?.trim();
+  if (!domain || domain === UNKNOWN_DOMAIN || domain === RETIRED_DOMAIN) return null;
+  return domain;
+}
 
 async function gate(needOwner: boolean) {
   const account = await accountForSession((await cookies()).get(SESSION_COOKIE)?.value);
@@ -61,18 +76,38 @@ export async function GET(): Promise<NextResponse> {
       ? await assignmentsOf(g.org.id)
       : await assignmentsOf(g.org.id, g.account.id);
   const ownership = await corpusOwnership();
-  const visibleAssignments = (
-    await Promise.all(
-      assignments.map(async (assignment) => {
-        const classroom = await readClassroom(assignment.courseId).catch(() => null);
-        if (!classroom || !courseVisibleToOrg(classroom, g.org.id, ownership)) return null;
-        return g.org.memberRole === 'owner' || isCourseLearnerReleased(classroom)
-          ? assignment
-          : null;
-      }),
-    )
-  ).filter((assignment): assignment is NonNullable<typeof assignment> => assignment !== null);
-  return apiSuccess({ assignments: visibleAssignments, orgName: g.org.name });
+  const courseDomains = await readCourseDomains().catch(() => null);
+  const assignmentViews = await Promise.all(
+    assignments.map(async (assignment) => {
+      const fallbackDomain = normalizeAssignmentDomain(
+        assignment.domain ??
+          (assignment.courseId ? courseDomains?.[assignment.courseId]?.domain : undefined),
+      );
+      const assignmentWithDomain = {
+        ...assignment,
+        domain: fallbackDomain,
+      };
+      let classroom: Awaited<ReturnType<typeof readClassroom>>;
+      try {
+        classroom = await readClassroom(assignment.courseId);
+      } catch (error) {
+        log.warn(`assignment course read failed (${assignment.courseId}): ${String(error)}`);
+        return unavailable(assignmentWithDomain, COURSE_UNAVAILABLE);
+      }
+      if (!classroom || !courseVisibleToOrg(classroom, g.org.id, ownership)) {
+        return unavailable(assignmentWithDomain, COURSE_UNAVAILABLE);
+      }
+      if (!isCourseLearnerReleased(classroom)) {
+        return unavailable(assignmentWithDomain, COURSE_UNRELEASED);
+      }
+      return { ...assignmentWithDomain, availability: 'ready' as const };
+    }),
+  );
+  return apiSuccess({
+    assignments: assignmentViews,
+    orgName: g.org.name,
+    memberRole: g.org.memberRole,
+  });
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
@@ -92,7 +127,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (!classroom) {
     return apiError(API_ERROR_CODES.INVALID_REQUEST, 404, '课程不存在。');
   }
-  if (!courseVisibleToOrg(classroom, g.org.id, await corpusOwnership())) {
+  const ownership = await corpusOwnership();
+  if (!courseVisibleToOrg(classroom, g.org.id, ownership)) {
     return apiError(API_ERROR_CODES.INVALID_REQUEST, 404, '课程不存在或无权访问。');
   }
   const release = decideCourseLearnerRelease(classroom);
@@ -109,6 +145,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       '课程尚未通过学习者发布审核，已保留为待复核草稿。',
     );
   }
+  const courseDomains = await readCourseDomains().catch(() => null);
+  const newDomain = courseDomains?.[courseId]?.domain.trim();
+  if (!newDomain || newDomain === UNKNOWN_DOMAIN || newDomain === RETIRED_DOMAIN) {
+    return apiError(API_ERROR_CODES.INVALID_REQUEST, 409, '无法确定该课程所属领域，已拒绝指派。');
+  }
+
   // 标题取课程文件真源，不信任客户端可篡改的快照。
   const result = await addAssignment(
     g.org.id,
@@ -116,8 +158,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     classroom.stage.name,
     g.account.id,
     learnerAccountId,
+    newDomain,
   );
-  if (!result.ok) return apiError(API_ERROR_CODES.MISSING_REQUIRED_FIELD, 400, result.message);
+  if (!result.ok) {
+    const status = result.message.includes('领域') ? 409 : 400;
+    return apiError(API_ERROR_CODES.INVALID_REQUEST, status, result.message);
+  }
   log.info(`assignment ${result.assignment.id} (${result.assignment.courseId}) in org ${g.org.id}`);
   return apiSuccess({ assignment: result.assignment });
 }

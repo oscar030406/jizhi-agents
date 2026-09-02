@@ -38,6 +38,14 @@ async function readJson<T>(file: string): Promise<T | null> {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
 /** metrics.json 的一条：值 + 口径 + 复算命令。口径原文必须随数字一起展示。 */
 export interface MetricEntry {
   id: string;
@@ -148,21 +156,21 @@ async function readJobSpans(): Promise<Map<string, { ms: number; concurrent: num
   }
   const spans: JobSpan[] = [];
   for (const f of files) {
-    const j = await readJson<Record<string, any>>(path.join(dir, f));
-    const classroomId = j?.result?.classroomId;
-    const start = Date.parse(j?.startedAt ?? '');
-    const end = Date.parse(j?.completedAt ?? '');
+    const j = await readJson<unknown>(path.join(dir, f));
+    if (!isRecord(j)) continue;
+    const classroomId = asRecord(j.result).classroomId;
+    const start = Date.parse(String(j.startedAt ?? ''));
+    const end = Date.parse(String(j.completedAt ?? ''));
     if (!classroomId || !Number.isFinite(start) || !Number.isFinite(end) || end < start) continue;
     spans.push({ classroomId: String(classroomId), start, end });
   }
   const out = new Map<string, { ms: number; concurrent: number }>();
   for (const s of spans) {
-    const concurrent = spans.filter(
-      (o) => o !== s && o.start < s.end && o.end > s.start,
-    ).length;
+    const concurrent = spans.filter((o) => o !== s && o.start < s.end && o.end > s.start).length;
     // 同一门课重跑过多次时保留最近一次（文件遍历顺序不保证，按结束时间比）
     const prev = out.get(s.classroomId);
-    if (!prev || s.end - s.start !== prev.ms) out.set(s.classroomId, { ms: s.end - s.start, concurrent });
+    if (!prev || s.end - s.start !== prev.ms)
+      out.set(s.classroomId, { ms: s.end - s.start, concurrent });
   }
   return out;
 }
@@ -279,26 +287,36 @@ export async function readDomainIntakes(): Promise<DomainIntake[]> {
   }
   const rows = await Promise.all(
     dirs.map(async (dir) => {
-      const r = await readJson<Record<string, any>>(path.join(kb, dir, 'readiness.json'));
-      if (!r) return null;
+      const raw = await readJson<unknown>(path.join(kb, dir, 'readiness.json'));
+      if (!isRecord(raw) || !isRecord(raw.corpus_index)) return null;
+      const r = raw;
+      const corpusIndex = raw.corpus_index;
+      const prereqGraphChapter = asRecord(r.prereq_graph_chapter);
+      const chapterClauses = asRecord(prereqGraphChapter.clauses);
+      const structureSignals = asRecord(r.structure_signals);
+      const prereqGraph = asRecord(r.prereq_graph);
+      const nodeClauses = asRecord(prereqGraph.clauses);
+      const license = asRecord(r.license);
+      const intake = asRecord(r.intake);
+      const readiness = asRecord(r.readiness);
+      const difficulty = asRecord(r.difficulty);
       // `corpus_index` 为空 = 这次接入没落成检索索引（盘上只剩一份就绪度报告）。
       // 这种半成品卡片在管理端看着像「已接入的第七个库」，实际引擎的库名单里根本没有它
       // （现存例子：`iotdb2_intake`）。不显示，也不给它编中文名——真接入了再说。
-      if (!r.corpus_index) return null;
-      let chapterEdges = Object.keys(r.prereq_graph_chapter?.clauses ?? {}).length;
-      let chapterCount = Number(r.structure_signals?.chapters ?? 0);
-      let candidateEdges = Number(r.structure_signals?.candidate_edges ?? 0);
+      let chapterEdges = Object.keys(chapterClauses).length;
+      let chapterCount = Number(structureSignals.chapters ?? 0);
+      let candidateEdges = Number(structureSignals.candidate_edges ?? 0);
       // 章级那一层可以由 `ingest_domain.py --structure-only` 单独跑出来（它比全链便宜
       // 一个数量级：词表抽取才是贵的那一步）。那条路径只落审计文件，不重写 readiness.json，
       // 所以这里补读一次——否则跑过结构层的域在总览上仍显示「—」，看着像没做。
       if (!chapterEdges) {
-        const audit = await readJson<{ names?: Record<string, string>; edges?: any[] }>(
-          path.join(kb, dir, 'prereq_chapter_audit.json'),
+        const audit = asRecord(
+          await readJson<unknown>(path.join(kb, dir, 'prereq_chapter_audit.json')),
         );
-        if (audit?.edges) {
+        if (Array.isArray(audit.edges)) {
           candidateEdges = candidateEdges || audit.edges.length;
-          chapterEdges = audit.edges.filter((e) => e?.passed).length;
-          chapterCount = chapterCount || Object.keys(audit.names ?? {}).length;
+          chapterEdges = audit.edges.filter((edge) => Boolean(asRecord(edge).passed)).length;
+          chapterCount = chapterCount || Object.keys(asRecord(audit.names)).length;
         }
       }
       return {
@@ -306,38 +324,40 @@ export async function readDomainIntakes(): Promise<DomainIntake[]> {
         scope: String(r.scope ?? ''),
         sourceDir: String(r.source_dir ?? ''),
         license: {
-          spdx: String(r.license?.spdx ?? 'UNKNOWN'),
-          unknown: Boolean(r.license?.unknown),
+          spdx: String(license.spdx ?? 'UNKNOWN'),
+          unknown: Boolean(license.unknown),
         },
-        acceptedFiles: Number(r.intake?.accepted_files ?? 0),
-        rejectedFiles: (r.intake?.rejected ?? []).length,
-        sections: Number(r.intake?.sections ?? 0),
-        conceptCount: (r.concepts ?? []).length,
+        acceptedFiles: Number(intake.accepted_files ?? 0),
+        rejectedFiles: Array.isArray(intake.rejected) ? intake.rejected.length : 0,
+        sections: Number(intake.sections ?? 0),
+        conceptCount: Array.isArray(r.concepts) ? r.concepts.length : 0,
         chapterCount,
         chapterEdges,
         candidateEdges,
-        nodeEdges: Object.keys(r.prereq_graph?.clauses ?? {}).length,
-        chunks: Number(r.corpus_index?.chunks ?? 0),
+        nodeEdges: Object.keys(nodeClauses).length,
+        chunks: Number(corpusIndex.chunks ?? 0),
         gates: {
           // 闸零：语料进没进可检索的库。这一步在 08-13 之前是缺的——接入链产出了
           // 就绪度报告，语料却检索不到，换领域生成课程无素材可取。
-          retrievable: Number(r.corpus_index?.chunks ?? 0) > 0,
-          vocabulary: Boolean(r.readiness?.gate1_vocabulary),
+          retrievable: Number(corpusIndex.chunks ?? 0) > 0,
+          vocabulary: Boolean(readiness.gate1_vocabulary),
           // 闸二按**实际边数**算，不照抄 readiness.json 里那个布尔值：
           // 章级那一层可以由 `--structure-only` 事后单独补跑，它不重写 readiness.json，
           // 于是那个布尔值会停在补跑之前的状态（实测 iotdb：章级 8 条边在手，
           // readiness 仍写着 gate2=false）。陈旧的闸位比没有闸位更误导。
           graph:
             chapterEdges > 0 ||
-            Object.keys(r.prereq_graph?.clauses ?? {}).length > 0 ||
-            Boolean(r.readiness?.gate2_graph_connected),
-          itemMapping: Boolean(r.readiness?.gate3_item_mapping),
+            Object.keys(nodeClauses).length > 0 ||
+            Boolean(readiness.gate2_graph_connected),
+          itemMapping: Boolean(readiness.gate3_item_mapping),
         },
-        tierRange: String(r.difficulty?.tier_range ?? ''),
+        tierRange: String(difficulty.tier_range ?? ''),
       } satisfies DomainIntake;
     }),
   );
-  return rows.filter((r): r is DomainIntake => r !== null).sort((a, b) => a.domain.localeCompare(b.domain));
+  return rows
+    .filter((r): r is DomainIntake => r !== null)
+    .sort((a, b) => a.domain.localeCompare(b.domain));
 }
 
 /** 课程墙的实时汇总。所有数字当场从课程文件算，不读缓存也不硬编码。 */

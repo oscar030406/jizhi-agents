@@ -83,6 +83,25 @@ const outline = {
 
 const slideContent = { elements: [], remark: '先召回再重排' };
 
+const learningContract = {
+  teachingStrategy: 'standard' as const,
+  objectives: [
+    {
+      id: 'O1',
+      action: 'explain retrieval and reranking',
+      condition: 'given a RAG pipeline',
+      successCriterion: 'names both stages in order',
+    },
+  ],
+  prerequisiteActivation: ['outline-1'],
+  demonstration: ['outline-1'],
+  learnerPractice: ['outline-1'],
+  feedbackRetry: ['outline-1'],
+  transferApplication: ['outline-1'],
+  assessmentMap: [{ sceneId: 'outline-1', objectiveIds: ['O1'] }],
+  grounding: { sourceRefs: ['corpus:ai'], claimPolicy: 'cite-or-mark-uncertain' as const },
+};
+
 /** 五维自评 + 领域/学历，外加两个**不该落盘**的身份/自述字段。 */
 const profile = {
   domain: 'ai',
@@ -122,6 +141,13 @@ const evidence = {
   ],
   matchedConcepts: ['rag'],
   summary: '',
+};
+
+const evidenceOk = { status: 'ok' as const, bundle: evidence };
+const evidenceUnconfigured = {
+  status: 'unavailable' as const,
+  configured: false,
+  reason: '本地未配置证据检索桥',
 };
 
 async function generate(input: Record<string, unknown> = {}) {
@@ -191,14 +217,19 @@ describe('生成期元数据落库', () => {
     mocks.callLLM.mockResolvedValue({ text: 'ok' });
     mocks.generateSceneOutlinesFromRequirements.mockResolvedValue({
       success: true,
-      data: { languageDirective: '用中文。', courseTitle: 'RAG 入门', outlines: [outline] },
+      data: {
+        languageDirective: '用中文。',
+        courseTitle: 'RAG 入门',
+        outlines: [outline],
+        learningContract,
+      },
     });
     mocks.applyOutlineFallbacks.mockImplementation((value: unknown) => ({
       ...(value as Record<string, unknown>),
     }));
     mocks.generateSceneContent.mockResolvedValue(slideContent);
     mocks.generateSceneActions.mockResolvedValue([]);
-    mocks.fetchEvidence.mockResolvedValue(null);
+    mocks.fetchEvidence.mockResolvedValue(evidenceUnconfigured);
     mocks.fetchLearnerBlueprint.mockResolvedValue(null);
     mocks.corpusUnavailableReason.mockResolvedValue(null);
     mocks.zeroEvidenceReason.mockResolvedValue(null);
@@ -237,7 +268,7 @@ describe('生成期元数据落库', () => {
   });
 
   it('蓝图 + 证据在场：档位、目标画像、概念标签三样都落盘', async () => {
-    mocks.fetchEvidence.mockResolvedValue(evidence);
+    mocks.fetchEvidence.mockResolvedValue(evidenceOk);
     mocks.fetchLearnerBlueprint.mockResolvedValue(blueprint);
 
     const result = await generate({ learnerProfile: profile });
@@ -283,7 +314,7 @@ describe('生成期元数据落库', () => {
   });
 
   it('显式选了知识库就记进课级元数据；没选不占位', async () => {
-    mocks.fetchEvidence.mockResolvedValue(evidence);
+    mocks.fetchEvidence.mockResolvedValue(evidenceOk);
     mocks.fetchLearnerBlueprint.mockResolvedValue(blueprint);
 
     // 库名不写死。原来钉的是 odoo，2026-08-23 泛化域收敛把它删掉之后这条就红了
@@ -304,7 +335,7 @@ describe('生成期元数据落库', () => {
   });
 
   it('脱敏：身份自述与偏好自述一个都不落盘（赛题第(5)款）', async () => {
-    mocks.fetchEvidence.mockResolvedValue(evidence);
+    mocks.fetchEvidence.mockResolvedValue(evidenceOk);
     mocks.fetchLearnerBlueprint.mockResolvedValue(blueprint);
 
     await generate({ learnerProfile: profile });
@@ -316,8 +347,8 @@ describe('生成期元数据落库', () => {
     expect('role' in persisted.generation.profile).toBe(false);
   });
 
-  it('引擎离线：两个字段整个不存在，不是 null、不是空对象', async () => {
-    mocks.fetchEvidence.mockResolvedValue(null);
+  it('本地未配置证据桥：两个字段整个不存在，不是 null、不是空对象', async () => {
+    mocks.fetchEvidence.mockResolvedValue(evidenceUnconfigured);
     mocks.fetchLearnerBlueprint.mockResolvedValue(null);
 
     const result = await generate({ learnerProfile: profile });
@@ -328,7 +359,7 @@ describe('生成期元数据落库', () => {
   });
 
   it('有证据但没画像：概念标签照写，课级元数据不写', async () => {
-    mocks.fetchEvidence.mockResolvedValue(evidence);
+    mocks.fetchEvidence.mockResolvedValue(evidenceOk);
 
     const result = await generate();
 
@@ -376,9 +407,12 @@ describe('生成期元数据落库', () => {
 
   it('检索命中了但块上没有概念标签：同样整个字段不写', async () => {
     mocks.fetchEvidence.mockResolvedValue({
-      chunks: [{ source_id: 'k9', title: 'C', content: 'c', concept_tags: [] }],
-      matchedConcepts: [],
-      summary: '',
+      status: 'ok',
+      bundle: {
+        chunks: [{ source_id: 'k9', title: 'C', content: 'c', concept_tags: [] }],
+        matchedConcepts: [],
+        summary: '',
+      },
     });
 
     const result = await generate();

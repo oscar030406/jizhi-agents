@@ -1,10 +1,10 @@
 """域级学习路径：把接入流水线造的前置图排成「先学什么、再学什么」。
 
-## 为什么不是复用那份手工路径
+## 唯一内容来源
 
-`apps/classroom/data/learning-path.json` 是人手策展的 AI 域产物，30 个节点，
-只对 AI 域成立。非 AI 域的 /path 页此前只显示一句「本页只覆盖 AI 领域」——
-建了七个库，六个库的学习者点进去看到的是一句道歉。
+所有领域都从接入引擎落下的索引与前置图生成。AI 主库是早期扁平布局，原料位于
+根 `knowledge_index.jsonl` 与 `prereq_graph.json["ai"]`；后接入的库位于
+`<corpus>_intake/readiness.json`。前端那份手工 `learning-path.json` 不再参与。
 
 路径的原料其实早就在盘上：每个库跑接入流水线时都造了自己的前置图，落在
 `<corpus>_intake/readiness.json` 的 `prereq_graph`（智能制造 66 概念 / 51 条 clause）。
@@ -16,33 +16,29 @@
 所以返回体里带一句 {@link CALIBER}，前端必须原样展示——把机器抽的顺序说成
 「课程大纲」就是虚报。
 
-## 概念表太薄时的次级来源
+## 概念表太薄时也不换空间
 
-词表站对**无章节序的语料**产出很弱：iotdb 有 2716 个证据块，概念表只抽出 2 条，
-它的接入报告自己写着「这份语料里没有可用的章节序」。两个概念排不成路径，
-但这个库明明有东西可学——语料索引里逐块标着 `concept_tags`（iotdb 18 个、
-智能制造 39 个），那是入库时按块打的标注，同样是流水线的自动产出。
-
-所以概念表薄于 {@link THIN_CONCEPTS} 条时，改用索引标注补齐，并且**换一套口径**：
-标注之间没有前置关系，只有覆盖块数，所以那种路径的排序含义是「教材着墨多少」
-而不是「谁先谁后」。这件事必须在 `source` 与 `caliber` 里说出来，
-让页面照原文展示——用覆盖厚度冒充前置顺序，就是换个姿势虚报。
+`readiness.json` 的概念 ID 是非 AI 域在路径、画像、诊断和蓝图之间共享的唯一概念空间。
+即使词表很薄，也只如实标记 `thin_vocabulary`；索引块上的 `concept_tags` 不能拿来补概念，
+否则同一学习者会在路径和诊断里得到两套互不相交的 ID。
 
 ## 没有就说没有
 
-该域没跑过接入流水线、或概念表与索引标注都是空的，就返回 `source="none"` + `reason`。
+该域没跑过接入流水线、或概念表为空，就返回 `source="none"` + `reason`。
 **不回退到 AI 域的路径**——拿别的域的路径冒充本域，学习者照着学一遍才发现全错，
 比直说没有伤害大得多。
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
-import re
+from datetime import datetime, timezone
 from typing import Any
 
 from backend.rag.ingest import read_index_rows
+from backend.rag.retriever import DEFAULT_CORPUS_ALIASES
 from backend.services.concept_graph import KB_DIR, read_json_dict
 
 #: 分档上限。超过就按分位合并——十几阶的「路径」在页面上等于没分档，
@@ -51,36 +47,70 @@ MAX_STAGES = 6
 #: 每个概念展示几条出处。多了页面塞不下，少了不足以让人判断这条边靠不靠谱。
 SECTIONS_PER_CONCEPT = 3
 
-#: 概念表薄于这个数就转用索引标注。6 = 至少要能分出三阶、每阶两个概念，
-#: 再少的「路径」画在页面上跟没有一样。
+#: 概念表薄于这个数就在结果里显式标记，但不切换概念来源。
 THIN_CONCEPTS = 6
-#: 索引标注路径的分阶数。没有深度可分，只能按覆盖厚度切三档。
-TAG_STAGES = 3
 MASTERY_THRESHOLD = 0.7
 
 CALIBER = (
     "阶段由前置图拓扑深度分档，边来自接入流水线的成对分类器，"
     "一律未经人工复核，只作推荐不拦人"
 )
-TAG_CALIBER = (
-    "这个库的概念表太薄（语料没有章节序，词表站抽不出足够概念），"
-    "本路径改用语料索引里逐块的概念标注，按覆盖块数分档——"
-    "它表示教材在哪些概念上着墨最多，**不是前置顺序**，不代表要按这个次序学"
-)
+def _root_ai_readiness() -> dict[str, Any]:
+    """把早期 AI 主库的扁平引擎产物适配为 readiness 形状。"""
+    graph_path = KB_DIR / "prereq_graph.json"
+    index_path = KB_DIR / "knowledge_index.jsonl"
+    graph = read_json_dict(graph_path).get("ai") if graph_path.exists() else None
+    if not isinstance(graph, dict) or not index_path.exists():
+        return {}
+
+    sections: dict[str, list[str]] = {}
+    for row in read_index_rows(index_path):
+        title = str(row.get("section") or row.get("title") or "").strip()
+        for raw_tag in row.get("concept_tags") or []:
+            tag = str(raw_tag).strip() if isinstance(raw_tag, str) else ""
+            if not tag or not title:
+                continue
+            seen = sections.setdefault(tag, [])
+            if title not in seen and len(seen) < SECTIONS_PER_CONCEPT:
+                seen.append(title)
+
+    order = [str(item) for item in graph.get("items") or [] if str(item)]
+    for concept in graph.get("clauses") or {}:
+        if str(concept) and str(concept) not in order:
+            order.append(str(concept))
+    digest = hashlib.sha256(graph_path.read_bytes() + b"\0" + index_path.read_bytes()).hexdigest()
+    produced_at = datetime.fromtimestamp(
+        max(graph_path.stat().st_mtime, index_path.stat().st_mtime),
+        timezone.utc,
+    ).isoformat(timespec="seconds")
+    return {
+        "produced_by": {
+            "at": produced_at,
+            "artifact_id": f"sha256:{digest[:16]}",
+        },
+        "concepts": [
+            {"concept": concept, "sections": sections.get(concept, [])}
+            for concept in order
+        ],
+        "prereq_graph": graph,
+    }
 
 
 def build_domain_path(
     corpus: str,
-    profile: Any = None,
-    concept_mastery: Any = None,
-    curated_path: Any = None,
+    mastery_vector: Any = None,
+    mastery_corpus: Any = None,
 ) -> dict[str, Any]:
     """某个域的学习路径。查不到就如实返回 source="none" + reason，不编。"""
-    name = (corpus or "").strip()
-    if name == "ai" and isinstance(curated_path, dict):
-        return _personalize(_curated_path(name, curated_path), profile, concept_mastery)
-
-    readiness = read_json_dict(KB_DIR / f"{name}_intake" / "readiness.json") if name else {}
+    raw_name = (corpus or "").strip().lower()
+    name = "ai" if raw_name in DEFAULT_CORPUS_ALIASES else raw_name
+    readiness = (
+        _root_ai_readiness()
+        if name == "ai"
+        else read_json_dict(KB_DIR / f"{name}_intake" / "readiness.json")
+        if name
+        else {}
+    )
     produced = readiness.get("produced_by") or {}
     out: dict[str, Any] = {
         "corpus": name,
@@ -88,6 +118,7 @@ def build_domain_path(
         "source": "none",
         "generated_at": produced.get("at"),
         "run_id": produced.get("run_id"),
+        "artifact_id": produced.get("artifact_id"),
         "concept_count": 0,
         "edge_count": 0,
         "stages": [],
@@ -101,7 +132,7 @@ def build_domain_path(
             "该领域尚未生成可用的学习路径：知识库未完成接入，"
             "或接入报告当前不可用。请由所属机构的管理者完成知识库接入后重试"
         )
-        return _personalize(out, profile, concept_mastery)
+        return _personalize(out, mastery_vector, mastery_corpus)
 
     meta = {
         str(c["concept"]): c
@@ -117,37 +148,23 @@ def build_domain_path(
         if isinstance(extra, str) and extra and extra not in meta and extra not in order:
             order.append(extra)
     if len(order) < THIN_CONCEPTS:
-        tagged = _tag_stages(name)
-        if tagged:
-            stages, count = tagged
-            out.update(
-                {
-                    "source": "index-tags",
-                    "concept_count": count,
-                    "edge_count": 0,
-                    "stages": stages,
-                    "caliber": TAG_CALIBER,
-                    "thin_vocabulary": {
-                        "concepts_in_report": len(order),
-                        "threshold": THIN_CONCEPTS,
-                        "why": str(
-                            (readiness.get("structure_signals") or {})
-                            .get("structure_form", {})
-                            .get("why")
-                            or readiness.get("vocabulary_note")
-                            or ""
-                        ),
-                    },
-                }
-            )
-            return _personalize(out, profile, concept_mastery)
+        out["thin_vocabulary"] = {
+            "concepts_in_report": len(order),
+            "threshold": THIN_CONCEPTS,
+            "why": str(
+                (readiness.get("structure_signals") or {})
+                .get("structure_form", {})
+                .get("why")
+                or readiness.get("vocabulary_note")
+                or ""
+            ),
+        }
     if not order:
         note = str(readiness.get("vocabulary_note") or "").strip()
-        out["reason"] = (
-            "这个库的概念表是空的，语料索引里也没有概念标注"
-            + (f"：{note}" if note else "，接入报告里也没写原因")
+        out["reason"] = "这个库的接入报告没有产出概念词表" + (
+            f"：{note}" if note else "，接入报告里也没写原因"
         )
-        return _personalize(out, profile, concept_mastery)
+        return _personalize(out, mastery_vector, mastery_corpus)
 
     universe = set(order)
     prereq: dict[str, list[str]] = {}
@@ -193,9 +210,11 @@ def build_domain_path(
                 "title": f"第 {index + 1} 阶",
                 "concepts": [
                     {
+                        "id": c,
                         "name": c,
                         "depth": depth[c],
                         "prereq": list(prereq.get(c, [])),
+                        "prereq_ids": list(prereq.get(c, [])),
                         "confidence": confidence.get(c),
                         "because": because.get(c, ""),
                         "sections": [
@@ -210,98 +229,36 @@ def build_domain_path(
 
     out.update(
         {
-            "source": "intake",
+            "source": "index-graph" if name == "ai" else "intake",
             "concept_count": len(order),
             "edge_count": edge_count,
             "stages": stages,
             "cycles_broken": cycles_broken,
         }
     )
-    return _personalize(out, profile, concept_mastery)
+    return _personalize(out, mastery_vector, mastery_corpus)
 
 
-def _curated_path(corpus: str, data: dict[str, Any]) -> dict[str, Any]:
-    """把 AI 既有 tracks/nodes 适配成同一返回形状；顺序和概念一字不造。"""
-    nodes = {
-        str(node.get("id")): node
-        for node in data.get("nodes") or []
-        if isinstance(node, dict) and node.get("id")
-    }
-    order = [
-        str(node_id)
-        for track in data.get("tracks") or []
-        if isinstance(track, dict)
-        for node_id in track.get("nodeIds") or []
-        if str(node_id) in nodes
-    ]
-    prereq = {
-        node_id: [str(item) for item in nodes[node_id].get("prereq") or [] if str(item) in nodes]
-        for node_id in order
-    }
-    depth, cycles_broken = _depths(order, prereq)
-    stages: list[dict[str, Any]] = []
-    for index, track in enumerate(data.get("tracks") or [], start=1):
-        if not isinstance(track, dict):
-            continue
-        concepts: list[dict[str, Any]] = []
-        for raw_id in track.get("nodeIds") or []:
-            node_id = str(raw_id)
-            node = nodes.get(node_id)
-            if not node:
-                continue
-            title = str(node.get("title") or node_id)
-            concepts.append(
-                {
-                    "id": node_id,
-                    "name": title,
-                    "depth": depth.get(node_id, 0),
-                    "prereq": [str(nodes[item].get("title") or item) for item in prereq[node_id]],
-                    "confidence": None,
-                    "because": "沿用 AI 主域既有策展路径",
-                    "sections": [str(node["textbookRef"])] if node.get("textbookRef") else [],
-                    **({"courseId": node.get("courseId")} if "courseId" in node else {}),
-                    **({"audience": node.get("audience")} if node.get("audience") else {}),
-                    **({"difficulty": node.get("difficulty")} if node.get("difficulty") else {}),
-                }
-            )
-        if concepts:
-            stages.append(
-                {
-                    "index": index,
-                    "title": str(track.get("title") or f"第 {index} 组"),
-                    "hint": str(track.get("hint") or ""),
-                    "concepts": concepts,
-                }
-            )
-    return {
-        "corpus": corpus,
-        "label": _label(corpus),
-        "source": "curated",
-        "version": data.get("version"),
-        "generated_at": None,
-        "run_id": None,
-        "concept_count": len(order),
-        "edge_count": sum(len(items) for items in prereq.values()),
-        "stages": stages,
-        "cycles_broken": cycles_broken,
-        "reason": None,
-        "caliber": "AI 主域沿用既有策展路径；掌握度只改变状态标记，不改概念与顺序",
-    }
-
-
-def _personalize(path: dict[str, Any], profile: Any, explicit_mastery: Any) -> dict[str, Any]:
-    """只在既有节点上移动游标：已掌握 → 当前可学 → 后续。"""
-    profile_dict = profile if isinstance(profile, dict) else {}
-    raw = explicit_mastery if isinstance(explicit_mastery, dict) else profile_dict.get("conceptMastery")
-    mastery = {
-        _norm(str(key)): float(value)
-        for key, value in (raw.items() if isinstance(raw, dict) else [])
-        if _norm(str(key))
+def _personalize(
+    path: dict[str, Any], raw_mastery: Any, mastery_corpus: Any
+) -> dict[str, Any]:
+    """同域、同概念 ID 才移动游标；场景标题与子串一律不参与匹配。"""
+    vector = {
+        str(key): float(value)
+        for key, value in (raw_mastery.items() if isinstance(raw_mastery, dict) else [])
+        if str(key)
         and isinstance(value, (int, float))
         and not isinstance(value, bool)
         and math.isfinite(float(value))
         and 0 <= float(value) <= 1
     }
+    raw_vector_corpus = str(mastery_corpus or "").strip().lower()
+    vector_corpus = (
+        "ai" if raw_vector_corpus in DEFAULT_CORPUS_ALIASES else raw_vector_corpus
+    )
+    path_corpus = str(path.get("corpus") or "").strip()
+    corpus_matches = bool(path_corpus) and vector_corpus == path_corpus
+    mastery = vector if corpus_matches else {}
     concepts = [
         concept
         for stage in path.get("stages") or []
@@ -310,42 +267,29 @@ def _personalize(path: dict[str, Any], profile: Any, explicit_mastery: Any) -> d
         if isinstance(concept, dict)
     ]
     matched = 0
-    mastered_aliases: set[str] = set()
+    mastered_ids: set[str] = set()
     for concept in concepts:
-        score = _mastery_for(concept, mastery)
+        concept_id = str(concept.get("id") or "")
+        score = mastery.get(concept_id) if concept_id else None
         if score is not None:
             matched += 1
             concept["mastery"] = score
-        if score is not None and score >= MASTERY_THRESHOLD:
+        if score is None:
+            concept["status"] = "unmeasured"
+        elif score >= MASTERY_THRESHOLD:
             concept["status"] = "mastered"
-            mastered_aliases.update(
-                token for token in (_norm(str(concept.get("id") or "")), _norm(str(concept.get("name") or ""))) if token
-            )
+            mastered_ids.add(concept_id)
         else:
             concept["status"] = "future"
 
-    if path.get("source") == "index-tags":
-        current_stage = next(
-            (
-                stage
-                for stage in path.get("stages") or []
-                if any(concept.get("status") != "mastered" for concept in stage.get("concepts") or [])
-            ),
-            None,
-        )
-        if current_stage:
-            for concept in current_stage.get("concepts") or []:
-                if concept.get("status") != "mastered":
-                    concept["status"] = "current"
-    else:
-        for concept in concepts:
-            if concept.get("status") == "mastered":
-                continue
-            prereq = [_norm(str(item)) for item in concept.get("prereq") or [] if _norm(str(item))]
-            if all(item in mastered_aliases for item in prereq):
-                concept["status"] = "current"
+    for concept in concepts:
+        if concept.get("status") in {"mastered", "unmeasured"}:
+            continue
+        prereq_ids = [str(item) for item in concept.get("prereq_ids") or [] if str(item)]
+        if all(item in mastered_ids for item in prereq_ids):
+            concept["status"] = "current"
 
-    counts = {"mastered": 0, "current": 0, "future": 0}
+    counts = {"mastered": 0, "current": 0, "future": 0, "unmeasured": 0}
     current: list[str] = []
     for concept in concepts:
         status = str(concept.get("status") or "future")
@@ -359,35 +303,28 @@ def _personalize(path: dict[str, Any], profile: Any, explicit_mastery: Any) -> d
             if statuses and all(status == "mastered" for status in statuses)
             else "current"
             if "current" in statuses
+            else "unmeasured"
+            if statuses and all(status == "unmeasured" for status in statuses)
             else "future"
         )
     path["personalization"] = {
-        "profile_present": bool(profile_dict),
-        "mastery_entries": len(mastery),
+        "mastery_source": "learner_blueprint.mastery_vector",
+        "mastery_corpus": vector_corpus,
+        "corpus_match": corpus_matches,
+        "match_mode": "exact-concept-id",
+        "mastery_entries": len(vector),
         "matched_mastery": matched,
         "mastery_threshold": MASTERY_THRESHOLD,
         "counts": counts,
         "current": current,
+        "reason": (
+            None
+            if matched
+            else "当前账户在该领域尚无与路径概念 ID 同源的测评记录；"
+            "系统不会使用账户全局或场景标题掌握度猜测。"
+        ),
     }
     return path
-
-
-def _norm(value: str) -> str:
-    return re.sub(r"[\W_]+", "", value.casefold())
-
-
-def _mastery_for(concept: dict[str, Any], mastery: dict[str, float]) -> float | None:
-    aliases = [_norm(str(concept.get("id") or "")), _norm(str(concept.get("name") or ""))]
-    for alias in aliases:
-        if alias in mastery:
-            return mastery[alias]
-    matches: list[tuple[int, float]] = []
-    for alias in aliases:
-        for key, score in mastery.items():
-            enough = len(key) >= (2 if any(ord(char) > 127 for char in key) else 3)
-            if enough and alias and (key in alias or alias in key):
-                matches.append((len(key), score))
-    return max(matches)[1] if matches else None
 
 
 def _depths(order: list[str], prereq: dict[str, list[str]]) -> tuple[dict[str, int], list[str]]:
@@ -448,64 +385,6 @@ def _stage_index(order: list[str], depth: dict[str, int]) -> dict[str, int]:
     used = sorted(set(bucket.values()))
     remap = {b: i for i, b in enumerate(used)}
     return {c: remap[bucket[depth[c]]] for c in order}
-
-
-def _tag_stages(corpus: str) -> tuple[list[dict[str, Any]], int] | None:
-    """索引标注兜底：按 `concept_tags` 的覆盖块数分三档。读不到返回 None。
-
-    只读一次索引（几千行 jsonl，实测毫秒级），不建缓存——这条路径只在概念表薄的
-    库上走，且页面请求频次低。真成热点了再说。
-    """
-    index = KB_DIR / "corpora" / corpus / "knowledge_index.jsonl"
-    if not index.exists():
-        return None
-    counts: dict[str, int] = {}
-    titles: dict[str, list[str]] = {}
-    try:
-        # 必须走 read_index_rows：重建过的库里归档块（superseded）也带 concept_tags，
-        # 自己逐行读会把它们数进覆盖厚度，档位当场排错（tests/test_index_readers_filter_superseded.py）。
-        # 坏行照该入口的口径整个抛，不逐行跳过——这里的排序全靠计数，少几块看不出来。
-        rows = read_index_rows(index)
-    except OSError:
-        return None
-    for row in rows:
-        for tag in row.get("concept_tags") or []:
-            if not isinstance(tag, str) or not tag.strip():
-                continue
-            key = tag.strip()
-            counts[key] = counts.get(key, 0) + 1
-            seen = titles.setdefault(key, [])
-            title = str(row.get("section") or row.get("title") or "").strip()
-            if title and title not in seen and len(seen) < SECTIONS_PER_CONCEPT:
-                seen.append(title)
-    if not counts:
-        return None
-
-    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
-    size = max(1, -(-len(ranked) // TAG_STAGES))  # 向上取整，尾档可以少
-    labels = ("教材着墨最多", "覆盖中等", "覆盖较薄")
-    stages: list[dict[str, Any]] = []
-    for i in range(0, len(ranked), size):
-        chunk = ranked[i : i + size]
-        index_no = len(stages)
-        stages.append(
-            {
-                "index": index_no + 1,
-                "title": f"第 {index_no + 1} 组 · {labels[min(index_no, len(labels) - 1)]}",
-                "concepts": [
-                    {
-                        "name": tag,
-                        "depth": index_no,
-                        "prereq": [],
-                        "confidence": None,
-                        "because": f"语料里有 {n} 个证据块标着这个概念",
-                        "sections": titles.get(tag, []),
-                    }
-                    for tag, n in chunk
-                ],
-            }
-        )
-    return stages, len(ranked)
 
 
 def _label(corpus: str) -> str:

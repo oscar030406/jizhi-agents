@@ -1,6 +1,14 @@
 import { NextRequest } from 'next/server';
 import { auditCourseContent } from '@/lib/generation/hallucination-audit';
-import { evidenceForJudge, fetchEvidence } from '@/lib/generation/evidence-grounding';
+import {
+  validateLearningContractFulfillment,
+  type LearningContractPlan,
+} from '@/lib/generation/learning-contract';
+import {
+  evidenceForJudge,
+  fetchEvidence,
+  requireEvidenceWhenConfigured,
+} from '@/lib/generation/evidence-grounding';
 import { createLogger } from '@/lib/logger';
 import { API_ERROR_CODES, apiError, apiSuccess } from '@/lib/server/api-response';
 import { buildAuditPanel } from '@/lib/server/audit-panel';
@@ -21,6 +29,7 @@ export async function POST(req: NextRequest) {
       courseTitle?: string;
       corpus?: string;
       scenes?: Scene[];
+      learningContract?: unknown;
     };
     const courseTitle = body.courseTitle?.trim();
     if (!courseTitle || !Array.isArray(body.scenes) || body.scenes.length === 0) {
@@ -36,16 +45,32 @@ export async function POST(req: NextRequest) {
     if (body.scenes.length > MAX_SCENES) {
       return apiError('INVALID_REQUEST', 413, `scenes must not exceed ${MAX_SCENES}`);
     }
-    const inputChars = courseTitle.length + corpus.length + JSON.stringify(body.scenes).length;
+    const contractCheck = validateLearningContractFulfillment(body.learningContract, body.scenes, {
+      actualContentReady: false,
+    });
+    if (!contractCheck.fulfilled) {
+      return apiError(
+        'INVALID_REQUEST',
+        400,
+        `learningContract does not match the submitted course: ${contractCheck.violations.join('; ')}`,
+      );
+    }
+    const inputChars =
+      courseTitle.length +
+      corpus.length +
+      JSON.stringify(body.scenes).length +
+      JSON.stringify(body.learningContract).length;
     if (inputChars > MAX_INPUT_CHARS) {
       return apiError('INVALID_REQUEST', 413, 'course audit input is too large');
     }
 
     const generator = await resolveModelFromRequest(req, body, 'scene-content');
     const panel = await buildAuditPanel(generator);
-    const bundles = await Promise.all(
-      body.scenes.map((scene) => fetchEvidence(`${courseTitle} ${scene.title}`.trim(), corpus)),
-    );
+    const bundles = (
+      await Promise.all(
+        body.scenes.map((scene) => fetchEvidence(`${courseTitle} ${scene.title}`.trim(), corpus)),
+      )
+    ).map(requireEvidenceWhenConfigured);
     const chunks = new Map(
       bundles.flatMap((bundle) => bundle?.chunks ?? []).map((chunk) => [chunk.source_id, chunk]),
     );
@@ -53,6 +78,7 @@ export async function POST(req: NextRequest) {
     const audit = await auditCourseContent({
       courseTitle,
       scenes: body.scenes,
+      learningContract: body.learningContract as LearningContractPlan,
       judgeCalls: panel.judgeCalls,
       ...(panel.arbiterCall ? { arbiterCall: panel.arbiterCall } : {}),
       defendCall: panel.defendCall,
@@ -69,7 +95,7 @@ export async function POST(req: NextRequest) {
               title: chunk.title,
             })),
             retrieveForClaim: async (claimText: string) => {
-              const hit = await fetchEvidence(claimText, corpus);
+              const hit = requireEvidenceWhenConfigured(await fetchEvidence(claimText, corpus));
               return hit
                 ? {
                     evidence: evidenceForJudge(hit),

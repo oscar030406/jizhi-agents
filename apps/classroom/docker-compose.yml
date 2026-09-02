@@ -3,11 +3,10 @@ services:
     build:
       context: .
       args:
-        # NEXT_PUBLIC_* values are compiled into the browser bundle. Leave both
+        # NEXT_PUBLIC_* values are compiled into the browser bundle. Leave this
         # empty for today's browser-only persistence; the persistence quickstart
         # in README supplies them on the compose command line.
         - NEXT_PUBLIC_PERSISTENCE=${NEXT_PUBLIC_PERSISTENCE:-}
-        - NEXT_PUBLIC_PERSISTENCE_TOKEN=${NEXT_PUBLIC_PERSISTENCE_TOKEN:-}
     ports:
       - "3000:3000"
     env_file:
@@ -30,8 +29,8 @@ services:
     restart: unless-stopped
 
   # Optional PostgreSQL backing for the app-embedded persistence API.
-  # The app reads DATABASE_URL and PERSISTENCE_DEV_TOKEN from .env.local; keeping
-  # those values there avoids changing the default browser-only deployment.
+  # The app reads DATABASE_URL from .env.local; account identity is derived from
+  # its signed httpOnly session cookie.
   postgres:
     image: postgres:16
     profiles:

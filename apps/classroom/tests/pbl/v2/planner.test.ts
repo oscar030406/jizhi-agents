@@ -155,8 +155,12 @@ function minimalPlannerProject(overrides?: Partial<PBLProjectV2>): PBLProjectV2 
       {
         id: 'milestone-1',
         title: 'Load CSV data',
+        description: 'Load one learner-selected CSV file and inspect its columns.',
         status: 'locked',
         order: 0,
+        briefing: 'Choose a CSV file and inspect its structure before analysing it.',
+        completionCriteria: 'A CSV is loaded and its columns and row count are recorded.',
+        debrief: 'Confirm the chosen data can support the planned analysis.',
         microtasks: [
           {
             id: 'microtask-1',
@@ -233,8 +237,12 @@ describe('PBL v2 Planner — completion gate', () => {
         {
           id: 'milestone-empty',
           title: 'Prepare analysis plan',
+          description: 'Define the dataset, question, and expected report.',
           status: 'locked',
           order: 0,
+          briefing: 'Start by defining the analysis question.',
+          completionCriteria: 'The analysis question and expected output are explicit.',
+          debrief: 'Check that the planned evidence can answer the question.',
           microtasks: [],
           documents: [],
         },
@@ -248,6 +256,26 @@ describe('PBL v2 Planner — completion gate', () => {
 
   it('accepts design completion only after all required project structure exists', () => {
     expect(plannerCompletionGaps(minimalPlannerProject())).toEqual([]);
+  });
+
+  it('rejects title-only milestones without a runnable task or acceptance contract', () => {
+    const project = minimalPlannerProject();
+    project.milestones[0] = {
+      ...project.milestones[0],
+      description: '',
+      briefing: '',
+      completionCriteria: '',
+      debrief: '',
+    };
+
+    expect(plannerCompletionGaps(project)).toEqual(
+      expect.arrayContaining([
+        'milestone "Load CSV data" description is empty',
+        'milestone "Load CSV data" briefing is empty',
+        'milestone "Load CSV data" completionCriteria is empty',
+        'milestone "Load CSV data" debrief is empty',
+      ]),
+    );
   });
 
   it('rejects ordinary PBL hidden documents because the workspace does not render them', () => {
@@ -330,18 +358,26 @@ describe('PBL v2 Planner — scenario completion gate (no LLM needed)', () => {
         {
           id: 'ms-prep',
           title: '准备',
+          description: '了解对话背景并明确自己的沟通任务。',
           status: 'active',
           order: 0,
           scenarioStage: 'prep',
+          briefing: '先了解小敏当前处境，准备开始对话。',
+          completionCriteria: '学习者已确认背景、角色与对话目标。',
+          debrief: '背景确认完毕，接下来进入真实对话。',
           microtasks: [lightMicrotask('mt-prep', '了解背景')],
           documents: [],
         },
         {
           id: 'ms-scene',
           title: '初次搭话',
+          description: '主动开启对话，并根据小敏的回应继续沟通。',
           status: 'locked',
           order: 1,
           scenarioStage: 'roleplay',
+          briefing: '现在由你主动开启对话，并留意对方的真实回应。',
+          completionCriteria: '学习者完成开场、倾听并给出与回应相符的跟进。',
+          debrief: '回看刚才的回应是否体现了倾听与支持。',
           microtasks: [
             {
               ...lightMicrotask('beat-1', '打招呼'),
@@ -353,9 +389,13 @@ describe('PBL v2 Planner — scenario completion gate (no LLM needed)', () => {
         {
           id: 'ms-wrapup',
           title: '收尾',
+          description: '依据导师反馈修订自己的沟通方式并完成反思。',
           status: 'locked',
           order: 2,
           scenarioStage: 'wrapup',
+          briefing: '最后复盘这次沟通，找出一个可改进之处。',
+          completionCriteria: '学习者提交一条具体反思和一版修订后的回应。',
+          debrief: '把这条改进带到下一次真实沟通中。',
           microtasks: [lightMicrotask('mt-wrap', '听取反馈')],
           documents: [],
         },

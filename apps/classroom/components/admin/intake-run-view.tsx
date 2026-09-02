@@ -129,7 +129,7 @@ const FIELD_LABEL: Record<string, string> = {
   unknown: '未找到声明',
   sections: '切出节',
   chunks: '证据块',
-  index_path: '索引文件',
+  index_path: '索引记录',
   sample_chunk: '样本块',
   concept_tags: '概念标签',
   backend: '检索后端',
@@ -137,7 +137,7 @@ const FIELD_LABEL: Record<string, string> = {
   probe_hits: '命中',
   probe_top_score: '首条得分',
   probe_warning: '检索告警',
-  path: '产物',
+  path: '处理结果',
   rows: '向量条数',
   dim: '维度',
   readiness_path: '就绪度报告',
@@ -145,7 +145,7 @@ const FIELD_LABEL: Record<string, string> = {
   prereq_clauses: '前置边（节级）',
   human_signoff_required: '待人工签核',
   vocabulary_note: '词表说明',
-  gold_dir: '金标目录',
+  gold_dir: '金标结果',
   topics: '主题',
   knowledge_components: '知识点',
   dropped_topics: '因知识点不足丢弃的主题',
@@ -158,13 +158,13 @@ const FIELD_LABEL: Record<string, string> = {
   planned_scenes: '计划屏数',
   failures: '生成失败',
   budget_halt: '预算闸',
-  paths: '课程产物',
+  paths: '课程结果',
   sample_note: '口径声明',
   cost: '成本计量',
   llm_calls: '模型调用',
   input_tokens: '输入 token',
   output_tokens: '输出 token',
-  engine_tokens: '引擎侧 token',
+  engine_tokens: '模型处理 token',
   total_tokens: 'token 合计',
   budget_tokens: 'token 预算',
   // ⑦ 指标复测
@@ -262,8 +262,9 @@ function Value({ field, value }: { readonly field: string; readonly value: unkno
           <li key={i}>
             {item !== null && typeof item === 'object'
               ? Object.entries(item as Record<string, unknown>)
-                  .map(([k, v]) =>
-                    `${labelOf(k, v)} ${isArtifactLocation(k) ? '系统已生成' : textOf(v)}`,
+                  .map(
+                    ([k, v]) =>
+                      `${labelOf(k, v)} ${isArtifactLocation(k) ? '系统已生成' : textOf(v)}`,
                   )
                   .join(' · ')
               : textOf(item)}
@@ -605,7 +606,7 @@ export function IntakeRunView({
         {record.warnings?.length > 0 && (
           <ul className="mt-3 space-y-1 text-[11px] text-amber-700 dark:text-amber-300">
             {record.warnings.map((w) => (
-              <li key={w}>旁路告警：{redactCaliber(w)}</li>
+              <li key={w}>非阻断告警：{redactCaliber(w)}</li>
             ))}
           </ul>
         )}
@@ -627,7 +628,8 @@ export function IntakeRunView({
             <>
               {' '}
               各站耗时合计 {ms(view.stageMsTotal)}，实际总耗时 {ms(view.runMs)}
-              {view.stageMsTotal > view.runMs && '（合计大于墙钟，差额就是并行叠掉的部分）'}。
+              {view.stageMsTotal > view.runMs && '（各站有并行处理，因此合计耗时会大于实际总耗时）'}
+              。
             </>
           )}
         </p>
@@ -664,13 +666,11 @@ export function IntakeRunView({
       {/* 产物 */}
       {Object.keys(record.products ?? {}).length > 0 && (
         <section>
-          <h2 className="mb-3 text-sm font-medium">本次接入产物</h2>
+          <h2 className="mb-3 text-sm font-medium">本次接入结果</h2>
           <ul className="space-y-1 rounded-2xl border border-border bg-card p-4 text-[11px] shadow-card">
             {Object.keys(record.products).map((key) => (
               <li key={key}>
-                <span className="mr-2 text-muted-foreground">
-                  {FIELD_LABEL[key] ?? '处理结果'}
-                </span>
+                <span className="mr-2 text-muted-foreground">{FIELD_LABEL[key] ?? '处理结果'}</span>
                 系统已生成
               </li>
             ))}

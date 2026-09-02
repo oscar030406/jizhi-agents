@@ -4,11 +4,20 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { EffectiveDomainContextState } from '@/lib/knowledge/use-domain-context';
+import type { AccountProfileState } from '@/lib/knowledge/account-profile';
 
 let contextState: EffectiveDomainContextState = { kind: 'loading' };
+let accountProfileState: AccountProfileState = {
+  kind: 'ready',
+  source: 'server',
+  profile: { domain: 'ai', corpus: 'ai' },
+};
 
 vi.mock('@/lib/knowledge/use-domain-context', () => ({
   useEffectiveDomainContext: () => contextState,
+}));
+vi.mock('@/lib/knowledge/account-profile', () => ({
+  useAccountProfile: () => accountProfileState,
 }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
@@ -34,6 +43,11 @@ let host: HTMLElement;
 let root: Root;
 
 beforeEach(() => {
+  accountProfileState = {
+    kind: 'ready',
+    source: 'server',
+    profile: { domain: 'ai', corpus: 'ai' },
+  };
   window.localStorage.setItem('learnerProfile', JSON.stringify({ domain: 'ai', corpus: 'ai' }));
   host = document.createElement('div');
   document.body.appendChild(host);
@@ -48,7 +62,20 @@ afterEach(() => {
 });
 
 describe('/path effective domain', () => {
-  it('AI 学员继续看到原 AI 策展路径', async () => {
+  it('账户画像接口失败时显式停止，不读取本地旧画像路径', async () => {
+    accountProfileState = { kind: 'error', reason: '当前账户画像暂时无法读取；未使用本地旧画像。' };
+    const fetcher = vi.fn();
+    vi.stubGlobal('fetch', fetcher);
+
+    await act(async () => root.render(<DomainLearningPath />));
+    await flush();
+
+    expect(host.textContent).toContain('当前账户画像暂时无法读取');
+    expect(host.textContent).toContain('未使用本地旧画像');
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('AI 学员也只展示引擎根据索引与前置图生成的路径', async () => {
     contextState = {
       kind: 'ready',
       context: {
@@ -72,7 +99,7 @@ describe('/path effective domain', () => {
             path: {
               corpus: 'ai',
               label: '人工智能应用开发',
-              source: 'curated',
+              source: 'index-graph',
               stages: [
                 {
                   index: 1,
@@ -97,10 +124,11 @@ describe('/path effective domain', () => {
       }),
     );
 
-    await act(async () => root.render(<DomainLearningPath>AI 策展路径正文</DomainLearningPath>));
+    await act(async () => root.render(<DomainLearningPath>不应出现的手工路径</DomainLearningPath>));
     await flush();
     await flush();
-    expect(host.textContent).toContain('AI 策展路径正文');
+    expect(host.textContent).not.toContain('不应出现的手工路径');
+    expect(host.textContent).toContain('这条路径不是人工排的');
     expect(host.textContent).toContain('我的当前路线');
     expect(host.textContent).toContain('模块一 · 大模型基础');
     expect(host.textContent).toContain('当前推荐：线性代数核心三要素');
@@ -150,6 +178,35 @@ describe('/path effective domain', () => {
     expect(host.textContent).toContain('所属机构尚未提供该领域的学习路径');
     expect(seen).toContain('/api/domain-path/smart-manufacturing');
     expect(seen).not.toContain('/api/domain-path/ai');
+  });
+
+  it('机构课程 unavailable 时只显示诚实缺失，不请求旧画像路径', async () => {
+    contextState = {
+      kind: 'ready',
+      context: {
+        domain: null,
+        source: 'course-assignment',
+        status: 'assignment-unavailable',
+        isAi: false,
+        registered: false,
+        assignment: {
+          id: 'asg-unavailable',
+          courseId: 'course-mfg',
+          availability: 'unavailable',
+        },
+        reason: '机构课程暂不可用：课程尚未通过发布审核。',
+      },
+    };
+    const fetcher = vi.fn();
+    vi.stubGlobal('fetch', fetcher);
+
+    await act(async () => root.render(<DomainLearningPath>旧 AI 路径</DomainLearningPath>));
+    await flush();
+
+    expect(host.textContent).toContain('机构课程暂不可用');
+    expect(host.textContent).toContain('尚未通过发布审核');
+    expect(host.textContent).not.toContain('旧 AI 路径');
+    expect(fetcher).not.toHaveBeenCalled();
   });
 
   it('外域节点显示已掌握、当前推荐与后续状态', async () => {
@@ -208,5 +265,62 @@ describe('/path effective domain', () => {
     expect(host.textContent).toContain('PLC 基础已掌握');
     expect(host.textContent).toContain('顺序控制当前推荐');
     expect(host.textContent).toContain('产线联调后续节点');
+  });
+
+  it('该 corpus 没有同 ID mastery_vector 时明确显示尚无匹配记录', async () => {
+    contextState = {
+      kind: 'ready',
+      context: {
+        domain: 'smart-manufacturing',
+        label: '智能制造',
+        source: 'profile-corpus',
+        status: 'ready',
+        isAi: false,
+        registered: true,
+      },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/domain-path/smart-manufacturing') {
+          return ok({
+            success: true,
+            path: {
+              corpus: 'smart-manufacturing',
+              label: '智能制造',
+              source: 'intake',
+              stages: [
+                {
+                  index: 1,
+                  title: '第 1 阶',
+                  status: 'unmeasured',
+                  concepts: [
+                    { id: 'control-basics', name: '控制基础', depth: 0, status: 'unmeasured' },
+                  ],
+                },
+              ],
+              personalization: {
+                mastery_corpus: 'smart-manufacturing',
+                matched_mastery: 0,
+                counts: { mastered: 0, current: 0, future: 0, unmeasured: 1 },
+                current: [],
+                reason: '当前账户在该领域尚无与路径概念 ID 同源的测评记录。',
+              },
+            },
+          });
+        }
+        if (url === '/api/course-domains') return ok({});
+        throw new Error(`unexpected ${url}`);
+      }),
+    );
+
+    await act(async () => root.render(<DomainLearningPath>AI 策展路径正文</DomainLearningPath>));
+    await flush();
+    await flush();
+
+    expect(host.textContent).toContain('尚无与路径概念 ID 同源的测评记录');
+    expect(host.textContent).toContain('控制基础尚未测评');
+    expect(host.textContent).not.toContain('控制基础已掌握');
   });
 });

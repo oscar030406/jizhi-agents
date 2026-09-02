@@ -76,6 +76,23 @@ describe('知识库视角预览', () => {
     expect(body.previewCorpus).toBeUndefined();
   });
 
+  it('旧机构 AI corpus 已不可见时只清除响应副本，允许新机构指派继续定域', async () => {
+    const denied = new Response(JSON.stringify({ success: false }), { status: 403 });
+    mocks.requireCorpusVisible.mockResolvedValue({ ok: false, response: denied });
+    const { GET } = await import('@/app/api/profile/route');
+
+    const res = await GET(request({ session: 't' }));
+    const body = (await res.json()) as {
+      fields: { corpus: null; domain: null };
+      profileCorpusUnavailable?: string;
+    };
+
+    expect(res.status).toBe(200);
+    expect(body.fields).toMatchObject({ corpus: null, domain: null });
+    expect(body.profileCorpusUnavailable).toBe('ai');
+    expect(mocks.writeProfileEnvelope).not.toHaveBeenCalled();
+  });
+
   it('预览态下 POST 一律拒写，盘上画像不动', async () => {
     const { POST } = await import('@/app/api/profile/route');
     const res = await POST(

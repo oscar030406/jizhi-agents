@@ -44,6 +44,14 @@ async function readJson<T>(file: string): Promise<T | null> {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
 /** 资料清单的一行。`docs` 是策展后收进来的篇数，不是原仓库的文件总数。 */
 export interface SourceRow {
   /** 仓库名（`owner/repo`）或原文目录——照磁盘字段写，不美化成书名。 */
@@ -154,21 +162,21 @@ interface RunRecord {
   finished_at?: string;
   duration_ms?: number;
   options?: { checkup?: boolean; experiment?: boolean };
-  stages?: Record<string, { status?: string; detail?: Record<string, any> }>;
+  stages?: Record<string, { status?: string; detail?: unknown }>;
 }
 
 function toCheckup(record: RunRecord): Checkup | null {
   const trial = record.stages?.trial;
   const metrics = record.stages?.metrics;
   if (trial?.status !== 'done' || metrics?.status !== 'done') return null;
-  const t = trial.detail ?? {};
-  const m = metrics.detail ?? {};
-  const hall = m.hallucination ?? {};
-  const cov = m.coverage ?? {};
-  const pers = m.personalization ?? {};
-  const blind = pers.blind_tier_judge ?? {};
-  const cost = m.cost ?? {};
-  const er = t.evidence_ready ?? {};
+  const t = asRecord(trial.detail);
+  const m = asRecord(metrics.detail);
+  const hall = asRecord(m.hallucination);
+  const cov = asRecord(m.coverage);
+  const pers = asRecord(m.personalization);
+  const blind = asRecord(pers.blind_tier_judge);
+  const cost = asRecord(m.cost);
+  const er = asRecord(t.evidence_ready);
   return {
     grounded: Number(hall.judge_evidence_pool ?? 0) > 0,
     evidenceReady:
@@ -285,7 +293,10 @@ export async function readMainSources(): Promise<SourceRow[]> {
   const header = splitCsvLine(lines[0] ?? '');
   const col = (name: string) => header.indexOf(name);
   const [iUrl, iLicense, iGrade] = [col('url'), col('license'), col('grade')];
-  const rows = new Map<string, { name: string; url: string; docs: number; license: string; grade: string }>();
+  const rows = new Map<
+    string,
+    { name: string; url: string; docs: number; license: string; grade: string }
+  >();
   for (const line of lines.slice(1)) {
     const cells = splitCsvLine(line);
     const url = cells[iUrl] ?? '';
@@ -358,8 +369,8 @@ async function readMainPanel(checkups: Map<string, Checkup>): Promise<DomainPane
     files: sources.reduce((a, s) => a + s.docs, 0),
     chars: 0,
     goldTopics,
-    license: { spdx: '逐来源不同', unknown: false, evidence: 'knowledge_base/sources_manifest.csv 的 license 字段' },
-    sourceDir: 'data/knowledge_base/*_docs（各 ingest 脚本的策展产物）',
+    license: { spdx: '逐来源不同', unknown: false, evidence: '平台来源清单中的许可字段' },
+    sourceDir: '平台管理的资料源',
     sources,
     checkup: checkups.get('ai') ?? null,
   };
@@ -371,9 +382,9 @@ async function readMainPanel(checkups: Map<string, Checkup>): Promise<DomainPane
  * 信息量不减（还是能对上是哪份资料），也不再暴露谁的机器。
  */
 function tidyPath(raw: string): string {
-  const unix = raw.replace(/\\/g, '/');
-  const i = unix.indexOf('/references/');
-  return i >= 0 ? unix.slice(i + 1) : unix.split('/').slice(-3).join('/');
+  const parts = raw.split(/[\\/]/).filter(Boolean);
+  if (parts.includes('intake_runs')) return '本次接入时上传的文档';
+  return parts.length ? '平台管理的外部资料源' : '';
 }
 
 /** 许可判定依据里的绝对路径同样截短，句子结构原样保留（「查了 54 处」这类事实不能丢）。 */
@@ -436,25 +447,32 @@ export async function readRunArtifacts(runId: string): Promise<RunArtifact[]> {
   return out;
 }
 
-async function readIntakePanel(corpus: string, checkups: Map<string, Checkup>): Promise<DomainPanel | null> {
+async function readIntakePanel(
+  corpus: string,
+  checkups: Map<string, Checkup>,
+): Promise<DomainPanel | null> {
   const readinessFile = path.join(kbDir(), `${corpus}_intake`, 'readiness.json');
-  const r = await readJson<Record<string, any>>(readinessFile);
-  if (!r) return null;
+  const raw = await readJson<unknown>(readinessFile);
+  if (!isRecord(raw)) return null;
+  const r = raw;
+  const intake = asRecord(r.intake);
+  const corpusIndex = asRecord(r.corpus_index);
+  const license = asRecord(r.license);
   const sourceDir = String(r.source_dir ?? '');
-  const files = Number(r.intake?.accepted_files ?? 0);
+  const files = Number(intake.accepted_files ?? 0);
   return {
     corpus,
     label: domainLabel(corpus),
     scope: String(r.scope ?? ''),
     sourceFileDate: await fileDate(path.join(kbDir(), 'corpora', corpus, 'knowledge_index.jsonl')),
-    chunks: Number(r.corpus_index?.chunks ?? 0),
+    chunks: Number(corpusIndex.chunks ?? 0),
     files,
-    chars: Number(r.intake?.accepted_chars ?? 0),
+    chars: Number(intake.accepted_chars ?? 0),
     goldTopics: await countGoldTopics(corpus),
     license: {
-      spdx: String(r.license?.spdx ?? 'UNKNOWN'),
-      unknown: Boolean(r.license?.unknown),
-      evidence: String(r.license?.evidence ?? ''),
+      spdx: String(license.spdx ?? 'UNKNOWN'),
+      unknown: Boolean(license.unknown),
+      evidence: String(license.evidence ?? ''),
     },
     sourceDir: tidyPath(sourceDir),
     // 这类库是整份文档树扔进来的，来源只有一个，篇数就是收下的文件数。
@@ -464,10 +482,7 @@ async function readIntakePanel(corpus: string, checkups: Map<string, Checkup>): 
         url: '',
         docs: files,
         // 许可判定 + 判定依据。依据里那些绝对路径同样截掉。
-        license: [
-          String(r.license?.spdx ?? 'UNKNOWN'),
-          tidyEvidence(String(r.license?.evidence ?? '')),
-        ]
+        license: [String(license.spdx ?? 'UNKNOWN'), tidyEvidence(String(license.evidence ?? ''))]
           .filter(Boolean)
           .join('：'),
         grade: '',
@@ -497,7 +512,9 @@ export async function readGeneralizationPanels(): Promise<DomainPanel[]> {
  * 盘上还有哪些库没上屏。脚注用——不列出来，读者会以为盘上只有三个库。
  * 判据是有没有 `corpora/<库>/`，与页面主栏同一条（能检索才算库）。
  */
-export async function readOtherCorpora(): Promise<{ corpus: string; label: string; chunks: number }[]> {
+export async function readOtherCorpora(): Promise<
+  { corpus: string; label: string; chunks: number }[]
+> {
   let names: string[];
   try {
     names = (await fs.readdir(path.join(kbDir(), 'corpora'), { withFileTypes: true }))
@@ -510,11 +527,13 @@ export async function readOtherCorpora(): Promise<{ corpus: string; label: strin
     names
       .filter((n) => !(SHOWCASE_CORPORA as readonly string[]).includes(n))
       .map(async (corpus) => {
-        const r = await readJson<Record<string, any>>(path.join(kbDir(), `${corpus}_intake`, 'readiness.json'));
+        const r = asRecord(
+          await readJson<unknown>(path.join(kbDir(), `${corpus}_intake`, 'readiness.json')),
+        );
         return {
           corpus,
           label: domainLabel(corpus),
-          chunks: Number(r?.corpus_index?.chunks ?? 0),
+          chunks: Number(asRecord(r.corpus_index).chunks ?? 0),
         };
       }),
   );

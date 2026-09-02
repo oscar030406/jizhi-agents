@@ -6,8 +6,8 @@
  * docs/04-research/auth-org-wheel-20260829.md）：
  * - **邀请码代替邮箱邀请**：比赛合规不收集邮箱/手机号，邀请码多次使用、可轮换，
  *   学员兑码入组（幂等）。
- * - **corpus 归属表存目录名字符串**：知识库在磁盘上是目录（knowledge-center readdir
- *   枚举），pg 里没有实体表；org_corpora 无归属行 = 公共库，存量三库零迁移。
+ * - **corpus 归属是引擎 marker 单一真源**：私库在首份原料落盘前写 marker；
+ *   org_corpora 仅保留为发布迁移入口，运行时发现未迁移或冲突就显式阻断。
  * - **learnerKey（account.id）一行不动**：课程/画像/学情分区键保持原样，
  *   机构只是账户上的一层归属关系。
  * - 单一归属（P0 口径）：一个账户同时最多属于一个机构（org_members.account_id 唯一）；
@@ -24,6 +24,8 @@ import path from 'node:path';
 import { Pool } from 'pg';
 
 import type { Account } from './store';
+import { withAccountFilesLock } from './file-lock';
+import { readCorpusOwnerMarkers } from '@/lib/server/knowledge-center';
 
 export interface Org {
   id: string;
@@ -72,7 +74,26 @@ async function getPool(): Promise<Pool> {
   if (!poolPromise) {
     poolPromise = (async () => {
       const pool = new Pool({ connectionString: connectionString(), max: 4 });
-      await pool.query(`
+      try {
+        await initializeOrgSchema(pool);
+        return pool;
+      } catch (error) {
+        await pool.end();
+        throw error;
+      }
+    })().catch((error) => {
+      poolPromise = null;
+      throw error;
+    });
+  }
+  return poolPromise;
+}
+
+async function initializeOrgSchema(pool: Pool): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`
         CREATE TABLE IF NOT EXISTS orgs (
           id               TEXT PRIMARY KEY,
           name             TEXT NOT NULL,
@@ -99,30 +120,235 @@ async function getPool(): Promise<Pool> {
           org_id             TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
           course_id          TEXT NOT NULL,
           title              TEXT NOT NULL,
+          domain             TEXT,
           assigned_by        TEXT NOT NULL,
           learner_account_id TEXT,
           created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
         );
         ALTER TABLE org_assignments ADD COLUMN IF NOT EXISTS learner_account_id TEXT;
+        ALTER TABLE org_assignments ADD COLUMN IF NOT EXISTS domain TEXT;
         CREATE INDEX IF NOT EXISTS org_assignments_org ON org_assignments(org_id);
         CREATE INDEX IF NOT EXISTS org_assignments_org_learner
           ON org_assignments(org_id, learner_account_id);
-        CREATE UNIQUE INDEX IF NOT EXISTS org_assignments_unique_target
-          ON org_assignments(org_id, course_id, learner_account_id)
-          WHERE learner_account_id IS NOT NULL;
         CREATE TABLE IF NOT EXISTS org_corpora (
           corpus     TEXT PRIMARY KEY,
-          org_id     TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+          org_id     TEXT NOT NULL,
           updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
         );
       `);
-      return pool;
-    })().catch((error) => {
-      poolPromise = null;
-      throw error;
-    });
+
+    const accountsTable = await client.query("SELECT to_regclass('accounts') AS table_name");
+    if (!accountsTable.rows[0]?.table_name) {
+      throw new Error('机构关系完整性审计失败：accounts 表不存在；未修改现存数据');
+    }
+
+    const audit = await client.query(`
+      SELECT relation, record_id
+        FROM (
+          SELECT 'orgs.owner_account_id' AS relation, o.id AS record_id
+            FROM orgs o LEFT JOIN accounts a ON a.id = o.owner_account_id
+           WHERE a.id IS NULL
+          UNION ALL
+          SELECT 'org_members.org_id', m.account_id
+            FROM org_members m LEFT JOIN orgs o ON o.id = m.org_id
+           WHERE o.id IS NULL
+          UNION ALL
+          SELECT 'org_members.account_id', m.account_id
+            FROM org_members m LEFT JOIN accounts a ON a.id = m.account_id
+           WHERE a.id IS NULL
+          UNION ALL
+          SELECT 'org_members.role', m.account_id
+            FROM org_members m
+           WHERE m.role NOT IN ('owner', 'member')
+          UNION ALL
+          SELECT 'org_members.account_role', m.account_id
+            FROM org_members m JOIN accounts a ON a.id = m.account_id
+           WHERE (m.role = 'owner' AND a.role <> 'manager')
+              OR (m.role = 'member' AND a.role <> 'learner')
+          UNION ALL
+          SELECT 'org_invitations.org_id', i.code
+            FROM org_invitations i LEFT JOIN orgs o ON o.id = i.org_id
+           WHERE o.id IS NULL
+          UNION ALL
+          SELECT 'org_invitations.created_by', i.code
+            FROM org_invitations i LEFT JOIN accounts a ON a.id = i.created_by
+           WHERE a.id IS NULL
+          UNION ALL
+          SELECT 'org_invitations.owner_membership', i.code
+            FROM org_invitations i
+            LEFT JOIN org_members m
+              ON m.org_id = i.org_id AND m.account_id = i.created_by AND m.role = 'owner'
+           WHERE m.account_id IS NULL
+          UNION ALL
+          SELECT 'org_assignments.org_id', a.id
+            FROM org_assignments a LEFT JOIN orgs o ON o.id = a.org_id
+           WHERE o.id IS NULL
+          UNION ALL
+          SELECT 'org_assignments.assigned_by', a.id
+            FROM org_assignments a LEFT JOIN accounts actor ON actor.id = a.assigned_by
+           WHERE actor.id IS NULL
+          UNION ALL
+          SELECT 'org_assignments.owner_membership', a.id
+            FROM org_assignments a
+            LEFT JOIN org_members actor
+              ON actor.org_id = a.org_id
+             AND actor.account_id = a.assigned_by
+             AND actor.role = 'owner'
+           WHERE actor.account_id IS NULL
+          UNION ALL
+          SELECT 'org_assignments.learner_account_id', a.id
+            FROM org_assignments a LEFT JOIN accounts learner ON learner.id = a.learner_account_id
+           WHERE a.learner_account_id IS NOT NULL AND learner.id IS NULL
+          UNION ALL
+          SELECT 'org_assignments.learner_membership', a.id
+            FROM org_assignments a
+            LEFT JOIN org_members learner
+              ON learner.org_id = a.org_id
+             AND learner.account_id = a.learner_account_id
+             AND learner.role = 'member'
+           WHERE a.learner_account_id IS NOT NULL AND learner.account_id IS NULL
+          UNION ALL
+          SELECT 'org_corpora.org_id', c.corpus
+            FROM org_corpora c LEFT JOIN orgs o ON o.id = c.org_id
+           WHERE o.id IS NULL
+          UNION ALL
+          SELECT 'orgs.owner_membership', o.id
+            FROM orgs o
+            LEFT JOIN org_members m
+              ON m.org_id = o.id AND m.account_id = o.owner_account_id AND m.role = 'owner'
+           WHERE m.account_id IS NULL
+          UNION ALL
+          SELECT 'org_members.owner_role', m.account_id
+            FROM org_members m JOIN orgs o ON o.id = m.org_id
+           WHERE m.role = 'owner' AND o.owner_account_id <> m.account_id
+          UNION ALL
+          SELECT 'org_assignments.duplicate_target', min(a.id)
+            FROM org_assignments a
+           WHERE a.learner_account_id IS NOT NULL
+           GROUP BY a.org_id, a.course_id, a.learner_account_id
+          HAVING count(*) > 1
+        ) failures
+       LIMIT 1
+    `);
+    if (audit.rowCount) {
+      const failure = audit.rows[0];
+      throw new Error(
+        `机构关系完整性审计失败：${String(failure.relation)} 存在无效记录 ${String(failure.record_id)}；未修改现存数据`,
+      );
+    }
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS org_assignments_unique_target
+        ON org_assignments(org_id, course_id, learner_account_id)
+        WHERE learner_account_id IS NOT NULL;
+
+      DO $$
+      DECLARE corpus_fk_name text;
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+            FROM pg_constraint c
+            JOIN pg_attribute a
+              ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+           WHERE c.contype = 'f'
+             AND c.conrelid = 'org_members'::regclass
+             AND c.confrelid = 'orgs'::regclass
+             AND a.attname = 'org_id'
+        ) THEN
+          ALTER TABLE org_members ADD CONSTRAINT org_members_org_id_fk
+            FOREIGN KEY (org_id) REFERENCES orgs(id) ON DELETE CASCADE;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1
+            FROM pg_constraint c
+            JOIN pg_attribute a
+              ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+           WHERE c.contype = 'f'
+             AND c.conrelid = 'org_invitations'::regclass
+             AND c.confrelid = 'orgs'::regclass
+             AND a.attname = 'org_id'
+        ) THEN
+          ALTER TABLE org_invitations ADD CONSTRAINT org_invitations_org_id_fk
+            FOREIGN KEY (org_id) REFERENCES orgs(id) ON DELETE CASCADE;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1
+            FROM pg_constraint c
+            JOIN pg_attribute a
+              ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+           WHERE c.contype = 'f'
+             AND c.conrelid = 'org_assignments'::regclass
+             AND c.confrelid = 'orgs'::regclass
+             AND a.attname = 'org_id'
+        ) THEN
+          ALTER TABLE org_assignments ADD CONSTRAINT org_assignments_org_id_fk
+            FOREIGN KEY (org_id) REFERENCES orgs(id) ON DELETE CASCADE;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+           WHERE conname = 'orgs_owner_account_fk' AND conrelid = 'orgs'::regclass
+        ) THEN
+          ALTER TABLE orgs ADD CONSTRAINT orgs_owner_account_fk
+            FOREIGN KEY (owner_account_id) REFERENCES accounts(id) ON DELETE RESTRICT;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+           WHERE conname = 'org_members_account_fk' AND conrelid = 'org_members'::regclass
+        ) THEN
+          ALTER TABLE org_members ADD CONSTRAINT org_members_account_fk
+            FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE RESTRICT;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+           WHERE conname = 'org_invitations_created_by_fk'
+             AND conrelid = 'org_invitations'::regclass
+        ) THEN
+          ALTER TABLE org_invitations ADD CONSTRAINT org_invitations_created_by_fk
+            FOREIGN KEY (created_by) REFERENCES accounts(id) ON DELETE RESTRICT;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+           WHERE conname = 'org_assignments_assigned_by_fk'
+             AND conrelid = 'org_assignments'::regclass
+        ) THEN
+          ALTER TABLE org_assignments ADD CONSTRAINT org_assignments_assigned_by_fk
+            FOREIGN KEY (assigned_by) REFERENCES accounts(id) ON DELETE RESTRICT;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+           WHERE conname = 'org_assignments_learner_fk'
+             AND conrelid = 'org_assignments'::regclass
+        ) THEN
+          ALTER TABLE org_assignments ADD CONSTRAINT org_assignments_learner_fk
+            FOREIGN KEY (learner_account_id) REFERENCES accounts(id) ON DELETE RESTRICT;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+           WHERE conname = 'org_corpora_org_id_fk'
+             AND conrelid = 'org_corpora'::regclass
+             AND confrelid = 'orgs'::regclass
+             AND confdeltype = 'r'
+        ) THEN
+          FOR corpus_fk_name IN
+            SELECT conname FROM pg_constraint
+             WHERE conrelid = 'org_corpora'::regclass
+               AND confrelid = 'orgs'::regclass
+               AND contype = 'f'
+          LOOP
+            EXECUTE format('ALTER TABLE org_corpora DROP CONSTRAINT %I', corpus_fk_name);
+          END LOOP;
+          ALTER TABLE org_corpora ADD CONSTRAINT org_corpora_org_id_fk
+            FOREIGN KEY (org_id) REFERENCES orgs(id) ON DELETE RESTRICT;
+        END IF;
+      END $$;
+    `);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
   }
-  return poolPromise;
 }
 
 // -------------------------------------------------------------- file backend
@@ -134,6 +360,8 @@ interface FileOrgDb {
     orgId: string;
     courseId: string;
     title: string;
+    /** 缺失/null 是迁移前记录；新增指派必须有领域。 */
+    domain?: string | null;
     assignedBy: string;
     /** 缺失/null 都是旧版的机构全体指派。 */
     learnerAccountId?: string | null;
@@ -153,14 +381,6 @@ interface FileOrgDb {
 function fileDbPath(): string {
   const dir = process.env.ACCOUNTS_DIR || path.join(process.cwd(), 'data', 'accounts');
   return path.join(dir, 'orgs.json');
-}
-
-let fileQueue: Promise<unknown> = Promise.resolve();
-
-function enqueue<T>(op: () => Promise<T>): Promise<T> {
-  const next = fileQueue.then(op, op);
-  fileQueue = next.catch(() => undefined);
-  return next;
 }
 
 async function loadFile(): Promise<FileOrgDb> {
@@ -207,36 +427,62 @@ export async function createOrg(
   if (trimmed.length < 2 || trimmed.length > 40) {
     return { ok: false, message: '机构名需为 2-40 个字符' };
   }
-  const existing = await orgForAccount(owner.id);
-  if (existing) return { ok: false, message: '该账号已在机构中，先退出或移交后再创建' };
-
   const id = `org_${randomBytes(8).toString('hex')}`;
   const code = newInviteCode();
   if (hasPgBackend()) {
     const pool = await getPool();
-    await pool.query('BEGIN');
+    const client = await pool.connect();
     try {
-      await pool.query('INSERT INTO orgs (id, name, owner_account_id) VALUES ($1, $2, $3)', [
+      await client.query('BEGIN');
+      const account = await client.query(
+        "SELECT id FROM accounts WHERE id = $1 AND role = 'manager' FOR UPDATE",
+        [owner.id],
+      );
+      if (!account.rowCount) {
+        await client.query('ROLLBACK');
+        return { ok: false, message: '管理者账户已不存在或身份不符' };
+      }
+      const existing = await client.query('SELECT org_id FROM org_members WHERE account_id = $1', [
+        owner.id,
+      ]);
+      if (existing.rowCount) {
+        await client.query('ROLLBACK');
+        return { ok: false, message: '该账号已在机构中，不能重复创建' };
+      }
+      await client.query('INSERT INTO orgs (id, name, owner_account_id) VALUES ($1, $2, $3)', [
         id,
         trimmed,
         owner.id,
       ]);
-      await pool.query(
+      await client.query(
         "INSERT INTO org_members (account_id, org_id, role) VALUES ($1, $2, 'owner')",
         [owner.id, id],
       );
-      await pool.query(
+      await client.query(
         'INSERT INTO org_invitations (code, org_id, created_by) VALUES ($1, $2, $3)',
         [code, id, owner.id],
       );
-      await pool.query('COMMIT');
+      await client.query('COMMIT');
     } catch (error) {
-      await pool.query('ROLLBACK');
+      await client.query('ROLLBACK');
       throw error;
+    } finally {
+      client.release();
     }
   } else {
-    await enqueue(async () => {
+    const created = await withAccountFilesLock(async () => {
+      const { fileBackend } = await import('./file-store');
+      const actualOwner = await fileBackend.accountById(owner.id);
+      if (!actualOwner || actualOwner.role !== 'manager') {
+        return { ok: false as const, message: '管理者账户已不存在或身份不符' };
+      }
       const db = await loadFile();
+      if (db.orgs.some((org) => org.ownerAccountId === owner.id)) {
+        return { ok: false as const, message: '该账号的机构关系不完整，已停止写入' };
+      }
+      if (db.members.some((member) => member.accountId === owner.id)) {
+        return { ok: false as const, message: '该账号已在机构中，不能重复创建' };
+      }
       const now = new Date().toISOString();
       db.orgs.push({ id, name: trimmed, ownerAccountId: owner.id, createdAt: now });
       db.members.push({ accountId: owner.id, orgId: id, role: 'owner', joinedAt: now });
@@ -248,7 +494,9 @@ export async function createOrg(
         createdAt: now,
       });
       await saveFile(db);
+      return { ok: true as const };
     });
+    if (!created.ok) return created;
   }
   const view = await orgViewFor(owner.id);
   return view ? { ok: true, view } : { ok: false, message: '创建后读取失败' };
@@ -320,16 +568,46 @@ export async function rotateInviteCode(orgId: string, byAccountId: string): Prom
   const code = newInviteCode();
   if (hasPgBackend()) {
     const pool = await getPool();
-    await pool.query('UPDATE org_invitations SET disabled = true WHERE org_id = $1', [orgId]);
-    await pool.query('INSERT INTO org_invitations (code, org_id, created_by) VALUES ($1, $2, $3)', [
-      code,
-      orgId,
-      byAccountId,
-    ]);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const owner = await client.query(
+        `SELECT o.id
+           FROM orgs o
+           JOIN org_members m
+             ON m.org_id = o.id AND m.account_id = $2 AND m.role = 'owner'
+           JOIN accounts a ON a.id = m.account_id
+          WHERE o.id = $1 AND o.owner_account_id = $2
+          FOR UPDATE OF o, a`,
+        [orgId, byAccountId],
+      );
+      if (!owner.rowCount) throw new Error('只有当前机构所有者可以轮换邀请码');
+      await client.query('UPDATE org_invitations SET disabled = true WHERE org_id = $1', [orgId]);
+      await client.query(
+        'INSERT INTO org_invitations (code, org_id, created_by) VALUES ($1, $2, $3)',
+        [code, orgId, byAccountId],
+      );
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
     return code;
   }
-  await enqueue(async () => {
+  await withAccountFilesLock(async () => {
+    const { fileBackend } = await import('./file-store');
+    const actor = await fileBackend.accountById(byAccountId);
     const db = await loadFile();
+    const org = db.orgs.find((item) => item.id === orgId);
+    const membership = db.members.find(
+      (member) =>
+        member.orgId === orgId && member.accountId === byAccountId && member.role === 'owner',
+    );
+    if (!actor || !org || org.ownerAccountId !== byAccountId || !membership) {
+      throw new Error('只有当前机构所有者可以轮换邀请码');
+    }
     for (const i of db.invitations) if (i.orgId === orgId) i.disabled = true;
     db.invitations.push({
       code,
@@ -349,50 +627,139 @@ export async function joinByCode(
   code: string,
 ): Promise<{ ok: true; org: Org } | { ok: false; message: string }> {
   const normalized = code.trim().toUpperCase();
-  const current = await orgForAccount(account.id);
-
-  let target: { orgId: string } | null = null;
   if (hasPgBackend()) {
     const pool = await getPool();
-    const row = await pool.query(
-      'SELECT org_id FROM org_invitations WHERE upper(code) = $1 AND NOT disabled',
-      [normalized],
-    );
-    target = row.rowCount ? { orgId: String(row.rows[0].org_id) } : null;
-  } else {
-    const db = await loadFile();
-    const invite = db.invitations.find((i) => i.code.toUpperCase() === normalized && !i.disabled);
-    target = invite ? { orgId: invite.orgId } : null;
-  }
-  if (!target) return { ok: false, message: '邀请码无效或已失效' };
-
-  if (current) {
-    if (current.id === target.orgId) return { ok: true, org: current };
-    return { ok: false, message: `该账号已在机构「${current.name}」中，先退出再加入新机构` };
-  }
-
-  if (hasPgBackend()) {
-    const pool = await getPool();
-    await pool.query(
-      "INSERT INTO org_members (account_id, org_id, role) VALUES ($1, $2, 'member') ON CONFLICT (account_id) DO NOTHING",
-      [account.id, target.orgId],
-    );
-  } else {
-    await enqueue(async () => {
-      const db = await loadFile();
-      if (!db.members.some((m) => m.accountId === account.id)) {
-        db.members.push({
-          accountId: account.id,
-          orgId: target!.orgId,
-          role: 'member',
-          joinedAt: new Date().toISOString(),
-        });
-        await saveFile(db);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const candidate = await client.query(
+        `SELECT org_id
+           FROM org_invitations
+          WHERE upper(code) = $1
+          ORDER BY created_at DESC
+          LIMIT 1`,
+        [normalized],
+      );
+      const candidateOrgId = candidate.rows[0]?.org_id ? String(candidate.rows[0].org_id) : null;
+      if (!candidateOrgId) {
+        await client.query('ROLLBACK');
+        return { ok: false, message: '邀请码无效或已失效' };
       }
-    });
+
+      const target = await client.query(
+        `SELECT id, name, owner_account_id, created_at
+           FROM orgs
+          WHERE id = $1
+          FOR UPDATE`,
+        [candidateOrgId],
+      );
+      const invitation = await client.query(
+        `SELECT org_id
+           FROM org_invitations
+          WHERE upper(code) = $1 AND org_id = $2 AND NOT disabled
+          FOR UPDATE`,
+        [normalized, candidateOrgId],
+      );
+      if (!target.rowCount || !invitation.rowCount) {
+        await client.query('ROLLBACK');
+        return { ok: false, message: '邀请码无效或已失效' };
+      }
+
+      const actualAccount = await client.query(
+        'SELECT role FROM accounts WHERE id = $1 FOR UPDATE',
+        [account.id],
+      );
+      if (!actualAccount.rowCount) {
+        await client.query('ROLLBACK');
+        return { ok: false, message: '账户已不存在，请重新登录' };
+      }
+      if (actualAccount.rows[0].role !== 'learner') {
+        await client.query('ROLLBACK');
+        return { ok: false, message: '只有学习者账户可以加入机构' };
+      }
+
+      const inserted = await client.query(
+        `INSERT INTO org_members (account_id, org_id, role)
+         VALUES ($1, $2, 'member')
+         ON CONFLICT (account_id) DO NOTHING
+         RETURNING org_id`,
+        [account.id, candidateOrgId],
+      );
+      if (!inserted.rowCount) {
+        const current = await client.query(
+          `SELECT m.org_id, o.name
+             FROM org_members m
+             LEFT JOIN orgs o ON o.id = m.org_id
+            WHERE m.account_id = $1`,
+          [account.id],
+        );
+        const currentOrgId = current.rows[0]?.org_id ? String(current.rows[0].org_id) : null;
+        if (currentOrgId !== candidateOrgId) {
+          await client.query('ROLLBACK');
+          return {
+            ok: false,
+            message: current.rows[0]?.name
+              ? `该账号已在机构「${String(current.rows[0].name)}」中，不能加入其他机构`
+              : '机构关系已变化，请刷新后重试',
+          };
+        }
+      }
+
+      const org = {
+        id: String(target.rows[0].id),
+        name: String(target.rows[0].name),
+        ownerAccountId: String(target.rows[0].owner_account_id),
+        createdAt: new Date(String(target.rows[0].created_at)).toISOString(),
+      };
+      await client.query('COMMIT');
+      return { ok: true, org };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
-  const org = await orgForAccount(account.id);
-  return org ? { ok: true, org } : { ok: false, message: '入组后读取失败' };
+
+  return withAccountFilesLock(async () => {
+    const { fileBackend } = await import('./file-store');
+    const actualAccount = await fileBackend.accountById(account.id);
+    if (!actualAccount) {
+      return { ok: false as const, message: '账户已不存在，请重新登录' };
+    }
+    if (actualAccount.role !== 'learner') {
+      return { ok: false as const, message: '只有学习者账户可以加入机构' };
+    }
+    const db = await loadFile();
+    const invite = db.invitations.find(
+      (item) => item.code.toUpperCase() === normalized && !item.disabled,
+    );
+    if (!invite) return { ok: false as const, message: '邀请码无效或已失效' };
+    const org = db.orgs.find((item) => item.id === invite.orgId);
+    if (!org) {
+      return { ok: false as const, message: '邀请码指向的机构不存在，已停止写入' };
+    }
+    const current = db.members.find((member) => member.accountId === account.id);
+    if (current && current.orgId !== invite.orgId) {
+      const currentOrg = db.orgs.find((org) => org.id === current.orgId);
+      return {
+        ok: false as const,
+        message: currentOrg
+          ? `该账号已在机构「${currentOrg.name}」中，不能加入其他机构`
+          : '机构关系数据不完整，已停止写入',
+      };
+    }
+    if (!current) {
+      db.members.push({
+        accountId: account.id,
+        orgId: invite.orgId,
+        role: 'member',
+        joinedAt: new Date().toISOString(),
+      });
+      await saveFile(db);
+    }
+    return { ok: true as const, org };
+  });
 }
 
 /** 成员名册（owner 专用）。用户名/昵称 join 自 accounts。 */
@@ -414,7 +781,6 @@ export async function membersOf(orgId: string): Promise<OrgMember[]> {
     }));
   }
   const db = await loadFile();
-  const { fileBackend } = await import('./file-store');
   const members = db.members.filter((m) => m.orgId === orgId);
   const out: OrgMember[] = [];
   for (const m of members) {
@@ -428,7 +794,6 @@ export async function membersOf(orgId: string): Promise<OrgMember[]> {
       joinedAt: m.joinedAt,
     });
   }
-  void fileBackend; // 保持依赖显式
   return out.sort((a, b) =>
     a.role === b.role ? a.joinedAt.localeCompare(b.joinedAt) : a.role === 'owner' ? -1 : 1,
   );
@@ -437,16 +802,9 @@ export async function membersOf(orgId: string): Promise<OrgMember[]> {
 async function fileAccountById(
   id: string,
 ): Promise<{ username: string; displayName: string } | null> {
-  try {
-    const dir = process.env.ACCOUNTS_DIR || path.join(process.cwd(), 'data', 'accounts');
-    const raw = JSON.parse(await fs.readFile(path.join(dir, 'accounts.json'), 'utf-8')) as {
-      accounts?: Array<{ id: string; username: string; displayName: string }>;
-    };
-    const a = (raw.accounts ?? []).find((x) => x.id === id);
-    return a ? { username: a.username, displayName: a.displayName } : null;
-  } catch {
-    return null;
-  }
+  const { fileBackend } = await import('./file-store');
+  const account = await fileBackend.accountById(id);
+  return account ? { username: account.username, displayName: account.displayName } : null;
 }
 
 /** 移出成员并清理其定向课程（owner 专用；历史全体指派保留）。 */
@@ -473,7 +831,7 @@ export async function removeMember(
       ? { ok: true }
       : { ok: false, message: '成员不存在或为机构所有者' };
   }
-  return enqueue(async () => {
+  return withAccountFilesLock(async () => {
     const db = await loadFile();
     const before = db.members.length;
     db.members = db.members.filter(
@@ -489,56 +847,166 @@ export async function removeMember(
   });
 }
 
+export interface AccountOrganizationData {
+  organization: {
+    id: string;
+    name: string;
+    role: 'owner' | 'member';
+    createdAt: string;
+  } | null;
+  assignmentsReceived: Array<{
+    id: string;
+    courseId: string;
+    title: string;
+    createdAt: string;
+  }>;
+}
+
+/** 只导出当前账户自身的机构关系与收到的指派，不带其他成员名册或邀请码。 */
+export async function accountOrganizationData(accountId: string): Promise<AccountOrganizationData> {
+  const org = await orgForAccount(accountId);
+  if (!org) return { organization: null, assignmentsReceived: [] };
+  const assignments = await assignmentsOf(org.id, accountId);
+  return {
+    organization: {
+      id: org.id,
+      name: org.name,
+      role: org.memberRole,
+      createdAt: org.createdAt,
+    },
+    assignmentsReceived: assignments.map((assignment) => ({
+      id: assignment.id,
+      courseId: assignment.courseId,
+      title: assignment.title,
+      createdAt: assignment.createdAt,
+    })),
+  };
+}
+
+/** 文件后备删户：owner 有成员时拒绝；owner 独自一人时删除整机构。 */
+export async function deleteFileAccountOrganizationData(accountId: string): Promise<
+  | { ok: true }
+  | {
+      ok: false;
+      code: 'owner_has_members' | 'owner_has_corpora' | 'ownership_unavailable';
+      message: string;
+    }
+> {
+  if (hasPgBackend()) {
+    throw new Error('文件账户删除不能在 PostgreSQL 后端执行');
+  }
+
+  return withAccountFilesLock(async () => {
+    const db = await loadFile();
+    const owned = db.orgs.filter((org) => org.ownerAccountId === accountId);
+    for (const org of owned) {
+      if (db.members.some((member) => member.orgId === org.id && member.accountId !== accountId)) {
+        return {
+          ok: false as const,
+          code: 'owner_has_members' as const,
+          message: `机构「${org.name}」仍有成员，请先移出全部成员`,
+        };
+      }
+    }
+
+    const ownedIds = new Set(owned.map((org) => org.id));
+    if (ownedIds.size > 0) {
+      let ownership: Map<string, string>;
+      try {
+        ownership = await corpusOwnership();
+      } catch {
+        return {
+          ok: false as const,
+          code: 'ownership_unavailable' as const,
+          message: '知识库归属服务暂不可用，平台无法确认私有库状态，账户未删除',
+        };
+      }
+      const active = [...ownership].find(([, orgId]) => ownedIds.has(orgId));
+      if (active) {
+        return {
+          ok: false as const,
+          code: 'owner_has_corpora' as const,
+          message: `机构仍有私有知识库「${active[0]}」，请先释放知识库归属`,
+        };
+      }
+    }
+    const changed =
+      ownedIds.size > 0 ||
+      db.members.some((member) => member.accountId === accountId) ||
+      db.assignments.some(
+        (assignment) =>
+          assignment.learnerAccountId === accountId || assignment.assignedBy === accountId,
+      ) ||
+      db.invitations.some((invitation) => invitation.createdBy === accountId);
+    if (!changed) return { ok: true as const };
+
+    db.orgs = db.orgs.filter((org) => !ownedIds.has(org.id));
+    db.members = db.members.filter(
+      (member) => !ownedIds.has(member.orgId) && member.accountId !== accountId,
+    );
+    db.assignments = db.assignments.filter(
+      (assignment) =>
+        !ownedIds.has(assignment.orgId) &&
+        assignment.learnerAccountId !== accountId &&
+        assignment.assignedBy !== accountId,
+    );
+    db.invitations = db.invitations.filter(
+      (invitation) => !ownedIds.has(invitation.orgId) && invitation.createdBy !== accountId,
+    );
+    await saveFile(db);
+    return { ok: true as const };
+  });
+}
+
 // ------------------------------------------------------- 知识库归属与可见性
 
-/** 全部归属关系：corpus → orgId。无行 = 公共库。 */
+/** 全部归属关系：corpus → orgId。引擎 marker 是唯一运行真源。 */
 export async function corpusOwnership(): Promise<Map<string, string>> {
+  const markers = await readCorpusOwnerMarkers();
+  let legacy: Map<string, string>;
   if (hasPgBackend()) {
     const pool = await getPool();
     const rows = await pool.query('SELECT corpus, org_id FROM org_corpora');
-    return new Map(rows.rows.map((r) => [String(r.corpus), String(r.org_id)]));
+    legacy = new Map(rows.rows.map((r) => [String(r.corpus), String(r.org_id)] as const));
+  } else {
+    const db = await loadFile();
+    legacy = new Map(db.corpora.map((c) => [c.corpus, c.orgId] as const));
   }
-  const db = await loadFile();
-  return new Map(db.corpora.map((c) => [c.corpus, c.orgId]));
+  for (const [corpus, legacyOwner] of legacy) {
+    const markerOwner = markers.get(corpus);
+    if (!markerOwner) {
+      throw new Error(`知识库归属迁移未完成：${corpus} 缺少引擎 marker`);
+    }
+    if (markerOwner !== legacyOwner) {
+      throw new Error(`知识库归属冲突：${corpus} 的引擎 marker 与旧表不一致`);
+    }
+  }
+  return markers;
 }
 
-/** 认领/释放知识库（owner 专用；认领他 org 已占的库报错）。 */
+/** 清理已由引擎释放的旧表行；新归属只能由入库链建立。 */
 export async function setCorpusOrg(
   corpus: string,
   orgId: string | null,
   actorOrgId: string,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
-  if (orgId !== null && orgId !== actorOrgId) {
-    return { ok: false, message: '只能将知识库归属当前机构' };
-  }
+  if (orgId !== null) return { ok: false, message: '知识库归属只由成功的入库任务建立' };
   if (hasPgBackend()) {
     const pool = await getPool();
-    if (orgId === null) {
-      await pool.query('DELETE FROM org_corpora WHERE corpus = $1 AND org_id = $2', [
-        corpus,
-        actorOrgId,
-      ]);
-      return { ok: true };
-    }
-    const claimed = await pool.query(
-      `INSERT INTO org_corpora (corpus, org_id) VALUES ($1, $2)
-       ON CONFLICT (corpus) DO UPDATE SET updated_at = now()
-         WHERE org_corpora.org_id = $3
-       RETURNING org_id`,
-      [corpus, orgId, actorOrgId],
-    );
-    return claimed.rowCount ? { ok: true } : { ok: false, message: '该知识库已归属其他机构' };
+    await pool.query('DELETE FROM org_corpora WHERE corpus = $1 AND org_id = $2', [
+      corpus,
+      actorOrgId,
+    ]);
+    return { ok: true };
   }
-  return enqueue(async () => {
+  return withAccountFilesLock(async () => {
     const db = await loadFile();
-    const owned = db.corpora.find((entry) => entry.corpus === corpus)?.orgId;
-    if (owned && owned !== actorOrgId) {
-      return { ok: false as const, message: '该知识库已归属其他机构' };
+    if (!db.orgs.some((org) => org.id === actorOrgId)) {
+      return { ok: false as const, message: '机构关系已失效，不能修改知识库归属' };
     }
-    db.corpora = db.corpora.filter((c) => c.corpus !== corpus);
-    if (orgId !== null) {
-      db.corpora.push({ corpus, orgId, updatedAt: new Date().toISOString() });
-    }
+    db.corpora = db.corpora.filter(
+      (entry) => !(entry.corpus === corpus && entry.orgId === actorOrgId),
+    );
     await saveFile(db);
     return { ok: true as const };
   });
@@ -566,8 +1034,9 @@ export interface OrgAssignment {
   id: string;
   courseId: string;
   title: string;
+  domain: string | null;
   assignedBy: string;
-  /** 防御性兼容字段；迁移前的 null 行已归档，不进入任何清单。 */
+  /** 迁移前的 null 行只作历史归档，不进入任何清单。 */
   learnerAccountId: string | null;
   learnerDisplayName: string | null;
   createdAt: string;
@@ -586,7 +1055,7 @@ export async function assignmentsOf(
     const rows =
       learnerAccountId === undefined
         ? await pool.query(
-            `SELECT oa.id, oa.course_id, oa.title, oa.assigned_by, oa.learner_account_id,
+            `SELECT oa.id, oa.course_id, oa.title, oa.domain, oa.assigned_by, oa.learner_account_id,
                   COALESCE(a.display_name, oa.learner_account_id) AS learner_display_name,
                   oa.created_at
              FROM org_assignments oa
@@ -597,7 +1066,7 @@ export async function assignmentsOf(
             [orgId],
           )
         : await pool.query(
-            `SELECT oa.id, oa.course_id, oa.title, oa.assigned_by, oa.learner_account_id,
+            `SELECT oa.id, oa.course_id, oa.title, oa.domain, oa.assigned_by, oa.learner_account_id,
                   COALESCE(a.display_name, oa.learner_account_id) AS learner_display_name,
                   oa.created_at
              FROM org_assignments oa
@@ -611,6 +1080,7 @@ export async function assignmentsOf(
       id: String(r.id),
       courseId: String(r.course_id),
       title: String(r.title),
+      domain: r.domain === null || r.domain === undefined ? null : String(r.domain),
       assignedBy: String(r.assigned_by),
       learnerAccountId: r.learner_account_id === null ? null : String(r.learner_account_id),
       learnerDisplayName: r.learner_display_name === null ? null : String(r.learner_display_name),
@@ -634,6 +1104,7 @@ export async function assignmentsOf(
         id: a.id,
         courseId: a.courseId,
         title: a.title,
+        domain: a.domain ?? null,
         assignedBy: a.assignedBy,
         learnerAccountId: targetId,
         learnerDisplayName: targetId ? (target?.displayName ?? targetId) : null,
@@ -650,60 +1121,128 @@ export async function addAssignment(
   title: string,
   byAccountId: string,
   learnerAccountId: string,
+  domain: string,
 ): Promise<{ ok: true; assignment: OrgAssignment } | { ok: false; message: string }> {
   const cleanCourse = courseId.trim();
   const cleanTitle = title.trim();
   const cleanLearner = learnerAccountId.trim();
+  const cleanDomain = domain.trim();
   if (!cleanCourse || !cleanTitle) return { ok: false, message: '课程与标题不能为空' };
   if (!cleanLearner) return { ok: false, message: '请选择本机构学员' };
+  if (!cleanDomain) return { ok: false, message: '课程领域不能为空' };
   const id = `asg_${randomBytes(6).toString('hex')}`;
   if (hasPgBackend()) {
     const pool = await getPool();
-    const rows = await pool.query(
-      `WITH target AS (
-         SELECT account_id
-           FROM org_members
-          WHERE org_id = $2 AND account_id = $6 AND role = 'member'
-          FOR UPDATE
-       ), upserted AS (
-         INSERT INTO org_assignments
-           (id, org_id, course_id, title, assigned_by, learner_account_id)
-         SELECT $1, $2, $3, $4, $5, target.account_id FROM target
-         ON CONFLICT (org_id, course_id, learner_account_id)
-           WHERE learner_account_id IS NOT NULL
-         DO UPDATE SET id = org_assignments.id
-         RETURNING id, course_id, title, assigned_by, learner_account_id, created_at
-       )
-       SELECT upserted.*,
-              COALESCE(accounts.display_name, upserted.learner_account_id) AS learner_display_name
-         FROM upserted
-         LEFT JOIN accounts ON accounts.id = upserted.learner_account_id`,
-      [id, orgId, cleanCourse, cleanTitle, byAccountId, cleanLearner],
-    );
-    if (!rows.rowCount) return { ok: false, message: '目标账户不是本机构学员' };
-    const row = rows.rows[0];
-    return {
-      ok: true,
-      assignment: {
-        id: String(row.id),
-        courseId: String(row.course_id),
-        title: String(row.title),
-        assignedBy: String(row.assigned_by),
-        learnerAccountId: String(row.learner_account_id),
-        learnerDisplayName: String(row.learner_display_name),
-        createdAt: new Date(String(row.created_at)).toISOString(),
-      },
-    };
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const relation = await client.query(
+        `SELECT actor_member.account_id AS actor_id, target_member.account_id AS target_id
+           FROM org_members actor_member
+           JOIN accounts actor_account ON actor_account.id = actor_member.account_id
+           JOIN org_members target_member ON target_member.org_id = actor_member.org_id
+           JOIN accounts target_account ON target_account.id = target_member.account_id
+          WHERE actor_member.org_id = $1
+            AND actor_member.account_id = $2
+            AND actor_member.role = 'owner'
+            AND actor_account.role = 'manager'
+            AND target_member.account_id = $3
+            AND target_member.role = 'member'
+            AND target_account.role = 'learner'
+          FOR UPDATE OF actor_member, actor_account, target_member, target_account`,
+        [orgId, byAccountId, cleanLearner],
+      );
+      if (!relation.rowCount) {
+        await client.query('ROLLBACK');
+        return { ok: false, message: '指派者或目标账户的机构关系已失效' };
+      }
+      const existing = await client.query(
+        `SELECT domain
+           FROM org_assignments
+          WHERE org_id = $1 AND learner_account_id = $2
+          FOR UPDATE`,
+        [orgId, cleanLearner],
+      );
+      if (existing.rows.some((row) => !String(row.domain ?? '').trim())) {
+        await client.query('ROLLBACK');
+        return { ok: false, message: '该学员现有指派缺少领域，请先撤回后重新指派' };
+      }
+      if (existing.rows.some((row) => String(row.domain).trim() !== cleanDomain)) {
+        await client.query('ROLLBACK');
+        return { ok: false, message: '该学员已有其他领域课程指派，请先撤回旧领域课程后再指派' };
+      }
+      const rows = await client.query(
+        `WITH upserted AS (
+           INSERT INTO org_assignments
+             (id, org_id, course_id, title, domain, assigned_by, learner_account_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (org_id, course_id, learner_account_id)
+             WHERE learner_account_id IS NOT NULL
+           DO UPDATE SET id = org_assignments.id
+           RETURNING id, course_id, title, domain, assigned_by, learner_account_id, created_at
+         )
+         SELECT upserted.*,
+                COALESCE(accounts.display_name, upserted.learner_account_id) AS learner_display_name
+           FROM upserted
+           LEFT JOIN accounts ON accounts.id = upserted.learner_account_id`,
+        [id, orgId, cleanCourse, cleanTitle, cleanDomain, byAccountId, cleanLearner],
+      );
+      await client.query('COMMIT');
+      const row = rows.rows[0];
+      return {
+        ok: true,
+        assignment: {
+          id: String(row.id),
+          courseId: String(row.course_id),
+          title: String(row.title),
+          domain: String(row.domain),
+          assignedBy: String(row.assigned_by),
+          learnerAccountId: String(row.learner_account_id),
+          learnerDisplayName: String(row.learner_display_name),
+          createdAt: new Date(String(row.created_at)).toISOString(),
+        },
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
-  return enqueue(async () => {
+  return withAccountFilesLock(async () => {
+    const { fileBackend } = await import('./file-store');
+    const [actor, target] = await Promise.all([
+      fileBackend.accountById(byAccountId),
+      fileBackend.accountById(cleanLearner),
+    ]);
     const db = await loadFile();
     if (
+      !actor ||
+      !target ||
+      actor.role !== 'manager' ||
+      target.role !== 'learner' ||
+      !db.members.some(
+        (member) =>
+          member.orgId === orgId && member.accountId === byAccountId && member.role === 'owner',
+      ) ||
       !db.members.some(
         (member) =>
           member.orgId === orgId && member.accountId === cleanLearner && member.role === 'member',
       )
     ) {
-      return { ok: false as const, message: '目标账户不是本机构学员' };
+      return { ok: false as const, message: '指派者或目标账户的机构关系已失效' };
+    }
+    const existing = db.assignments.filter(
+      (entry) => entry.orgId === orgId && entry.learnerAccountId === cleanLearner,
+    );
+    if (existing.some((entry) => !entry.domain?.trim())) {
+      return { ok: false as const, message: '该学员现有指派缺少领域，请先撤回后重新指派' };
+    }
+    if (existing.some((entry) => entry.domain?.trim() !== cleanDomain)) {
+      return {
+        ok: false as const,
+        message: '该学员已有其他领域课程指派，请先撤回旧领域课程后再指派',
+      };
     }
     let assignment = db.assignments.find(
       (entry) =>
@@ -717,6 +1256,7 @@ export async function addAssignment(
         orgId,
         courseId: cleanCourse,
         title: cleanTitle,
+        domain: cleanDomain,
         assignedBy: byAccountId,
         learnerAccountId: cleanLearner,
         createdAt: new Date().toISOString(),
@@ -724,16 +1264,16 @@ export async function addAssignment(
       db.assignments.push(assignment);
       await saveFile(db);
     }
-    const target = await fileAccountById(cleanLearner);
     return {
       ok: true as const,
       assignment: {
         id: assignment.id,
         courseId: assignment.courseId,
         title: assignment.title,
+        domain: assignment.domain ?? null,
         assignedBy: assignment.assignedBy,
         learnerAccountId: cleanLearner,
-        learnerDisplayName: target?.displayName ?? cleanLearner,
+        learnerDisplayName: target.displayName,
         createdAt: assignment.createdAt,
       },
     };
@@ -750,7 +1290,7 @@ export async function removeAssignment(orgId: string, assignmentId: string): Pro
     ]);
     return !!res.rowCount;
   }
-  return enqueue(async () => {
+  return withAccountFilesLock(async () => {
     const db = await loadFile();
     const before = db.assignments.length;
     db.assignments = db.assignments.filter((a) => !(a.orgId === orgId && a.id === assignmentId));

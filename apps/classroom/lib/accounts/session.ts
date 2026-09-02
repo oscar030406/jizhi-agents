@@ -4,8 +4,20 @@ import type { IncomingMessage } from 'node:http';
 
 export const SESSION_COOKIE = 'jizhi_session';
 
+export function sessionCookieOptions(maxAge: number) {
+  return {
+    httpOnly: true,
+    sameSite: 'lax' as const,
+    path: '/',
+    maxAge,
+    secure: process.env.NODE_ENV === 'production',
+  };
+}
+
 /** 从原始 cookie 头里取会话 token。 */
-export function sessionTokenFromCookieHeader(header: string | string[] | undefined): string | undefined {
+export function sessionTokenFromCookieHeader(
+  header: string | string[] | undefined,
+): string | undefined {
   const raw = Array.isArray(header) ? header[0] : header;
   if (!raw) return undefined;
   for (const part of raw.split(';')) {

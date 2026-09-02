@@ -10,6 +10,7 @@ const outlines = [
     description: 'Elicit prior knowledge and show one worked example.',
     keyPoints: ['Prior knowledge', 'Worked example'],
     order: 1,
+    objectiveIds: ['O1'],
   },
   {
     id: 's2',

@@ -2,8 +2,10 @@
 
 import { examplePromptsFor } from '@/lib/knowledge/example-prompts';
 import { useDomainRegistryVersion } from '@/lib/knowledge/use-domain-registry';
-import { belongsToDomain, useCourseDomains } from '@/lib/knowledge/use-course-domains';
-import { useState, useEffect, useMemo, useRef, useDeferredValue } from 'react';
+import { belongsToDomain } from '@/lib/knowledge/use-course-domains';
+import { useEffectiveDomainContext } from '@/lib/knowledge/use-domain-context';
+import { applyEffectiveDomain } from '@/lib/knowledge/domain-context';
+import { useState, useEffect, useMemo, useRef, useDeferredValue, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence, MotionConfig } from 'motion/react';
 import {
@@ -64,6 +66,7 @@ import { LearnerAccountSwitcher } from '@/components/learner-account-switcher';
 import { OrgBadge } from '@/components/home/org-badge';
 import { AccountMenu } from '@/components/account/account-menu';
 import { PublicLanding } from '@/components/home/public-landing';
+import { EmptyState } from '@/components/ui/empty-state';
 import { useAccountStore } from '@/lib/store/account';
 import {
   LearnerProfilePopover,
@@ -133,26 +136,37 @@ function HomePage() {
    * 401 就停在本地那一步，匿名用户照常用。
    */
   const [learnerProfile, setLearnerProfile] = useState(DEFAULT_LEARNER_PROFILE);
+  const [profileReady, setProfileReady] = useState(false);
   // 清单灌注落地时自增——示例词/中文名等读清单的渲染要吃到真值而不是首帧兜底
   const registryVersion = useDomainRegistryVersion();
   useEffect(() => {
-    setLearnerProfile(loadLearnerProfile());
     let cancelled = false;
-    void (async () => {
-      try {
-        const r = await fetch('/api/profile');
-        if (!r.ok) return; // 401 = 未登录，本地那份就是全部
-        const j = (await r.json()) as { fields: Record<string, unknown> | null };
-        if (cancelled || !j.fields) return;
-        setLearnerProfile((prev) => ({ ...prev, ...(j.fields as typeof prev) }));
-      } catch {
+    const localProfile = loadLearnerProfile();
+    const frame = window.requestAnimationFrame(() => {
+      if (cancelled) return;
+      setLearnerProfile(localProfile);
+      setProfileReady(true);
+    });
+    void fetch('/api/profile')
+      .then(async (response) => {
+        if (!response.ok) return null; // 401 = 未登录，本地那份就是全部
+        return (await response.json()) as { fields: Record<string, unknown> | null };
+      })
+      .then((payload) => {
+        if (cancelled || !payload?.fields) return;
+        setLearnerProfile({ ...localProfile, ...(payload.fields as typeof localProfile) });
+      })
+      .catch(() => {
         /* 接口不可达：本地缓存已经生效，不影响使用 */
-      }
-    })();
+      });
     return () => {
       cancelled = true;
+      window.cancelAnimationFrame(frame);
     };
   }, []);
+  const domainContextState = useEffectiveDomainContext(learnerProfile, profileReady);
+  const effectiveDomain =
+    domainContextState.kind === 'ready' ? domainContextState.context.domain : null;
 
   // Draft cache for requirement text
   const { cachedValue: cachedRequirement, updateCache: updateRequirementCache } =
@@ -176,7 +190,14 @@ function HomePage() {
   const [forcePublic, setForcePublic] = useState(false);
   useEffect(() => {
     void refreshAccount();
-    setForcePublic(new URLSearchParams(window.location.search).get('public') === '1');
+    const sync = () =>
+      setForcePublic(new URLSearchParams(window.location.search).get('public') === '1');
+    const frame = window.requestAnimationFrame(sync);
+    window.addEventListener('popstate', sync);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener('popstate', sync);
+    };
   }, [refreshAccount]);
 
   // 最近学习降为次级：默认收起，首屏留给「继续学习 / 我的路径 / 我的学情」三件。
@@ -193,12 +214,15 @@ function HomePage() {
 
   // Hydrate client-only state after mount (avoids SSR mismatch)
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(RECENT_OPEN_STORAGE_KEY);
-      if (saved !== null) setRecentOpen(saved !== 'false');
-    } catch {
-      /* localStorage unavailable */
-    }
+    const frame = window.requestAnimationFrame(() => {
+      try {
+        const saved = localStorage.getItem(RECENT_OPEN_STORAGE_KEY);
+        if (saved !== null) setRecentOpen(saved !== 'false');
+      } catch {
+        /* localStorage unavailable */
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, []);
 
   // Restore requirement draft from localStorage on mount. The previous derived-state
@@ -210,7 +234,10 @@ function HomePage() {
     if (draftRestoredRef.current) return;
     if (!cachedRequirement) return;
     draftRestoredRef.current = true;
-    setForm((prev) => (prev.requirement ? prev : { ...prev, requirement: cachedRequirement }));
+    const frame = window.requestAnimationFrame(() =>
+      setForm((prev) => (prev.requirement ? prev : { ...prev, requirement: cachedRequirement })),
+    );
+    return () => window.cancelAnimationFrame(frame);
   }, [cachedRequirement]);
 
   const [themeOpen, setThemeOpen] = useState(false);
@@ -227,12 +254,12 @@ function HomePage() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const thumbnailsRef = useRef<Record<string, Slide>>({});
 
-  const replaceThumbnails = (slides: Record<string, Slide>) => {
+  const replaceThumbnails = useCallback((slides: Record<string, Slide>) => {
     const previous = thumbnailsRef.current;
     thumbnailsRef.current = slides;
     setThumbnails(slides);
     window.setTimeout(() => revokeThumbnailSlideMediaUrls(previous), 0);
-  };
+  }, []);
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -246,7 +273,7 @@ function HomePage() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [themeOpen]);
 
-  const loadClassrooms = async () => {
+  const loadClassrooms = useCallback(async () => {
     try {
       const list = await listStages();
       setClassrooms(list);
@@ -265,7 +292,7 @@ function HomePage() {
       log.error('Failed to load classrooms:', err);
       toast.error('Persistence is unavailable. Saved classrooms could not be loaded.');
     }
-  };
+  }, [replaceThumbnails]);
 
   useEffect(() => {
     // Clear stale media store to prevent cross-course thumbnail contamination.
@@ -274,13 +301,14 @@ function HomePage() {
     useMediaGenerationStore.getState().revokeObjectUrls();
     useMediaGenerationStore.setState({ tasks: {} });
 
-    loadClassrooms();
+    const frame = window.requestAnimationFrame(() => void loadClassrooms());
 
     return () => {
+      window.cancelAnimationFrame(frame);
       revokeThumbnailSlideMediaUrls(thumbnailsRef.current);
       thumbnailsRef.current = {};
     };
-  }, []);
+  }, [loadClassrooms]);
 
   const handleDelete = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -309,19 +337,31 @@ function HomePage() {
   };
 
   const deferredSearchQuery = useDeferredValue(searchQuery);
-  /** 课程归属表：运行时推导为主、打包快照兜底（`useCourseDomains` 里写了原因）。 */
-  const courseDomains = useCourseDomains();
   /**
-   * 最近学习先按域筛一道再按搜索词筛。
+   * 继续学习与最近课程共用指派优先的有效领域。存在指派时展示该领域全部可用课程；
+   * 指派域缺失或解析失败时返回空列表，绝不回落旧画像。
    *
    * 不筛的现象：新账号切到智能制造域，最近学习里躺着 15 门 AI 课——
-   * 用户口径是「两个库的课程与个性化不许混」。归属表里没有的课算可见
-   * （刚生成的课有一段时间不在表里，宁可多显示也不要让它凭空消失）。
+   * 用户口径是「两个库的课程与个性化不许混」。归属表里没有的课不进入
+   * 学习者视图；生成链必须先写入课程 origin，再允许展示。
    */
-  const domainScoped = useMemo(
-    () => classrooms.filter((c) => belongsToDomain(c.id, learnerProfile.corpus, courseDomains)),
-    [classrooms, learnerProfile.corpus, courseDomains],
-  );
+  const domainScoped = useMemo(() => {
+    if (domainContextState.kind !== 'ready' || !domainContextState.context.domain) return [];
+    if (domainContextState.context.assignment) {
+      const assignedCourseIds = domainContextState.context.courseIds ?? [
+        domainContextState.context.assignment.courseId,
+      ];
+      return classrooms.filter((course) => assignedCourseIds.includes(course.id));
+    }
+    return classrooms.filter((course) =>
+      belongsToDomain(
+        course.id,
+        domainContextState.context.domain ?? undefined,
+        domainContextState.courseDomains ?? {},
+      ),
+    );
+  }, [classrooms, domainContextState]);
+  const continueClassroom = domainScoped[0];
   const filteredClassrooms = useMemo(() => {
     const q = deferredSearchQuery.trim().toLowerCase();
     if (!q) return domainScoped;
@@ -332,10 +372,9 @@ function HomePage() {
     });
   }, [domainScoped, deferredSearchQuery]);
 
-  /** 路径卡要的「本机学过哪些课、学到哪」：键=本机有记录的课，值=续读进度（没续读过是 0） */
-  const pathProgress = useMemo(
-    () => Object.fromEntries(classrooms.map((c) => [c.id, progressMap[c.id] ?? 0])),
-    [classrooms, progressMap],
+  const examplePrompts = useMemo(
+    () => (effectiveDomain ? examplePromptsFor(effectiveDomain, registryVersion) : []),
+    [effectiveDomain, registryVersion],
   );
 
   const updateForm = <K extends keyof FormState>(field: K, value: FormState[K]) => {
@@ -356,6 +395,10 @@ function HomePage() {
       setError(t('upload.requirementRequired'));
       return;
     }
+    if (domainContextState.kind !== 'ready' || !domainContextState.context.domain) {
+      setError('当前学习领域尚未确认，不能生成可能混入其它领域内容的课程。');
+      return;
+    }
 
     setError(null);
 
@@ -365,7 +408,9 @@ function HomePage() {
       // 画像纹丝不动，课照旧给代码——抽取器认得这句话，只是从没人拿需求文本去问它。
       // 只影响本次生成，不写回 localStorage：自述是这一次的上下文，不是长期画像的修改。
       const seed = await fetchProfileSeed(form.requirement);
-      const { profile: effectiveProfile, changes } = mergeSeedIntoProfile(learnerProfile, seed);
+      const merged = mergeSeedIntoProfile(learnerProfile, seed);
+      const effectiveProfile = applyEffectiveDomain(merged.profile, domainContextState.context);
+      const { changes } = merged;
       if (changes.length > 0) {
         // 生成后会立刻跳到课堂，页面上留不住话——用 toast，停久一点让人读完
         toast.info(describeChanges(changes), { duration: 8000 });
@@ -408,10 +453,10 @@ function HomePage() {
     return date.toLocaleDateString();
   };
 
-  const canGenerate = !!form.requirement.trim() && hasUsableProvider;
+  const canGenerate = !!form.requirement.trim() && hasUsableProvider && Boolean(effectiveDomain);
   /** 有最近课时时英雄位是「继续学习」，造课按钮降级 ghost；否则造课卡当英雄位，
    *  其按钮就是全页唯一的实心紫拟物按压 CTA（规格 3.1 第 1/2 条，配方①③④） */
-  const heroIsCourse = classrooms.length > 0;
+  const heroIsCourse = Boolean(continueClassroom);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
@@ -560,24 +605,46 @@ function HomePage() {
                造课入口与最近课程排在其后。 */}
 
           {/* ── ⓪ 「继续上次」英雄卡：打开即知道下一步；无最近课时由造课卡当英雄位（规格 3.1 第 1 条） ── */}
-          {classrooms.length > 0 && (
+          {domainContextState.kind === 'loading' && (
+            <section className="lg:col-span-3 rounded-xl border border-border bg-card px-5 py-4 text-sm text-muted-foreground">
+              正在确认当前账户的课程指派与学习领域…
+            </section>
+          )}
+          {domainContextState.kind === 'error' && (
+            <div className="lg:col-span-3">
+              <EmptyState title="当前学习领域暂时无法确认" hint={domainContextState.reason} />
+            </div>
+          )}
+          {domainContextState.kind === 'ready' && !domainContextState.context.domain && (
+            <div className="lg:col-span-3">
+              <EmptyState
+                title={
+                  domainContextState.context.assignment
+                    ? '机构指派课程的领域尚未确认'
+                    : '当前学习领域尚未确认'
+                }
+                hint={`${domainContextState.context.reason ?? '当前没有可用的领域信息。'} 首页不会改用旧画像或其它领域内容。`}
+              />
+            </div>
+          )}
+          {effectiveDomain && continueClassroom && (
             <ContinueHeroCard
-              classroom={classrooms[0]}
-              slide={thumbnails[classrooms[0].id]}
-              progress={progressMap[classrooms[0].id]}
+              classroom={continueClassroom}
+              slide={thumbnails[continueClassroom.id]}
+              progress={progressMap[continueClassroom.id]}
               formatDate={formatDate}
             />
           )}
 
           {/* ── ⓪b 我的学习路径（AI 域）或当前领域课程卡（非 AI 库，域工作区最小实现） ── */}
-          <PathOrDomainCard
-            corpus={learnerProfile.corpus}
-            progressByCourseId={pathProgress}
-            className="lg:col-span-2"
-          />
+          {effectiveDomain && (
+            <PathOrDomainCard corpus={effectiveDomain} className="lg:col-span-2" />
+          )}
 
-          {/* ── ⓪c 我的学情（读画像里的 conceptMastery） ── */}
-          <MasterySummaryCard profile={learnerProfile} />
+          {/* ── ⓪c 我的学情（只读有效领域对应的分域掌握度） ── */}
+          {effectiveDomain && (
+            <MasterySummaryCard profile={learnerProfile} effectiveDomain={effectiveDomain} />
+          )}
 
           {/* ── ① 造课卡 ── */}
           <section className={cn('overflow-hidden lg:col-span-2', CARD_RECIPE_STATIC)}>
@@ -606,7 +673,7 @@ function HomePage() {
             {/* 示例提示：一键填入 */}
             {!form.requirement.trim() && (
               <div className="flex flex-wrap gap-1.5 px-4 pb-2">
-                {examplePromptsFor(learnerProfile.corpus, registryVersion).map((p) => (
+                {examplePrompts.map((p) => (
                   <button
                     key={p}
                     type="button"

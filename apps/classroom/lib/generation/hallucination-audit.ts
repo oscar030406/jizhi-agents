@@ -12,9 +12,16 @@ import { createHash } from 'node:crypto';
 
 import { judgeRole } from '@/components/agents/judge-labels';
 import { isIncrementalReauditEnabled } from '@/lib/config/feature-flags';
+import { EvidenceGateError } from '@/lib/generation/evidence-grounding';
 import { parseJsonResponse } from '@/lib/generation/json-repair';
 import { mergeNumericBypass } from './numeric-claims';
 import { isNumericBypassEnabled } from '@/lib/config/feature-flags';
+import {
+  validateLearningContractFulfillment,
+  type LearningContractAlignmentProof,
+  type LearningContractPhase,
+  type LearningContractPlan,
+} from './learning-contract';
 
 export type ClaimVerdict = 'supported' | 'uncertain' | 'incorrect';
 export type AuditScope = 'scene' | 'course';
@@ -64,6 +71,27 @@ export interface DebateRound {
   defense: string;
   arbiterVerdict: string;
   rationale: string;
+}
+
+export interface LearningAlignmentItem {
+  objectiveId: string;
+  phase: LearningContractPhase;
+  sceneId: string;
+  verdict: 'aligned' | 'misaligned';
+  evidenceQuote?: string;
+  reason: string;
+  newContext?: boolean;
+}
+
+export interface LearningAlignmentJudgeResult {
+  judgeModel: string;
+  verdict: 'aligned' | 'misaligned';
+  rationale: string;
+  items: LearningAlignmentItem[];
+}
+
+export interface LearningContractAlignmentAudit extends LearningContractAlignmentProof {
+  judges: LearningAlignmentJudgeResult[];
 }
 
 export interface SceneAudit {
@@ -125,6 +153,8 @@ export interface SceneAudit {
   panelComplete?: boolean;
   /** 终审对应的最终场景载荷哈希；发布门据此识别审核后的改动。 */
   courseContentHash?: string;
+  /** 双判官对“目标—五阶段—最终内容”的结构化语义履约裁决。 */
+  learningAlignment?: LearningContractAlignmentAudit;
 }
 
 /** Publish floor shared with the engine's ArbitrationAgent (backend/agents/arbitration_agent.py). */
@@ -956,9 +986,9 @@ export interface AuditOptions {
 
 /**
  * Audit scene content; when claims are flagged and a reviseCall is provided,
- * run one revision pass and re-audit. Never throws — an audit infrastructure
- * failure degrades to a `flagged` verdict with zero claims rather than
- * blocking generation (the gate must not be less reliable than the generator).
+ * run one revision pass and re-audit. Ordinary audit infrastructure failures
+ * degrade to a `flagged` verdict with zero claims. `EvidenceGateError` is the
+ * exception: configured retrieval empty/unavailable must still stop the course.
  */
 export async function auditSceneContent(
   options: AuditOptions,
@@ -1007,10 +1037,9 @@ export async function auditSceneContent(
    * Retry `uncertain` claims against evidence retrieved by the claim's own text.
    *
    * Bounded to MAX_RESCUE claims so a scene full of unciteable prose cannot turn
-   * one audit into a dozen extra round-trips. Mutates nothing on failure: a
-   * claim whose re-query finds nothing, or whose re-judge errors, keeps its
-   * original verdict and is still recorded — "we looked again and the corpus
-   * really doesn't have it" is a result worth showing.
+   * one audit into a dozen extra round-trips. A local optional miss or re-judge
+   * error keeps the original verdict. A configured evidence-gate failure is
+   * rethrown so it cannot be mislabeled as a caveat and published.
    */
   const MAX_RESCUE = 6;
   const rescueUncertain = async (claims: AuditClaim[]): Promise<AuditClaim[]> => {
@@ -1083,7 +1112,8 @@ export async function auditSceneContent(
               ...(parsed.fix ? { fix: String(parsed.fix) } : {}),
             });
           }
-        } catch {
+        } catch (error) {
+          if (error instanceof EvidenceGateError) throw error;
           rescued!.push({
             claim: claim.claim,
             before: 'uncertain',
@@ -1325,7 +1355,8 @@ export async function auditSceneContent(
       audit: finish(stillIncorrect ? 'flagged' : settle(secondClaims, true), secondClaims),
       content,
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof EvidenceGateError) throw error;
     return { audit: finish('flagged', []), content: options.content };
   }
 }
@@ -1352,6 +1383,7 @@ export type CourseAuditOptions = Omit<
 > & {
   courseTitle: string;
   scenes: readonly CourseAuditScene[];
+  learningContract?: LearningContractPlan;
 };
 
 type CourseHashScene = Pick<
@@ -1368,6 +1400,12 @@ function canonicalizeForHash(value: unknown): unknown {
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
       .map(([key, child]) => [key, canonicalizeForHash(child)]),
   );
+}
+
+export function hashLearningContractPlan(plan: unknown): string {
+  return createHash('sha256')
+    .update(JSON.stringify(canonicalizeForHash(plan)))
+    .digest('hex');
 }
 
 /** Hash exactly the final scene fields whose post-audit mutation invalidates publication. */
@@ -1467,8 +1505,260 @@ function buildCourseTeachingText(scenes: readonly CourseAuditScene[]): {
 
   return {
     text: full.slice(0, COURSE_TOTAL_TEXT_BUDGET),
-    truncatedChars:
-      sceneTruncatedChars + Math.max(0, full.length - COURSE_TOTAL_TEXT_BUDGET),
+    truncatedChars: sceneTruncatedChars + Math.max(0, full.length - COURSE_TOTAL_TEXT_BUDGET),
+  };
+}
+
+const LEARNING_ALIGNMENT_SYSTEM = `你是全课程教学履约终审员。事实真假由另一条审核链负责；你只判断最终可见课程是否真正完成了已批准的学习目标。
+
+输入包含：可观察目标（action、condition、successCriterion）、目标与五个教学阶段的场景映射，以及这些场景的最终可见正文和动作语义。逐条判断：
+- prerequisiteActivation：是否激活完成目标动作所需的相关先备经验，而不是无关热身；
+- demonstration：是否示范目标动作在给定条件下如何做到达标，而不是只介绍概念；
+- learnerPractice：是否让学习者实际执行目标动作；
+- feedbackRetry：是否依据成功标准指出差距，并给出可再次尝试的机会；
+- transferApplication：是否保持同一目标动作和成功标准，同时换到与示范/练习实质不同的新情境或新输入。
+
+硬规则：
+1. 有出处只说明事实来源，不等于完成教学目标；内容与目标无关必须判 misaligned。
+2. 只复述 action/condition/successCriterion 的关键词、改标题、换数字或换人名，不算语义证据。
+3. 每个输入映射必须且只能输出一条 item；不得遗漏、合并或新增映射。
+4. aligned 的 evidenceQuote 必须逐字摘自对应场景的最终可见内容，且足以说明为何履约；不得引用目标文本。
+5. transferApplication 判 aligned 时 newContext 必须为 true。
+6. 任一 item 为 misaligned，则总 verdict 必须为 misaligned。
+
+只输出 JSON 对象，不要围栏或解释：
+{"verdict":"aligned|misaligned","rationale":"一句话总判定","items":[{"objectiveId":"O1","phase":"prerequisiteActivation|demonstration|learnerPractice|feedbackRetry|transferApplication","sceneId":"scene-id","verdict":"aligned|misaligned","evidenceQuote":"对应场景原文摘录；无相关证据时可空","reason":"说明该内容为何履约或为何无关","newContext":true}]}`;
+
+const ALIGNMENT_PHASES: LearningContractPhase[] = [
+  'prerequisiteActivation',
+  'demonstration',
+  'learnerPractice',
+  'feedbackRetry',
+  'transferApplication',
+];
+
+interface LearningAlignmentExpectation {
+  objectiveId: string;
+  phase: LearningContractPhase;
+  sceneId: string;
+  sceneText: string;
+}
+
+function alignmentKey(value: {
+  objectiveId: string;
+  phase: LearningContractPhase;
+  sceneId: string;
+}): string {
+  return `${value.objectiveId}\u0000${value.phase}\u0000${value.sceneId}`;
+}
+
+function normalizedEvidenceQuote(value: string): string {
+  return value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function buildLearningAlignmentReview(
+  plan: LearningContractPlan,
+  scenes: readonly CourseAuditScene[],
+): {
+  prompt: string;
+  expectations: LearningAlignmentExpectation[];
+  violations: string[];
+} {
+  const structural = validateLearningContractFulfillment(plan, scenes, {
+    actualContentReady: false,
+  });
+  if (!structural.fulfilled) {
+    return { prompt: '', expectations: [], violations: structural.violations };
+  }
+
+  const planned = new Map(plan.plannedScenes.map((scene) => [scene.sceneId, scene]));
+  const actual = new Map(
+    scenes
+      .filter((scene) => Boolean(scene.outlineId?.trim()))
+      .map((scene) => [scene.outlineId!.trim(), scene] as const),
+  );
+  const sceneTexts = new Map<string, string>();
+  let truncatedChars = 0;
+  for (const [sceneId, scene] of actual) {
+    const teaching = extractTeachingTextMeta(scene.content);
+    truncatedChars += teaching.truncatedChars;
+    sceneTexts.set(
+      sceneId,
+      [teaching.text, ...visibleActionTexts(scene.actions)].filter(Boolean).join('\n'),
+    );
+  }
+
+  const expectations = ALIGNMENT_PHASES.flatMap((phase) =>
+    plan.required[phase].flatMap((sceneId) =>
+      (planned.get(sceneId)?.objectiveIds ?? []).map((objectiveId) => ({
+        objectiveId,
+        phase,
+        sceneId,
+        sceneText: sceneTexts.get(sceneId) ?? '',
+      })),
+    ),
+  );
+  const mappedSceneIds = [...new Set(expectations.map((item) => item.sceneId))];
+  const objectiveText = plan.objectives
+    .map(
+      (objective) =>
+        `- ${objective.id}\n  action: ${objective.action}\n  condition: ${objective.condition}\n  successCriterion: ${objective.successCriterion}`,
+    )
+    .join('\n');
+  const mappingText = expectations
+    .map(
+      (item) =>
+        `- objectiveId=${item.objectiveId}; phase=${item.phase}; sceneId=${item.sceneId}`,
+    )
+    .join('\n');
+  const sceneText = mappedSceneIds
+    .map((sceneId) => {
+      const scene = actual.get(sceneId);
+      return `<scene id="${sceneId}" title="${(scene?.title ?? '').replace(/"/g, '&quot;')}">\n${sceneTexts.get(sceneId) || '（无最终可见内容）'}\n</scene>`;
+    })
+    .join('\n\n');
+  const full = `【批准的学习目标】\n${objectiveText}\n\n【必须逐条裁决的映射】\n${mappingText}\n\n【映射场景的最终可见内容】\n${sceneText}`;
+  truncatedChars += Math.max(0, full.length - COURSE_TOTAL_TEXT_BUDGET);
+
+  return {
+    prompt: full.slice(0, COURSE_TOTAL_TEXT_BUDGET),
+    expectations,
+    violations:
+      truncatedChars > 0
+        ? [`教学履约终审输入有 ${truncatedChars} 字未进入双判官上下文`]
+        : [],
+  };
+}
+
+function parseLearningAlignmentJudge(
+  raw: string,
+  judgeModel: string,
+  expectations: readonly LearningAlignmentExpectation[],
+): LearningAlignmentJudgeResult | null {
+  const parsed = parseJsonLoose(raw) as Record<string, unknown> | null;
+  if (!parsed || (parsed.verdict !== 'aligned' && parsed.verdict !== 'misaligned')) return null;
+  if (typeof parsed.rationale !== 'string' || !parsed.rationale.trim()) return null;
+  if (!Array.isArray(parsed.items) || parsed.items.length !== expectations.length) return null;
+
+  const expected = new Map(expectations.map((item) => [alignmentKey(item), item]));
+  const seen = new Set<string>();
+  const items: LearningAlignmentItem[] = [];
+  for (const candidate of parsed.items) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return null;
+    const item = candidate as Record<string, unknown>;
+    const objectiveId = String(item.objectiveId ?? '').trim();
+    const phase = String(item.phase ?? '').trim() as LearningContractPhase;
+    const sceneId = String(item.sceneId ?? '').trim();
+    const verdict = item.verdict;
+    const reason = String(item.reason ?? '').trim();
+    if (
+      !ALIGNMENT_PHASES.includes(phase) ||
+      (verdict !== 'aligned' && verdict !== 'misaligned') ||
+      !reason
+    ) {
+      return null;
+    }
+    const key = alignmentKey({ objectiveId, phase, sceneId });
+    const expectation = expected.get(key);
+    if (!expectation || seen.has(key)) return null;
+    seen.add(key);
+
+    const evidenceQuote = String(item.evidenceQuote ?? '').trim();
+    const normalizedQuote = normalizedEvidenceQuote(evidenceQuote);
+    const normalizedScene = normalizedEvidenceQuote(expectation.sceneText);
+    // Quote length is only a binding check; semantic alignment is decided by both judges.
+    if (
+      (verdict === 'aligned' && normalizedQuote.length < 8) ||
+      (normalizedQuote && !normalizedScene.includes(normalizedQuote)) ||
+      (phase === 'transferApplication' && verdict === 'aligned' && item.newContext !== true)
+    ) {
+      return null;
+    }
+    items.push({
+      objectiveId,
+      phase,
+      sceneId,
+      verdict,
+      ...(evidenceQuote ? { evidenceQuote } : {}),
+      reason,
+      ...(phase === 'transferApplication' ? { newContext: item.newContext === true } : {}),
+    });
+  }
+
+  const derived = items.every(
+    (item) =>
+      item.verdict === 'aligned' &&
+      (item.phase !== 'transferApplication' || item.newContext === true),
+  )
+    ? 'aligned'
+    : 'misaligned';
+  if (parsed.verdict !== derived || seen.size !== expected.size) return null;
+  return { judgeModel, verdict: derived, rationale: parsed.rationale.trim(), items };
+}
+
+async function auditLearningContractAlignment(
+  options: CourseAuditOptions & { learningContract: LearningContractPlan },
+  courseContentHash: string,
+): Promise<LearningContractAlignmentAudit> {
+  const learningContractHash = hashLearningContractPlan(options.learningContract);
+  const review = buildLearningAlignmentReview(options.learningContract, options.scenes);
+  if (review.violations.length > 0) {
+    return {
+      courseContentHash,
+      learningContractHash,
+      complete: false,
+      aligned: false,
+      violations: review.violations,
+      judges: [],
+    };
+  }
+
+  const judgeCalls = options.judgeCalls?.slice(0, 2) ?? [];
+  if (judgeCalls.length !== 2) {
+    return {
+      courseContentHash,
+      learningContractHash,
+      complete: false,
+      aligned: false,
+      violations: ['教学履约终审没有取得两位独立判官'],
+      judges: [],
+    };
+  }
+
+  const judged = await Promise.all(
+    judgeCalls.map((judge, index) =>
+      judge(LEARNING_ALIGNMENT_SYSTEM, review.prompt)
+        .then((raw) =>
+          parseLearningAlignmentJudge(
+            raw,
+            options.judgeModels?.[index] ?? `judge-${index + 1}`,
+            review.expectations,
+          ),
+        )
+        .catch(() => null),
+    ),
+  );
+  const judges = judged.filter((result): result is LearningAlignmentJudgeResult => result !== null);
+  const complete = judges.length === 2;
+  const aligned = complete && judges.every((judge) => judge.verdict === 'aligned');
+  const violations = complete
+    ? judges.flatMap((judge) =>
+        judge.items
+          .filter((item) => item.verdict === 'misaligned')
+          .map(
+            (item) =>
+              `${judge.judgeModel}: ${item.objectiveId}/${item.phase}/${item.sceneId} — ${item.reason}`,
+          ),
+      )
+    : ['教学履约终审未取得两份结构完整且证据可回指的判词'];
+
+  return {
+    courseContentHash,
+    learningContractHash,
+    complete,
+    aligned,
+    violations,
+    judges,
   };
 }
 
@@ -1500,18 +1790,36 @@ export async function auditCourseContent(options: CourseAuditOptions): Promise<S
     evidenceCount: options.evidenceCount,
     // 故意不传 reviseCall：全课终审只裁决，不能静默重写已逐屏批准的最终内容。
   });
+  const learningAlignment = options.learningContract
+    ? await auditLearningContractAlignment(
+        { ...options, learningContract: options.learningContract },
+        courseContentHash,
+      )
+    : undefined;
 
   const unresolved = audit.debate?.some((round) => round.arbiterVerdict === 'unresolved') ?? false;
   const issues = audit.claims.filter((claim) => claim.verdict !== 'supported');
   const infrastructureFailed = audit.verdict === 'flagged' && audit.totalClaims === 0;
   const incompleteReview = (audit.truncatedChars ?? 0) > 0;
   const panelIncomplete = audit.panelComplete !== true;
+  const alignmentIncomplete = Boolean(learningAlignment && !learningAlignment.complete);
+  const alignmentFailed = Boolean(learningAlignment && !learningAlignment.aligned);
   const blocked =
-    incompleteReview || panelIncomplete || infrastructureFailed || unresolved || issues.length > 0;
+    incompleteReview ||
+    panelIncomplete ||
+    infrastructureFailed ||
+    unresolved ||
+    issues.length > 0 ||
+    alignmentIncomplete ||
+    alignmentFailed;
 
   return {
     ...audit,
     courseContentHash,
+    ...(learningAlignment ? { learningAlignment } : {}),
+    ...(learningAlignment
+      ? { panelComplete: audit.panelComplete === true && learningAlignment.complete }
+      : {}),
     verdict: blocked ? 'flagged' : 'pass',
     decision: blocked ? 'block_pending_review' : 'publish',
     rationale: incompleteReview
@@ -1519,11 +1827,15 @@ export async function auditCourseContent(options: CourseAuditOptions): Promise<S
       : panelIncomplete
         ? '全课程事实终审未取得两份合法判词，课程保持草稿。'
         : infrastructureFailed
-        ? '全课程事实终审未能完成，课程保持草稿。'
+          ? '全课程事实终审未能完成，课程保持草稿。'
         : unresolved
-          ? '跨页事实分歧未能完成仲裁，课程保持草稿。'
-          : issues.length > 0
-            ? `全课程终审发现 ${issues.length} 处跨页或材料冲突，课程保持草稿。`
-            : '全课程最终正文、逐屏断言与可见动作语义未发现高风险跨页冲突。',
+            ? '跨页事实分歧未能完成仲裁，课程保持草稿。'
+            : issues.length > 0
+              ? `全课程终审发现 ${issues.length} 处跨页或材料冲突，课程保持草稿。`
+              : alignmentIncomplete
+                ? '教学履约终审未取得两份结构完整且证据可回指的判词，课程保持草稿。'
+                : alignmentFailed
+                  ? '教学履约终审发现目标与前置、示范、练习、反馈或迁移内容未对齐，课程保持草稿。'
+              : '全课程最终正文、逐屏断言与可见动作语义未发现高风险跨页冲突。',
   };
 }

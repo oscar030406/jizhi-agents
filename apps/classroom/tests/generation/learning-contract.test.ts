@@ -18,6 +18,7 @@ const genericAiOutlines: SceneOutline[] = [
     title: '先判断现有检索链',
     description: '用一个短案例激活学习者对检索、生成与引用的已有认识。',
     keyPoints: ['已有经验', '常见误区', '本课目标'],
+    objectiveIds: ['O1'],
     order: 1,
   },
   {
@@ -26,6 +27,7 @@ const genericAiOutlines: SceneOutline[] = [
     title: '完整示范一次 RAG 回答',
     description: '教师演示从问题、检索结果到带引用回答的完整过程。',
     keyPoints: ['查询改写', '证据选择', '引用回答'],
+    objectiveIds: ['O1'],
     order: 2,
   },
   {
@@ -36,6 +38,7 @@ const genericAiOutlines: SceneOutline[] = [
     keyPoints: ['运行代码', '比较召回', '记录偏差'],
     order: 3,
     teachingObjective: 'O1',
+    objectiveIds: ['O1'],
     widgetType: 'code',
     widgetOutline: { language: 'python', challengeType: 'implementation' },
   },
@@ -47,6 +50,7 @@ const genericAiOutlines: SceneOutline[] = [
     keyPoints: ['可见反馈', '修改查询', '再次验证'],
     order: 4,
     teachingObjective: 'O1',
+    objectiveIds: ['O1'],
     widgetType: 'game',
     widgetOutline: { gameType: 'strategy', challenge: '让三个测试问题都命中证据' },
   },
@@ -58,6 +62,7 @@ const genericAiOutlines: SceneOutline[] = [
     keyPoints: ['新资料', '独立取证', '交付引用回答'],
     order: 5,
     teachingObjective: 'O1',
+    objectiveIds: ['O1'],
     pblConfig: {
       projectTopic: '陌生手册问答',
       projectDescription: '为一份新手册建立可核验问答。',
@@ -72,6 +77,7 @@ const genericAiOutlines: SceneOutline[] = [
     keyPoints: ['三题均有证据', '引用可追溯', '不支持时明确拒答'],
     order: 6,
     teachingObjective: 'O1',
+    objectiveIds: ['O1'],
     quizConfig: { questionCount: 3, difficulty: 'medium', questionTypes: ['text'] },
   },
 ];
@@ -132,13 +138,76 @@ const genericAiContract: LearningContract = {
   },
 };
 
+function generatedInteractiveHtml(): string {
+  return `
+    <p>先观察一次完整作答，说明如何定位证据缺口并依据反馈修订。</p>
+    <textarea id="answer" aria-label="学习者答案"></textarea>
+    <button type="button" onclick="submitAttempt()">提交并查看反馈</button>
+    <output id="feedback" aria-live="polite"></output>
+    <script>
+      function submitAttempt() {
+        const answer = document.getElementById('answer').value;
+        document.getElementById('feedback').textContent = answer
+          ? '已收到；请依据反馈修改后再试一次。'
+          : '请先写下你的答案。';
+      }
+    </script>
+  `;
+}
+
+function generatedPblProject(title = '迁移任务') {
+  return {
+    uiPhase: 'hero',
+    title,
+    description: '为陌生资料交付一组带可追溯引用的问答及核验记录。',
+    learningObjective: '独立完成检索、引用与证据核验。',
+    proficiency: 'intermediate',
+    language: 'zh-CN',
+    tags: ['检索', '引用'],
+    status: 'active',
+    roles: [{ id: 'role-instructor', type: 'instructor', name: '项目导师' }],
+    milestones: [
+      {
+        id: 'milestone-1',
+        title: '完成陌生资料问答',
+        description: '检索新资料并形成可核验的最终交付物。',
+        status: 'active',
+        order: 0,
+        briefing: '先明确问题与证据边界，再开始检索。',
+        completionCriteria: '三条回答均附可追溯引用，缺证据时明确拒答。',
+        debrief: '逐条复核引用与结论，再提交最终版本。',
+        microtasks: [
+          {
+            id: 'microtask-1',
+            title: '完成检索并提交引用问答',
+            description: '针对三个新问题检索证据并写出回答。',
+            status: 'todo',
+            assignee: 'user',
+            hints: ['先记录证据位置，再组织回答。'],
+            order: 0,
+          },
+        ],
+      },
+    ],
+    submissions: [],
+    evaluations: [],
+    threads: [],
+    engagementEvents: [],
+    createdAt: '2026-09-01T00:00:00.000Z',
+    updatedAt: '2026-09-01T00:00:00.000Z',
+  };
+}
+
 function generatedScenes(outlines: readonly SceneOutline[] = genericAiOutlines) {
   return outlines.map((outline) => {
     if (outline.type === 'quiz') {
       return {
         outlineId: outline.id,
         type: outline.type,
-        content: { type: 'quiz', questions: [{ id: 'q1', question: '迁移题' }] },
+        content: {
+          type: 'quiz',
+          questions: [{ id: 'q1', question: '面对一份未见过的设备手册，如何检索并核验回答依据？' }],
+        },
       };
     }
     if (outline.type === 'interactive') {
@@ -147,9 +216,8 @@ function generatedScenes(outlines: readonly SceneOutline[] = genericAiOutlines) 
         type: outline.type,
         content: {
           type: 'interactive',
-          html: '<main>可操作练习</main>',
+          html: generatedInteractiveHtml(),
           widgetType: outline.widgetType,
-          widgetConfig: { type: outline.widgetType },
         },
       };
     }
@@ -162,10 +230,28 @@ function generatedScenes(outlines: readonly SceneOutline[] = genericAiOutlines) 
           projectConfig: {
             projectInfo: { title: '迁移任务', description: '完成陌生资料问答。' },
           },
+          projectV2: generatedPblProject(),
         },
       };
     }
-    return { outlineId: outline.id, type: outline.type, content: { type: 'slide' } };
+    return {
+      outlineId: outline.id,
+      type: outline.type,
+      content: {
+        type: 'slide',
+        canvas: {
+          elements: [
+            {
+              type: 'text',
+              content:
+                outline.id === 'scene_1'
+                  ? '<p>先回忆已有检索经验，并解释证据缺失时为什么不能直接作答。</p>'
+                  : '<p>教师逐步示范查询改写、证据选择和带引用回答，并说明每一步判断依据。</p>',
+            },
+          ],
+        },
+      },
+    };
   });
 }
 
@@ -359,7 +445,9 @@ describe('LearningContract', () => {
         assessmentMap: [{ sceneId: 'scene_6', objectiveIds: ['O1', 'O2'] }],
       },
       genericAiOutlines.map((outline) =>
-        outline.id === 'scene_4' ? { ...outline, teachingObjective: 'O2' } : outline,
+        outline.id === 'scene_4'
+          ? { ...outline, teachingObjective: 'O2', objectiveIds: ['O2'] }
+          : outline,
       ),
       { allowedGroundingRefs: ['corpus:ai'] },
     );
@@ -367,6 +455,31 @@ describe('LearningContract', () => {
     expect(result.publishable).toBe(false);
     expect(result.violations).toContain(
       'learnerPractice interactive scene_3 needs a later same-objective feedbackRetry scene',
+    );
+  });
+
+  it('PBL 练习同样必须有后置的同目标反馈重试与后测', () => {
+    const feedbackAfterPbl: SceneOutline = {
+      ...genericAiOutlines[3]!,
+      id: 'scene_7',
+      title: '项目反馈后重试',
+      order: 7,
+      teachingObjective: 'O1',
+    };
+    const result = validateAndRepairLearningContract(
+      {
+        ...genericAiContract,
+        learnerPractice: ['scene_5'],
+        feedbackRetry: ['scene_7'],
+        transferApplication: ['scene_6'],
+      },
+      [...genericAiOutlines, feedbackAfterPbl],
+      { allowedGroundingRefs: ['corpus:ai'] },
+    );
+
+    expect(result.publishable).toBe(false);
+    expect(result.violations).toContain(
+      'learnerPractice pbl scene_5 needs a later same-objective quiz or pbl assessment after feedbackRetry',
     );
   });
 
@@ -464,6 +577,8 @@ describe('LearningContract', () => {
     const plan = buildLearningContractPlan(genericAiContract, genericAiOutlines);
     expect(plan.version).toBe(2);
     expect(plan.teachingStrategy).toBe('standard');
+    expect(plan.objectives).toEqual(genericAiContract.objectives);
+    expect(plan.plannedScenes.every((scene) => scene.objectiveIds.includes('O1'))).toBe(true);
     const actualScenes = generatedScenes();
 
     expect(validateLearningContractFulfillment(plan, actualScenes)).toEqual({
@@ -484,6 +599,63 @@ describe('LearningContract', () => {
         'assessment scene is missing: scene_6',
       ]),
     );
+  });
+
+  it('激活与示范必须有实质教学文本，合格讲解仍可通过', () => {
+    const plan = buildLearningContractPlan(genericAiContract, genericAiOutlines);
+    expect(validateLearningContractFulfillment(plan, generatedScenes()).fulfilled).toBe(true);
+
+    const hollow = generatedScenes().map((scene) =>
+      scene.outlineId === 'scene_1' || scene.outlineId === 'scene_2'
+        ? { ...scene, content: { type: 'slide' } }
+        : scene,
+    );
+    expect(validateLearningContractFulfillment(plan, hollow).violations).toEqual(
+      expect.arrayContaining([
+        'prerequisiteActivation scene lacks substantive teaching evidence: scene_1',
+        'demonstration scene lacks substantive teaching evidence: scene_2',
+      ]),
+    );
+  });
+
+  it('迁移拒绝原题复述、近重复与只换数字，真实新情境可通过', () => {
+    const original = '给定3段客服工单，找出每段回答对应的证据并标注来源。';
+    const contract: LearningContract = {
+      ...genericAiContract,
+      transferApplication: ['scene_6'],
+    };
+    const plan = buildLearningContractPlan(contract, genericAiOutlines);
+    const scenes = generatedScenes().map((scene) =>
+      scene.outlineId === 'scene_3'
+        ? {
+            ...scene,
+            content: {
+              type: 'interactive',
+              widgetType: 'code',
+              html: `<p>${original}</p>${generatedInteractiveHtml()}`,
+            },
+          }
+        : scene,
+    );
+
+    expect(validateLearningContractFulfillment(plan, scenes).fulfilled).toBe(true);
+    for (const repeated of [
+      original,
+      '给定4段客服工单，找出每段回答对应的证据并标注来源。',
+      '请给定3段客服工单，找出每段回答所对应的证据，并标注来源。',
+    ]) {
+      const repeatedTransfer = scenes.map((scene) =>
+        scene.outlineId === 'scene_6'
+          ? {
+              ...scene,
+              content: { type: 'quiz', questions: [{ id: 'q1', question: repeated }] },
+            }
+          : scene,
+      );
+      expect(validateLearningContractFulfillment(plan, repeatedTransfer).violations).toContain(
+        'transferApplication scene does not establish a new context: scene_6',
+      );
+    }
   });
 
   it('sceneId 虽在但测验或反馈被降级成讲解页时仍判定未履约', () => {
@@ -526,10 +698,179 @@ describe('LearningContract', () => {
     expect(result.fulfilled).toBe(false);
     expect(result.violations).toEqual(
       expect.arrayContaining([
-        'interactive scene has no html or widgetConfig: scene_3',
-        'interactive scene has no html or widgetConfig: scene_4',
-        'pbl scene has no task content: scene_5',
+        'interactive scene is not learner-operable with visible feedback: scene_3',
+        'interactive scene is not learner-operable with visible feedback: scene_4',
+        expect.stringContaining('pbl scene is not production-ready: scene_5'),
         'quiz scene has no questions: scene_6',
+      ]),
+    );
+  });
+
+  it('v2 拒绝静态 HTML 与只有输入没有反馈的伪交互', () => {
+    const plan = buildLearningContractPlan(genericAiContract, genericAiOutlines);
+    const hollowActivities = generatedScenes().map((scene) => {
+      if (scene.outlineId === 'scene_3') {
+        return {
+          ...scene,
+          content: {
+            type: 'interactive',
+            html: '<main><h2>阅读示例</h2><p>没有操作。</p></main>',
+            widgetType: 'code',
+          },
+        };
+      }
+      if (scene.outlineId === 'scene_4') {
+        return {
+          ...scene,
+          content: {
+            type: 'interactive',
+            html: '<textarea id="answer"></textarea><button onclick="submitAttempt()">提交</button><script>function submitAttempt(){ return true; }</script>',
+            widgetType: 'game',
+          },
+        };
+      }
+      return scene;
+    });
+
+    expect(validateLearningContractFulfillment(plan, hollowActivities).violations).toEqual(
+      expect.arrayContaining([
+        'interactive scene is not learner-operable with visible feedback: scene_3',
+        'interactive scene is not learner-operable with visible feedback: scene_4',
+      ]),
+    );
+  });
+
+  it('模板教具必须通过现有生产参数校验，配置对象本身不算交互', () => {
+    const outlines = genericAiOutlines.map((outline) =>
+      outline.id === 'scene_3' ? { ...outline, widgetType: 'template' as const } : outline,
+    );
+    const plan = buildLearningContractPlan(genericAiContract, outlines);
+    const config = {
+      type: 'template',
+      templateId: 'process_stepper',
+      name: '检索流程步进器',
+      params: {
+        steps: [
+          { title: '提问', detail: '写下需要回答的问题。', carries: '问题文本' },
+          { title: '检索', detail: '从资料中召回相关片段。', carries: '证据片段' },
+          { title: '核验', detail: '核对回答与证据是否一致。' },
+        ],
+      },
+    };
+    const scenes = generatedScenes(outlines).map((scene) =>
+      scene.outlineId === 'scene_3'
+        ? {
+            ...scene,
+            content: {
+              type: 'interactive',
+              html: '',
+              widgetType: 'template',
+              widgetConfig: config,
+            },
+          }
+        : scene,
+    );
+
+    expect(validateLearningContractFulfillment(plan, scenes)).toEqual({
+      fulfilled: true,
+      violations: [],
+    });
+
+    const invalid = scenes.map((scene) =>
+      scene.outlineId === 'scene_3'
+        ? {
+            ...scene,
+            content: {
+              type: 'interactive',
+              html: '',
+              widgetType: 'template',
+              widgetConfig: { ...config, params: { steps: [] } },
+            },
+          }
+        : scene,
+    );
+    expect(validateLearningContractFulfillment(plan, invalid).violations).toContain(
+      'interactive scene is not learner-operable with visible feedback: scene_3',
+    );
+  });
+
+  it('UbD/Feynman 证据不能由标题描述空壳 PBL 或任意 HTML 冒充', () => {
+    const ubd: LearningContract = {
+      ...genericAiContract,
+      teachingStrategy: 'ubd',
+      strategyEvidence: {
+        essentialQuestion: '怎样让陌生资料上的回答仍然可核验？',
+        enduringUnderstanding: '可靠回答依赖可追溯证据。',
+        performanceEvidence: 'strategy_4',
+        reflectionRevision: 'strategy_5',
+        transfer: 'strategy_6',
+      },
+      demonstration: ['strategy_3'],
+      learnerPractice: ['strategy_2'],
+      feedbackRetry: ['strategy_3'],
+      transferApplication: ['strategy_6'],
+      assessmentMap: [{ sceneId: 'strategy_6', objectiveIds: ['O1'] }],
+    };
+    const feynman: LearningContract = {
+      ...ubd,
+      teachingStrategy: 'feynman',
+      strategyEvidence: {
+        learnerExplanation: 'strategy_2',
+        gapDiagnosis: 'strategy_3',
+        diagnosedGapCount: 1,
+        plainLanguageRebuild: 'strategy_4',
+        analogyBoundary: 'strategy_5',
+        transfer: 'strategy_6',
+      },
+    };
+    const actual = generatedScenes(strategyOutlines).map((scene) => {
+      if (scene.outlineId === 'strategy_2') {
+        return {
+          ...scene,
+          content: {
+            type: 'interactive',
+            html: '<article>请阅读这段解释。</article>',
+            widgetType: 'code',
+          },
+        };
+      }
+      if (scene.outlineId === 'strategy_4') {
+        return {
+          ...scene,
+          content: {
+            type: 'pbl',
+            projectConfig: { projectInfo: { title: '项目标题', description: '项目描述' } },
+            projectV2: {
+              uiPhase: 'hero',
+              title: '项目标题',
+              description: '项目描述',
+              roles: [],
+              milestones: [],
+              threads: [],
+            },
+          },
+        };
+      }
+      return scene;
+    });
+
+    expect(
+      validateLearningContractFulfillment(buildLearningContractPlan(ubd, strategyOutlines), actual)
+        .violations,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('pbl scene is not production-ready: strategy_4'),
+      ]),
+    );
+    expect(
+      validateLearningContractFulfillment(
+        buildLearningContractPlan(feynman, strategyOutlines),
+        actual,
+      ).violations,
+    ).toEqual(
+      expect.arrayContaining([
+        'interactive scene is not learner-operable with visible feedback: strategy_2',
+        expect.stringContaining('pbl scene is not production-ready: strategy_4'),
       ]),
     );
   });

@@ -8,6 +8,9 @@
  * 旁路补进来的一律弃权（uncertain），永不判 incorrect：只知道这里有个数、
  * 不知道它对不对，判错会触发修订环去改一个可能本来正确的参数。
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -65,10 +68,7 @@ describe('第二层：领域计量词 + 参数语境闸', () => {
   it('闸是量出来要留的，不是凭感觉加的', () => {
     // 1704 块主语料 42676 句：带闸比只收物理单位多抓 19 句，不带闸多抓 325 句。
     // 这条盯住闸别被人删掉——删了误报涨 17 倍，而检出率涨不了多少。
-    const src = require('node:fs').readFileSync(
-      require('node:path').join(process.cwd(), 'lib/generation/numeric-claims.ts'),
-      'utf-8',
-    );
+    const src = readFileSync(join(process.cwd(), 'lib/generation/numeric-claims.ts'), 'utf-8');
     expect(src).toContain('PARAM_CONTEXT.test(sentence)');
     expect(src).toContain('+19');
   });
@@ -97,7 +97,12 @@ describe('弃权策略', () => {
   });
 
   it('永远不判 incorrect——这是这条旁路的底线', () => {
-    const out = mergeNumericBypass([], '阈值 999ms，电压 380V，温度 -18℃。', '完全无关的资料', make);
+    const out = mergeNumericBypass(
+      [],
+      '阈值 999ms，电压 380V，温度 -18℃。',
+      '完全无关的资料',
+      make,
+    );
     expect(out.claims.every((c) => c.verdict === 'uncertain')).toBe(true);
   });
 });
@@ -131,10 +136,7 @@ describe('与判官的分工', () => {
 
 describe('真的接进判官链了', () => {
   it('runJudge 用了旁路，且提示词里写了数字拆条口径', () => {
-    const src = require('node:fs').readFileSync(
-      require('node:path').join(process.cwd(), 'lib/generation/hallucination-audit.ts'),
-      'utf-8',
-    );
+    const src = readFileSync(join(process.cwd(), 'lib/generation/hallucination-audit.ts'), 'utf-8');
     expect(src).toContain('mergeNumericBypass');
     // 域适配那三条硬要求
     expect(src).toContain('条件从句不许剥离');

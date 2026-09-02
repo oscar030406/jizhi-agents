@@ -13,6 +13,9 @@
  * 结论是「没问题」——0 是因为剥除不是替换。所以这个文件断言的是
  * 「留下了什么」，不是「没留下占位符」。
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { injectExcerpts, type EvidenceBundle } from '@/lib/generation/evidence-grounding';
@@ -83,13 +86,11 @@ describe('摘录没贴成时留痕', () => {
   it('源码里不再有裸的 return 空串丢弃分支', () => {
     // 这条是给后人的路障：把 excerptGap(...) 改回 return '' 就会红。
     // 「摘录残留 0」这个检查骗过我们一次，静态断言比它可靠。
-    const { readFileSync } = require('node:fs') as typeof import('node:fs');
-    const { join } = require('node:path') as typeof import('node:path');
-    const src = readFileSync(
-      join(process.cwd(), 'lib/generation/evidence-grounding.ts'),
-      'utf-8',
+    const src = readFileSync(join(process.cwd(), 'lib/generation/evidence-grounding.ts'), 'utf-8');
+    const injectBody = src.slice(
+      src.indexOf('const replaceIn ='),
+      src.indexOf('stats.injected += 1'),
     );
-    const injectBody = src.slice(src.indexOf('const replaceIn ='), src.indexOf('stats.injected += 1'));
     expect(injectBody).not.toMatch(/\n\s+return '';/);
     expect((injectBody.match(/excerptGap\(/g) ?? []).length).toBeGreaterThanOrEqual(5);
   });

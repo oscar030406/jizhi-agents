@@ -106,14 +106,14 @@ describe('generation-preview 教学契约 session', () => {
     expect(result.learningContractPlan.version).toBe(2);
     expect(result.learningContractPlan.teachingStrategy).toBe('ubd');
     expect(result.learningContractPlan.strategyEvidence).toEqual(contract.strategyEvidence);
+    expect(result.learningContractPlan.objectives).toEqual(contract.objectives);
     expect(result.learningContractPlan.plannedScenes).toEqual([
-      { sceneId: 'practice', type: 'interactive', widgetType: 'game' },
-      { sceneId: 'feedback', type: 'interactive', widgetType: 'game' },
-      { sceneId: 'performance', type: 'pbl' },
-      { sceneId: 'reflection', type: 'interactive', widgetType: 'game' },
-      { sceneId: 'assessment', type: 'quiz' },
+      { sceneId: 'practice', type: 'interactive', widgetType: 'game', objectiveIds: ['O1'] },
+      { sceneId: 'feedback', type: 'interactive', widgetType: 'game', objectiveIds: ['O1'] },
+      { sceneId: 'performance', type: 'pbl', objectiveIds: ['O1'] },
+      { sceneId: 'reflection', type: 'interactive', widgetType: 'game', objectiveIds: ['O1'] },
+      { sceneId: 'assessment', type: 'quiz', objectiveIds: ['O1'] },
     ]);
-    expect(JSON.stringify(result.learningContractPlan)).not.toContain('objectives');
   });
 
   it('人工改纲后同步重建 plannedScenes，并保留原教学环节约束', () => {
@@ -140,7 +140,7 @@ describe('generation-preview 教学契约 session', () => {
     expect(validateLearningContractPlan(rebuilt, edited)).toEqual(rebuilt);
   });
 
-  it('旧 v1 session plan 重建为 standard v2，不要求补造策略证据', () => {
+  it('旧 v1 session 缺少可验证目标时 fail-closed，不伪造目标放行', () => {
     const current = learningContractPlanFromDoneEvent(
       { outlines, learningContract: contract },
       [],
@@ -155,7 +155,10 @@ describe('generation-preview 教学契约 session', () => {
     expect(rebuilt.version).toBe(2);
     expect(rebuilt.teachingStrategy).toBe('standard');
     expect(rebuilt.strategyEvidence).toBeUndefined();
-    expect(validateLearningContractPlan(legacy, outlines)).toEqual(rebuilt);
+    expect(rebuilt.objectives).toEqual([]);
+    expect(() => validateLearningContractPlan(legacy, outlines)).toThrow(
+      LEARNING_CONTRACT_REQUIRED_MESSAGE,
+    );
   });
 
   it('人工删除必需场景或把反馈练习降成讲解页时明确要求重新验证', () => {

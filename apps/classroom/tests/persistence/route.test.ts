@@ -21,20 +21,39 @@ describe('embedded persistence route', () => {
     });
   });
 
-  it('refuses configured persistence when the development token is missing', async () => {
+  it('does not require a browser-visible bearer token', async () => {
+    vi.doMock('@openmaic/storage/runtime/pg', () => ({
+      ensureSchema: vi.fn().mockResolvedValue(undefined),
+      PgRuntimeStore: class {},
+    }));
+    vi.doMock('@openmaic/storage/document/pg', () => ({
+      ensureDocumentSchema: vi.fn().mockResolvedValue(undefined),
+      PgDocumentStore: class {},
+    }));
+    vi.doMock('@openmaic/storage/server/reference', () => ({
+      nodePostgresTransaction: vi.fn(() => vi.fn()),
+    }));
+    vi.doMock('@openmaic/storage/server', () => ({
+      createStorageHttpHandler: vi.fn(
+        () =>
+          (
+            _request: unknown,
+            response: { writeHead: (status: number) => void; end: () => void },
+          ) => {
+            response.writeHead(204);
+            response.end();
+          },
+      ),
+    }));
     vi.stubEnv('DATABASE_URL', 'postgres://unused-in-this-test');
-    vi.stubEnv('PERSISTENCE_DEV_TOKEN', '');
-    const { GET } = await import('@/app/api/persistence/[...path]/route');
+    const { handlePersistenceRequest } = await import('@/app/api/persistence/[...path]/route');
 
-    const response = await GET(new Request('http://localhost/api/persistence/documents'));
+    const response = await handlePersistenceRequest(
+      new Request('http://localhost/api/persistence/runtime/sessions'),
+      { poolFactory: () => ({ end: vi.fn() }) as never },
+    );
 
-    expect(response.status).toBe(503);
-    await expect(response.json()).resolves.toEqual({
-      error: {
-        code: 'PERSISTENCE_DEV_TOKEN_MISSING',
-        message: 'server persistence requires PERSISTENCE_DEV_TOKEN (development auth only)',
-      },
-    });
+    expect(response.status).toBe(204);
   });
 
   it('retries initialization on the next request after a failed pool initialization', async () => {
@@ -70,12 +89,8 @@ describe('embedded persistence route', () => {
       ),
     }));
     vi.stubEnv('DATABASE_URL', 'postgres://retry-test');
-    vi.stubEnv('PERSISTENCE_DEV_TOKEN', 'test-token');
     const { handlePersistenceRequest } = await import('@/app/api/persistence/[...path]/route');
-    const request = () =>
-      new Request('http://localhost/api/persistence/runtime/sessions', {
-        headers: { authorization: 'Bearer test-token' },
-      });
+    const request = () => new Request('http://localhost/api/persistence/runtime/sessions');
 
     const first = await handlePersistenceRequest(request(), {
       poolFactory: () => failedPool as never,
@@ -149,8 +164,10 @@ describe('embedded persistence route', () => {
           },
       ),
     }));
+    vi.doMock('@/lib/persistence/server-auth', () => ({
+      authenticatePersistenceRequest: vi.fn(async () => ({ learnerKey: 'author-a' })),
+    }));
     vi.stubEnv('DATABASE_URL', 'postgres://adapter-test');
-    vi.stubEnv('PERSISTENCE_DEV_TOKEN', 'test-token');
     const { handlePersistenceRequest } = await import('@/app/api/persistence/[...path]/route');
     const pool = { end: vi.fn().mockResolvedValue(undefined) };
 
@@ -158,9 +175,8 @@ describe('embedded persistence route', () => {
       new Request('http://localhost/api/persistence/documents/stage%2Fslash', {
         method: 'PUT',
         headers: {
-          authorization: 'Bearer test-token',
           'content-type': 'application/json',
-          'x-learner-key': 'author-a',
+          'x-learner-key': 'forged-account',
         },
         body: JSON.stringify({ hello: 'world' }),
       }),
@@ -174,7 +190,7 @@ describe('embedded persistence route', () => {
     const del = await handlePersistenceRequest(
       new Request('http://localhost/api/persistence/documents/stage%2Fslash', {
         method: 'DELETE',
-        headers: { authorization: 'Bearer test-token', 'x-learner-key': 'author-a' },
+        headers: { 'x-learner-key': 'forged-account' },
       }),
       { poolFactory: () => pool as never },
     );
@@ -187,7 +203,7 @@ describe('embedded persistence route', () => {
     expect(seen[0]?.body).toBe(JSON.stringify({ hello: 'world' }));
     expect(seen[1]?.method).toBe('DELETE');
     expect(documentStoreOptions.at(-1)?.access).toEqual({
-      accountId: 'anon:author-a',
+      accountId: 'author-a',
     });
   });
 });

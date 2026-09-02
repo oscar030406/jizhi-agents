@@ -5,6 +5,9 @@
  * 线上那一屏四个「本段目标：」就是从槽位路出去的。**同一份内容两种形态、
  * 处理只覆盖一种**，这一族的第 N 次。
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import { scrubScaffoldHtml } from '@/lib/generation/adaptation-lint';
@@ -81,8 +84,8 @@ describe('canvas 元素脚手架清除', () => {
   it('教具路真的接上了——路障', () => {
     // 教具走 iframe HTML，跟幻灯片两条路一个字节都不共用；
     // 清除挂在 generateSlideContent 上天然盖不到它（第三轮实测漏的就是这条）。
-    const src = require('node:fs').readFileSync(
-      require('node:path').join(process.cwd(), 'lib/generation/interactive-post-processor.ts'),
+    const src = readFileSync(
+      join(process.cwd(), 'lib/generation/interactive-post-processor.ts'),
       'utf-8',
     );
     expect(src).toContain('scrubScaffoldHtml');
@@ -96,10 +99,7 @@ describe('canvas 元素脚手架清除', () => {
   it('三路出口挂在同一处——各路各挂会漏', () => {
     // 路障：`generateSlideContent` 是讲义/槽位/自由版面三条路的共同出口，
     // 清除挂在这里。谁把它拆回各路各挂，这条会提醒他漏一条等于没挂。
-    const src = require('node:fs').readFileSync(
-      require('node:path').join(process.cwd(), 'lib/generation/scene-generator.ts'),
-      'utf-8',
-    );
+    const src = readFileSync(join(process.cwd(), 'lib/generation/scene-generator.ts'), 'utf-8');
     expect(src).toContain('generateSlideContentRaw');
     expect(src).toMatch(/scrubScaffoldHtml/);
   });

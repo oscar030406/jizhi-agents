@@ -22,6 +22,7 @@ import { createLogger } from '@/lib/logger';
 import { inlineHtmlAssets, createAssetFetcher } from './inline-assets';
 import type { FetchAsset } from './inline-assets';
 import { createProxiedFetch } from './proxied-fetch';
+import { ensureFullMediaExportReady } from './use-export-script';
 
 const log = createLogger('ExportPPTX');
 
@@ -1192,6 +1193,7 @@ export function useExportPPTX() {
   const withExportGuard = useCallback(
     (action: () => Promise<void>, requireSlides = true) => {
       if (exportingRef.current) return;
+      if (!ensureFullMediaExportReady(t('share.notReady'))) return;
       if (requireSlides && slides.length === 0) {
         toast.warning(t('export.noSlides'));
         return;

@@ -49,11 +49,16 @@ function Chip({
  * 适配性灯的三档。灯只回答一件事：这批素材够不够铺一门课。**不参与任何拦截**——
  * 红灯的库照样能选、能生成，页面只是提前说一声。理由与算式在详情页展开看。
  */
-const FITNESS_LIGHT: Record<CorpusFitness['light'], { label: string; dot: string; text: string }> = {
-  green: { label: '素材够', dot: 'bg-emerald-500', text: 'text-emerald-700 dark:text-emerald-300' },
-  yellow: { label: '勉强够', dot: 'bg-amber-500', text: 'text-amber-700 dark:text-amber-300' },
-  red: { label: '素材不够', dot: 'bg-rose-500', text: 'text-rose-700 dark:text-rose-300' },
-};
+const FITNESS_LIGHT: Record<CorpusFitness['light'], { label: string; dot: string; text: string }> =
+  {
+    green: {
+      label: '素材够',
+      dot: 'bg-emerald-500',
+      text: 'text-emerald-700 dark:text-emerald-300',
+    },
+    yellow: { label: '勉强够', dot: 'bg-amber-500', text: 'text-amber-700 dark:text-amber-300' },
+    red: { label: '素材不够', dot: 'bg-rose-500', text: 'text-rose-700 dark:text-rose-300' },
+  };
 
 export function FitnessLight({
   fitness,
@@ -65,7 +70,10 @@ export function FitnessLight({
   const tone = FITNESS_LIGHT[fitness.light];
   return (
     <span className={`inline-flex items-baseline gap-1.5 text-[11px] ${tone.text}`}>
-      <span className={`mt-[3px] size-2 shrink-0 self-start rounded-full ${tone.dot}`} aria-hidden />
+      <span
+        className={`mt-[3px] size-2 shrink-0 self-start rounded-full ${tone.dot}`}
+        aria-hidden
+      />
       <span className="font-medium">{tone.label}</span>
       {withWhy && fitness.why.length > 0 && (
         <span className="text-muted-foreground">{fitness.why.join('；')}</span>
@@ -85,7 +93,11 @@ export function CorpusCard({ corpus }: { readonly corpus: CorpusOverview }) {
       <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
         {/* 中文名优先，id 降为下面一行小字（复算路径要用它，不能抹）。没登记中文名的库
             （开放集，接入链随时会造新的）就只印 id，不编一个——与详情页同一条口径。 */}
-        <h3 className={hasDomainLabel(corpus.corpus) ? 'text-sm font-medium' : 'font-mono text-sm font-medium'}>
+        <h3
+          className={
+            hasDomainLabel(corpus.corpus) ? 'text-sm font-medium' : 'font-mono text-sm font-medium'
+          }
+        >
           {domainLabel(corpus.corpus)}
         </h3>
         <span
@@ -123,7 +135,7 @@ export function CorpusCard({ corpus }: { readonly corpus: CorpusOverview }) {
         <div>
           <dt className="text-[10px] text-muted-foreground">入库管线</dt>
           <dd className="text-sm tabular-nums">
-            {built} / {corpus.stations.length} 站有产物
+            {built} / {corpus.stations.length} 站已有处理结果
           </dd>
         </div>
         {corpus.concepts !== null && (
@@ -166,8 +178,8 @@ export function CorpusCard({ corpus }: { readonly corpus: CorpusOverview }) {
         </div>
       ) : (
         <p className="text-[11px] leading-relaxed text-muted-foreground">
-          没有就绪度报告。这个库要么早于入库链建成（如主语料 ai），要么还没建——
-          点进去看五站分别落在哪个文件上。
+          暂无就绪度报告。该库可能建立较早，或尚未完成当前接入流程；
+          点开详情可查看五站的实际处理状态。
         </p>
       )}
     </Link>
@@ -180,9 +192,7 @@ export function StationRow({ station }: { readonly station: PipelineStation }) {
     <li className="relative pl-7">
       <span
         className={`absolute left-0 top-1 size-3.5 rounded-full border-2 ${
-          station.built
-            ? 'border-emerald-500 bg-emerald-500/25'
-            : 'border-border bg-muted'
+          station.built ? 'border-emerald-500 bg-emerald-500/25' : 'border-border bg-muted'
         }`}
         aria-hidden
       />

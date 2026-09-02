@@ -19,11 +19,8 @@
  * live — never padded with AI material. This page never falls back to sample
  * numbers.
  *
- * 取数顺序（引擎冷启动 ~60s、下线即挂，公共页不该等它）：
- *   1. `public/skill-map.json` —— 部署前用 scripts/generate-skill-map-snapshot.mjs
- *      从引擎同一个端点取回落盘的快照，秒开，与引擎在不在线无关；
- *   2. 再后台请求 `/api/skills`，引擎在线就换成实时数据，请求失败就静默保持快照。
- * 快照数据在角落标出生成时间。两条路返回同一形状，渲染代码只有一份。
+ * 唯一取数入口是 `/api/skills?domain=...`。该路由按当前会话与机构过滤知识库；
+ * 请求失败就明确显示不可用，不读取任何公开静态快照。
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -50,6 +47,7 @@ import {
   PracticeCard,
   projectsForJob,
   type PracticeProject,
+  usePublishedPractice,
 } from '@/components/skills/practice-projects';
 import { cn } from '@/lib/utils';
 import { REQUIREMENT_DRAFT_KEY } from '@/lib/hooks/use-draft-cache';
@@ -58,8 +56,8 @@ import { domainLabel } from '@/lib/generation/learner-profile';
 import { loadLearnerProfile } from '@/components/generation/learner-profile-popover';
 import { ForeignDomainEmpty } from '@/components/skills/foreign-domain-empty';
 import type { CorpusStatus, JobSkills, SkillCoverage } from '@/app/api/skills/route';
+import { useAccountProfile } from '@/lib/knowledge/account-profile';
 import { useEffectiveDomainContext } from '@/lib/knowledge/use-domain-context';
-import type { DomainContextProfile } from '@/lib/knowledge/domain-context';
 
 /** Shape of `market_stats` in data/jobs/job_skill_map.json. Every field optional:
  *  a tile renders only when its number is really there. */
@@ -94,40 +92,30 @@ interface SkillMapData {
   /** 引擎当前不可达、接口给的是 app/api/skills/route.ts 里最后一次成功读取的数据时，
    *  由接口带回那次读取的时间。 */
   stale_from?: string;
-  /** public/skill-map.json 的生成时间（scripts/generate-skill-map-snapshot.mjs 写入）。 */
-  snapshot_at?: string;
   /** 取回时算的：这份数据是不是已经旧到该提示了。渲染期不许读时钟（react-hooks/purity），
    *  所以在 `loadSkillMap` 里判一次带上来。 */
   stale?: boolean;
 }
 
-/** 快照多久算旧。判据口径本身会随引擎变（08-21 换过一次），两周没重新落盘就该提示。 */
+/** 服务端最后一次成功数据多久算旧。 */
 const SNAPSHOT_STALE_MS = 14 * 24 * 3600 * 1000;
 
-type LoadState = { kind: 'loading' } | { kind: 'offline' } | { kind: 'ok'; data: SkillMapData };
-
-type DomainPracticeState =
-  | { kind: 'idle' }
+type LoadState =
   | { kind: 'loading' }
-  | { kind: 'ready'; projects: PracticeProject[] }
-  | { kind: 'missing'; reason: string }
-  | { kind: 'unavailable'; reason: string };
+  | { kind: 'offline' }
+  | { kind: 'ok'; domain: string; data: SkillMapData };
 
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
 
-/** 静态快照的位置（scripts/generate-skill-map-snapshot.mjs 的产物）。 */
-const SNAPSHOT_URL = '/skill-map.json';
-
-/** 取一份技能地图数据；任何失败都返回 null，由调用方决定退到哪一路。 */
+/** 取当前会话可见的技能地图；任何失败都返回 null。 */
 async function loadSkillMap(url: string): Promise<SkillMapData | null> {
   try {
     const res = await fetch(url, { cache: 'no-store' });
     if (!res.ok) return null;
     const data = (await res.json()) as SkillMapData;
-    // 空 jobs + reason 是引擎的正式答案（该域未登记岗位数据），必须放行——
-    // 当"没取到"退回快照，屏幕上就又是主域的 AI 岗位了。
+    // 空 jobs + reason 是引擎的正式答案（该域未登记岗位数据），不能误判成接口失败。
     if (!data || (!data.jobs?.length && !data.reason)) return null;
-    const asOf = data.snapshot_at ?? data.stale_from;
+    const asOf = data.stale_from;
     data.stale = asOf ? Date.now() - Date.parse(asOf) > SNAPSHOT_STALE_MS : false;
     return data;
   } catch {
@@ -295,15 +283,18 @@ function JobCard({
   onToggle,
   onPickSkill,
   courseTitles,
+  projects,
 }: {
   job: JobSkills;
   open: boolean;
   onToggle: () => void;
   onPickSkill: (job: JobSkills, skill: SkillCoverage) => void;
   courseTitles: Record<string, string>;
+  projects: readonly PracticeProject[];
 }) {
   const total = job.skills.length;
   const ratio = total ? job.covered_count / total : 0;
+  const jobProjects = projectsForJob(projects, job.job_id);
   return (
     <div className="rounded-lg border border-border/70">
       <button
@@ -354,12 +345,12 @@ function JobCard({
         <div className="space-y-1 border-t border-border/70 px-3 py-2.5">
           {/* 实践项目区（learning-path-practice-spec §2.3）：站外真项目策展，
               一岗 ≤3 张按层级排序；学完课去练，做完有作品 */}
-          {projectsForJob(job.job_id).length > 0 && (
+          {jobProjects.length > 0 && (
             <div className="mb-4 space-y-2">
               <p className="px-1 text-xs font-medium text-muted-foreground">
                 实践项目 · 学完课去练，做完有作品
               </p>
-              {projectsForJob(job.job_id).map((p) => (
+              {jobProjects.map((p) => (
                 <PracticeCard key={p.id} project={p} courseTitles={courseTitles} />
               ))}
             </div>
@@ -371,7 +362,7 @@ function JobCard({
               onClick={() => onPickSkill(job, s)}
               title={
                 s.covered
-                  ? `知识库命中 ${s.source_title}（${s.source_id}，相似度 ${s.score}）— 点击按此技能造课`
+                  ? `知识库命中 ${s.source_title}（来源编号 ${s.source_id}，相似度 ${s.score}）— 点击按此技能造课`
                   : `知识库未检索到可用证据（最高相似度 ${s.score}）— 仍可造课，但内容不接地，课堂徽标会显示未接地`
               }
               className={cn(
@@ -396,7 +387,7 @@ function JobCard({
                   s.covered ? 'text-green-deep' : 'text-muted-foreground',
                 )}
               >
-                {s.covered ? s.source_id : '暂无语料'}
+                {s.covered ? `来源 ${s.source_id}` : '暂无语料'}
               </span>
               {/* 箭头原来只在 hover 出现，键盘用户永远看不到 */}
               <ArrowRight className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100" />
@@ -413,33 +404,28 @@ function JobCard({
 export default function SkillsPage() {
   const router = useRouter();
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
-  /** 画像选定的知识库。岗位图谱是 JOB_MAP_CORPUS 专有数据（几十 GB 招聘数据集 +
-   *  人工提炼），别的领域摆它只会误导学习方向——外域岗位区换空态。
-   *  外域的实操项目则有自己的供给线：管理端 GitHub 实搜起草、审核发布后这里可见。
+  /** 画像选定的知识库。岗位图谱必须来自当前领域；别的领域摆 AI 岗位只会误导
+   *  学习方向，所以外域无岗位清单时如实显示空态。实操项目与岗位图谱解耦，统一
+   *  读取当前领域由引擎起草、管理者审核发布的结果。
    *
    *  取域走 `corpusOf`（检索/判官/诊断三路共用的口径：显式选的库优先、缺了看培训领域）。
    *  原来直接读 `.corpus`，画像只选了培训领域没单独选库时拿到空串，于是学智能制造的人
    *  被判成"非外域"，照样看整张 AI 岗位图谱。
    *  null = 还没读到画像（localStorage 只能在客户端读），此时先不发请求，
    *  免得先按空域问一遍引擎再按真域重问。 */
-  const [profile, setProfile] = useState<DomainContextProfile | null>(null);
-  const [profileReady, setProfileReady] = useState(false);
-  /* eslint-disable react-hooks/set-state-in-effect -- 画像只存在 localStorage，SSR 首帧无法读取 */
-  useEffect(() => {
-    setProfile(loadLearnerProfile());
-    setProfileReady(true);
-  }, []);
-  /* eslint-enable react-hooks/set-state-in-effect */
-  const contextState = useEffectiveDomainContext(profile, profileReady);
+  const profileState = useAccountProfile(loadLearnerProfile);
+  const contextState = useEffectiveDomainContext(
+    profileState.kind === 'ready' ? profileState.profile : null,
+    profileState.kind === 'ready',
+  );
   const context = contextState.kind === 'ready' ? contextState.context : null;
   const corpus = context?.domain ?? '';
   const effectiveDomainLabel = context?.label ?? domainLabel(corpus);
-  /** 外域已发布的实操项目（引擎 practice-scout 真源，管理员审核后才有内容）。 */
-  const [domainPractice, setDomainPractice] = useState<DomainPracticeState>({ kind: 'idle' });
+  const practice = usePublishedPractice(corpus || null);
   const [openJob, setOpenJob] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  // 项目卡「相关课程」的课名。课程边（courseIds）在 data/practice-projects.json 里，
-  // 课名只在 data/classrooms/ 的课文件里——本页是客户端组件读不到磁盘，
+  // 项目卡「相关课程」的课名。课程边来自当前领域发布项目的 courseIds，课名仍在
+  // data/classrooms/ 的课文件里——本页是客户端组件读不到磁盘，
   // 走本站 /api/classroom（读盘，与引擎无关）取一次清单。取不到就不渲染那一行，
   // 项目卡其余部分照旧，不显示裸课程 id。
   const [courseTitles, setCourseTitles] = useState<Record<string, string>>({});
@@ -464,23 +450,16 @@ export default function SkillsPage() {
     };
   }, []);
 
-  // 重新读取时不回到 loading：屏幕上已有的数据留着，取回新的再换，中间不闪空屏。
+  // 缓存只在同一领域内复用；领域一变，旧岗位立即从派生视图中失效。
   useEffect(() => {
     if (contextState.kind !== 'ready' || !context?.domain) return;
     const effectiveDomain = context.domain;
-    const isAi = context.isAi;
     let cancelled = false;
     (async () => {
-      // AI 才能读 AI 快照。非 AI 域哪怕只闪一帧快照，也是在把别域岗位当成当前答案。
-      const snapshot = isAi ? await loadSkillMap(SNAPSHOT_URL) : null;
-      if (cancelled) return;
-      if (snapshot) setState({ kind: 'ok', data: snapshot });
-      // 引擎在线就换成实时数据；拿不到就保持快照，不改屏幕上的任何东西。
-      // 带上域：外域拿回的是空 jobs + reason，页面据此换空态，不再靠客户端猜。
       const live = await loadSkillMap(`/api/skills?domain=${encodeURIComponent(effectiveDomain)}`);
       if (cancelled) return;
-      if (live) setState({ kind: 'ok', data: live });
-      else if (!snapshot) setState((prev) => (prev.kind === 'ok' ? prev : { kind: 'offline' }));
+      if (live) setState({ kind: 'ok', domain: effectiveDomain, data: live });
+      else setState({ kind: 'offline' });
     })();
     return () => {
       cancelled = true;
@@ -503,21 +482,21 @@ export default function SkillsPage() {
     [router],
   );
 
-  const data = state.kind === 'ok' ? state.data : null;
+  const data = state.kind === 'ok' && state.domain === context?.domain ? state.data : null;
   const market = data?.market_stats ?? {};
   const prov = data?.provenance ?? {};
   const exp = market.experience ?? {};
   const juniorShare = (exp['1-3年'] ?? 0) + (exp['经验不限'] ?? 0);
-  // 屏幕上这份数是哪一刻的：快照有生成时间，接口的兜底数据有读取时间，实时数据两者都没有。
-  const asOf = data?.snapshot_at ?? data?.stale_from ?? null;
-  // 快照是部署时落盘的。放着不提示，引擎离线时访客看到的就是一份没人知道有多旧的图谱。
+  // 接口返回最后一次成功数据时带读取时间；实时数据没有。
+  const asOf = data?.stale_from ?? null;
+  // API 可能返回按域分桶的最后一次成功数据；时间必须明示。
   const asOfStale = Boolean(asOf && data?.stale);
 
   // 空态判据以服务端为准：引擎说这个域没有岗位数据（jobs 空 + reason），就是没有。
-  // 客户端那句只当降级——引擎还没答上来的头几百毫秒里，别让主域快照先糊到外域学员脸上。
   const serverEmpty = Boolean(data && !data.jobs?.length && data.reason);
-  const clientForeign = Boolean(context?.domain) && !context?.isAi;
-  const foreignDomain = data ? serverEmpty : clientForeign;
+  const foreignDomain = serverEmpty;
+  const skillsLoading =
+    state.kind === 'loading' || (state.kind === 'ok' && state.domain !== context?.domain);
   const totalSkills = data?.jobs.reduce((sum, job) => sum + job.skills.length, 0) ?? 0;
   const coveredSkills =
     data?.jobs.reduce((sum, job) => sum + job.skills.filter((skill) => skill.covered).length, 0) ??
@@ -525,55 +504,6 @@ export default function SkillsPage() {
   const mlJob = data?.jobs.find((job) => job.job_id === 'ml_engineer');
   const mlSkillGaps =
     mlJob?.skills.filter((skill) => !skill.covered).map((skill) => skill.skill) ?? [];
-
-  /* eslint-disable react-hooks/set-state-in-effect -- 切换领域时需先清空上一领域的项目状态 */
-  useEffect(() => {
-    if (!clientForeign || !corpus) {
-      setDomainPractice({ kind: 'idle' });
-      return;
-    }
-    let cancelled = false;
-    setDomainPractice({ kind: 'loading' });
-    (async () => {
-      try {
-        const res = await fetch(`/api/practice-scout/${encodeURIComponent(corpus)}`);
-        const body = (await res.json().catch(() => null)) as {
-          status?: string;
-          projects?: PracticeProject[];
-          reason?: string;
-        } | null;
-        if (cancelled) return;
-        if (!res.ok || body?.status === 'unavailable') {
-          setDomainPractice({
-            kind: 'unavailable',
-            reason:
-              body?.reason ?? '实操项目服务暂时不可用，当前无法确认该领域是否已有引擎生成结果。',
-          });
-          return;
-        }
-        const projects = body?.projects ?? [];
-        if (projects.length > 0) {
-          setDomainPractice({ kind: 'ready', projects });
-          return;
-        }
-        setDomainPractice({
-          kind: 'missing',
-          reason: body?.reason ?? '所属机构尚未提供该领域的实操项目',
-        });
-      } catch {
-        if (!cancelled) {
-          setDomainPractice({
-            kind: 'unavailable',
-            reason: '实操项目服务暂时不可用，当前无法确认该领域是否已有引擎生成结果。',
-          });
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [clientForeign, corpus]);
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -590,7 +520,7 @@ export default function SkillsPage() {
               岗位技能地图 · 企业内训与转岗培训
             </h1>
             <p className="mt-2 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-              数据来源：引擎的岗位技能清单与招聘数据统计、受控知识库的检索结果、各领域语料库的当前状态。
+              数据来源：机构接入的岗位与技能清单、受控知识库的检索结果、各领域语料库的当前状态。
             </p>
           </div>
           <div className="flex flex-col items-end gap-1.5">
@@ -614,24 +544,32 @@ export default function SkillsPage() {
             )}
             {asOfStale && (
               <p className="max-w-xs text-right text-xs leading-relaxed text-amber-700 dark:text-amber-300">
-                快照可能已过期；系统恢复实时读取后会自动更新。
+                缓存数据可能已过期；系统恢复实时读取后会自动更新。
               </p>
             )}
           </div>
         </div>
 
-        {contextState.kind === 'loading' && (
+        {(profileState.kind === 'loading' ||
+          (profileState.kind === 'ready' && contextState.kind === 'loading')) && (
           <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
             正在确认当前账户的课程指派与学习领域…
           </div>
         )}
-        {contextState.kind === 'error' && (
+        {profileState.kind === 'error' && (
+          <EmptyState title="当前账户画像暂时无法读取" hint={profileState.reason} />
+        )}
+        {profileState.kind !== 'error' && contextState.kind === 'error' && (
           <EmptyState title="当前学习领域暂时无法确认" hint={contextState.reason} />
         )}
         {contextState.kind === 'ready' && !contextState.context.domain && (
           <EmptyState
-            title="机构指派课程的领域尚未确认"
+            title={
+              contextState.context.status === 'assignment-unavailable'
+                ? '机构课程暂不可用'
+                : '机构指派课程的领域尚未确认'
+            }
             hint={contextState.context.reason ?? '课程归属产物补齐前不会展示其它领域的岗位或项目。'}
           />
         )}
@@ -659,7 +597,7 @@ export default function SkillsPage() {
           </section>
         )}
 
-        {clientForeign && domainPractice.kind === 'ready' && (
+        {context?.domain && practice.kind === 'ready' && (
           <section className="mb-8">
             <h2 className="mb-1 text-sm font-medium">「{effectiveDomainLabel}」实操项目</h2>
             <p className="mb-3 text-[11px] leading-relaxed text-muted-foreground">
@@ -667,31 +605,28 @@ export default function SkillsPage() {
               链接均来自搜索时的实拉数据。
             </p>
             <div className="space-y-2">
-              {domainPractice.projects.map((p) => (
-                <PracticeCard key={p.id} project={p} />
+              {practice.projects.map((p) => (
+                <PracticeCard key={p.id} project={p} courseTitles={courseTitles} />
               ))}
             </div>
           </section>
         )}
-        {clientForeign && domainPractice.kind === 'loading' && (
+        {context?.domain && practice.kind === 'loading' && (
           <section className="rounded-xl border border-border bg-card px-5 py-4 text-sm text-muted-foreground">
             正在读取「{effectiveDomainLabel}」的引擎实操项目产物…
           </section>
         )}
-        {clientForeign &&
-          (domainPractice.kind === 'missing' || domainPractice.kind === 'unavailable') && (
-            <section className="rounded-xl border border-border bg-card px-5 py-4">
-              <h2 className="text-sm font-medium">
-                {domainPractice.kind === 'missing'
-                  ? '实操项目尚未生成或发布'
-                  : '实操项目状态暂时不可用'}
-              </h2>
-              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                {domainPractice.reason}。本区只展示引擎生成并经管理员审核发布的本领域项目， 不使用
-                AI 项目或示例卡代替。
-              </p>
-            </section>
-          )}
+        {context?.domain && (practice.kind === 'missing' || practice.kind === 'unavailable') && (
+          <section className="rounded-xl border border-border bg-card px-5 py-4">
+            <h2 className="text-sm font-medium">
+              {practice.kind === 'missing' ? '实操项目尚未生成或发布' : '实操项目状态暂时不可用'}
+            </h2>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {practice.reason} 本区只展示引擎生成并经管理员审核发布的本领域项目，不使用 AI
+              项目或示例卡代替。
+            </p>
+          </section>
+        )}
         {foreignDomain && (
           <ForeignDomainEmpty
             label={context?.label ?? domainLabel(corpus || data?.domain)}
@@ -699,23 +634,20 @@ export default function SkillsPage() {
           />
         )}
 
-        {contextState.kind === 'ready' &&
-          context?.domain &&
-          !foreignDomain &&
-          state.kind === 'loading' && (
-            <div className="flex items-center gap-2 py-16 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" />
-              正在读取岗位技能地图…
-            </div>
-          )}
+        {contextState.kind === 'ready' && context?.domain && !foreignDomain && skillsLoading && (
+          <div className="flex items-center gap-2 py-16 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" />
+            正在读取岗位技能地图…
+          </div>
+        )}
 
         {contextState.kind === 'ready' &&
           context?.domain &&
           !foreignDomain &&
           state.kind === 'offline' && (
             <EmptyState
-              title="岗位技能地图暂时读不到"
-              hint="静态快照与多智能体引擎都没有返回数据。点「重新读取」再试一次。"
+              title="岗位技能地图暂时不可用"
+              hint="当前会话无法从机构过滤接口读取岗位技能数据。点「重新读取」再试一次。"
             />
           )}
 
@@ -816,13 +748,10 @@ export default function SkillsPage() {
                 data.coverage_rule ?? ''
               } 点击任一技能即以它为主题去造课。`}
             >
-              {/* 岗位与学习路径的对应关系。路径本身按三个模块递进排（真源
-                  data/learning-path.json 的 tracks），岗位是模块组合出来的一层映射，
-                  所以这里只用一句话交代，不再单独铺一张岗位轨的图。 */}
               <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
-                和学习路径的对应关系：模块一（大模型基础）是所有岗位的共同底座，
-                再加模块二（检索与知识工程）对应 RAG 与知识工程岗， 再加模块三（智能体工程）对应
-                Agent 应用岗，三个模块都学完对应全栈 AI 应用工程师。
+                当前展示的是「{effectiveDomainLabel}
+                」领域的引擎结果。岗位技能与该领域的全景学习路径按
+                概念对应；路径结构来自领域知识索引，个人进度再根据本账户的测验记录移动。
               </p>
               <div className="space-y-2">
                 {data.jobs.map((job) => (
@@ -833,14 +762,15 @@ export default function SkillsPage() {
                     onToggle={() => setOpenJob(openJob === job.job_id ? null : job.job_id)}
                     onPickSkill={pickSkill}
                     courseTitles={courseTitles}
+                    projects={practice.kind === 'ready' ? practice.projects : []}
                   />
                 ))}
               </div>
               <p className="mt-4 flex items-start gap-2 rounded-lg border border-amber-300/70 bg-amber-50/70 p-3 text-xs leading-relaxed text-amber-800 dark:border-amber-700/50 dark:bg-amber-950/30 dark:text-amber-200">
                 <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
                 <span>
-                  「可接地」只表示受控知识库里有可引用的证据（附 source_id
-                  可复核），不等于已有成课；标灰的技能照样能造课，只是内容无证据约束，
+                  「可接地」只表示受控知识库里有可引用的证据（附来源编号可复核），
+                  不等于已有成课；标灰的技能照样能造课，只是内容无证据约束，
                   课堂里会显示「未接地」徽标。
                 </span>
               </p>

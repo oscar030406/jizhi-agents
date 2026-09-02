@@ -19,9 +19,20 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Database, Eraser, FileText, Loader2, Network, ShieldCheck, UserCog } from 'lucide-react';
+import {
+  Database,
+  Download,
+  Eraser,
+  FileText,
+  Loader2,
+  Network,
+  ShieldCheck,
+  Trash2,
+  UserCog,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { SiteHeader } from '@/components/site-header';
 import { cn } from '@/lib/utils';
 
@@ -35,6 +46,8 @@ interface DataRow {
   where: string;
   keep: string;
   leaves: string;
+  requiresLearningStore?: boolean;
+  browserOnlyWithoutLearningStore?: boolean;
 }
 
 /**
@@ -49,89 +62,98 @@ const ACCOUNT_DATA: DataRow[] = [
     item: '账户凭据',
     content:
       '用户名 + 密码（密码经 scrypt 加盐哈希后存储，服务端也读不到明文）；不收集手机号、邮箱、真实姓名',
-    where: '服务端 PostgreSQL：accounts 表',
-    keep: '直到你要求删除账户',
+    where: '平台账户库',
+    keep: '账户存在期间；可在本页删除',
     leaves: '否（只在本服务与数据库之间）',
   },
   {
     item: '登录会话',
     content: '随机会话 token（httpOnly cookie，浏览器脚本读不到）',
-    where: '服务端 account_sessions 表 + 浏览器 cookie',
-    keep: '30 天，或退出登录时立即失效',
+    where: '平台会话库 + 浏览器安全 Cookie',
+    keep: '30 天后失效，并在下一次账户请求时清理；退出或删户立即失效',
     leaves: '否',
+  },
+  {
+    item: '账户学习档案',
+    content: '领域、学习目标、背景与能力档位；支持同一账户的多份学习档案',
+    where: '平台学习档案 + 当前浏览器工作副本',
+    keep: '账户存在期间；可随时修改或随账户删除',
+    leaves: '派生后的教学指令随生成请求发往模型服务商',
   },
   {
     item: '账户名下的课程与学习记录',
     content: '你生成的课程、场景、答题与运行记录，按账户分区存储',
-    where: '服务端 PostgreSQL：document_stages / document_scenes / runtime_*',
-    keep: '直到你删除课程或账户',
+    where: '平台课程与学习记录库',
+    keep: '课程或账户存在期间；删课或删户时清理',
     leaves: '否（生成过程中的模型调用另见第三节）',
+    requiresLearningStore: true,
   },
 ];
 
 const LOCAL_DATA: DataRow[] = [
   {
     item: '学习者画像',
-    content: '领域 / 学历档 / 角色自述 / 5 项 0–4 自评档位 / 学习偏好 / 时间预算',
-    where: '浏览器 localStorage：learnerProfile',
-    keep: '无过期，直到手动清除',
+    content: '领域 / 学历档 / 角色自述 / 能力档位 / 学习偏好 / 时间预算的浏览器工作副本',
+    where: '当前浏览器',
+    keep: '无自动过期，直到手动清除；删户后浏览器副本仍需单独清除',
     leaves: '派生指令随生成请求发往模型服务商',
   },
   {
     item: '匿名学习者标识',
     content: 'anon:<随机 UUID>，仅用于把当前浏览器的答题记录分区，不与任何账号绑定',
-    where: 'localStorage：maic:device:runtime.learnerKey',
+    where: '当前浏览器',
     keep: '无过期，直到手动清除',
-    leaves: '开启服务端持久化时随请求上行，用于把未登录访客的数据分区；不与任何账号绑定',
+    leaves: '否；未登录标识不发送到平台服务端',
   },
   {
     item: '答题记录',
     content: '每题作答、判分结果、尝试 id、场景运行事件',
-    where:
-      'IndexedDB：maic-runtime（sessions / records）；迁移期旧键 quizDraft: / quizAnswers: / quizResults: / quizAttemptId:',
+    where: '当前浏览器的学习记录库',
     keep: '无过期，直到手动清除',
     leaves: '仅正确率数值发往平台多智能体引擎做反馈决策',
+    browserOnlyWithoutLearningStore: true,
   },
   {
     item: '课堂进度与运行标记',
     content: '当前场景指针、播放游标、PBL 事件水位线、文档迁移标记与存储代次计数',
-    where:
-      'localStorage：maic:device:editor-current-scene:* / playback-cursor:* / runtime.pblDrain.* / document-migration:* / document-storage-generation',
+    where: '当前浏览器',
     keep: '无过期，直到手动清除',
     leaves: '否',
   },
   {
     item: '课程内容',
     content: '生成的大纲、场景、动作脚本、审核指纹',
-    where: 'IndexedDB：maic-documents（stages / scenes / outlines）',
+    where: '当前浏览器的课程库',
     keep: '无过期，在课堂列表中逐门删除',
     leaves: '否（生成过程本身经过模型服务商）',
+    browserOnlyWithoutLearningStore: true,
   },
   {
     item: '输入框草稿',
     content: '首页需求输入、PBL 对话输入的未提交文本（学习者手输内容原文）',
-    where: 'localStorage：requirementDraft / pblChatDraft',
+    where: '当前浏览器',
     keep: '提交后清除，未提交则常驻',
     leaves: '提交时作为提示词发往模型服务商',
   },
   {
     item: '平台模型连接信息',
-    content: '平台下发的可用模型与端点（学习者端不提供服务商或模型选择，也不接收 API Key）',
-    where: 'localStorage：settings-storage（及旧键 providersConfig / llmModel / ttsModel）',
+    content:
+      '平台下发的可用模型与端点；平台不会向浏览器下发服务端密钥，当前学习界面也不要求学习者填写密钥',
+    where: '当前浏览器',
     keep: '无过期，清除浏览器站点数据即可清掉',
     leaves: '调用时随请求发往本应用服务端，再转发给对应服务商',
   },
   {
     item: '界面偏好',
     content: '主题、最近课堂展开状态等',
-    where: 'localStorage：theme_v2 / locale / recentClassroomsOpen / maic.learnerAccounts',
+    where: '当前浏览器',
     keep: '无过期',
     leaves: '否',
   },
   {
     item: '编辑锁 / 会话指针',
     content: '多标签页编辑互斥标记、Agent 会话 id',
-    where: 'localStorage：maic-editor:edit-lock:* / maic-agent-threads / maic-agent-active-session',
+    where: '当前浏览器',
     keep: '无过期',
     leaves: '否',
   },
@@ -168,6 +190,7 @@ type DbOutcome = 'deleted' | 'blocked' | 'error' | 'unavailable';
 
 interface ClearResult {
   keys: string[];
+  localStorage: 'cleared' | 'unavailable';
   db: DbOutcome;
 }
 
@@ -201,9 +224,9 @@ function deleteRuntimeDb(): Promise<DbOutcome> {
 }
 
 const DB_MESSAGE: Record<DbOutcome, string> = {
-  deleted: `IndexedDB「${RUNTIME_DB_NAME}」（答题与运行记录）已删除。`,
-  blocked: `IndexedDB「${RUNTIME_DB_NAME}」未能删除：本课堂仍被其他标签页占用。关闭其他标签页后再点一次。`,
-  error: `IndexedDB「${RUNTIME_DB_NAME}」删除失败（浏览器拒绝了请求）。`,
+  deleted: '当前浏览器的答题与运行记录已删除。',
+  blocked: '答题与运行记录未能删除：本课堂仍被其他标签页占用。关闭其他标签页后再点一次。',
+  error: '答题与运行记录删除失败（浏览器拒绝了请求）。',
   unavailable: '当前浏览器不提供 IndexedDB，无运行记录可清。',
 };
 
@@ -250,34 +273,96 @@ function Section({
 export default function PrivacyPage() {
   const [clearing, setClearing] = useState(false);
   const [result, setResult] = useState<ClearResult | null>(null);
+  const [currentAccount, setCurrentAccount] = useState<{ username: string } | null | undefined>(
+    undefined,
+  );
+  const [serverLearningData, setServerLearningData] = useState<boolean | undefined>(undefined);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deletingAccount, setDeletingAccount] = useState(false);
+  const [accountMessage, setAccountMessage] = useState<{
+    kind: 'success' | 'error';
+    text: string;
+  } | null>(null);
 
-  // 本部署到底开没开账户与服务端持久化——问运行时，不写死。
-  // 账户看 /api/auth 的 enabled（服务端按数据库配置回答）；
-  // 持久化看构建期注入的 NEXT_PUBLIC_PERSISTENCE（bootstrap.ts 的同一个开关）。
-  const [accountsOn, setAccountsOn] = useState<boolean | null>(null);
-  const persistenceOn = process.env.NEXT_PUBLIC_PERSISTENCE === '1';
   useEffect(() => {
     fetch('/api/auth', { cache: 'no-store' })
-      .then((r) => r.json())
-      .then((d: { enabled?: boolean }) => setAccountsOn(!!d.enabled))
-      .catch(() => setAccountsOn(false));
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return (await response.json()) as {
+          account?: { username?: unknown } | null;
+          capabilities?: { serverLearningData?: unknown };
+        };
+      })
+      .then((data) => {
+        setServerLearningData(data.capabilities?.serverLearningData === true);
+        setCurrentAccount(
+          data.account && typeof data.account.username === 'string'
+            ? { username: data.account.username }
+            : null,
+        );
+      })
+      .catch((error) => {
+        setCurrentAccount(undefined);
+        setServerLearningData(undefined);
+        setAuthError(`账户状态读取失败：${error instanceof Error ? error.message : String(error)}`);
+      });
   }, []);
-  const dataRows = accountsOn ? [...ACCOUNT_DATA, ...LOCAL_DATA] : LOCAL_DATA;
+  const persistenceOn = serverLearningData === true;
+  const dataRows = [...ACCOUNT_DATA, ...LOCAL_DATA].filter(
+    (row) =>
+      (!row.requiresLearningStore || persistenceOn) &&
+      (!row.browserOnlyWithoutLearningStore || serverLearningData === false),
+  );
 
   const handleClear = async () => {
     setClearing(true);
     setResult(null);
     let keys: string[] = [];
+    let localStorage: ClearResult['localStorage'] = 'cleared';
     try {
       keys = collectKeys();
       for (const key of keys) window.localStorage.removeItem(key);
     } catch {
-      // localStorage 不可用（隐私模式/被策略禁用）时按"没有可清的键"处理
       keys = [];
+      localStorage = 'unavailable';
     }
     const db = await deleteRuntimeDb();
-    setResult({ keys, db });
+    setResult({ keys, localStorage, db });
     setClearing(false);
+  };
+
+  const handleDeleteAccount = async () => {
+    setDeletingAccount(true);
+    setAccountMessage(null);
+    try {
+      const response = await fetch('/api/account', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: deletePassword }),
+      });
+      const payload = (await response.json()) as { error?: unknown };
+      if (!response.ok) {
+        throw new Error(
+          typeof payload.error === 'string' ? payload.error : `HTTP ${response.status}`,
+        );
+      }
+      setDeletePassword('');
+      setCurrentAccount(null);
+      setAccountMessage({
+        kind: 'success',
+        text: persistenceOn
+          ? '账户、全部登录会话以及平台保存的名下课程和学习记录已删除。本浏览器数据可继续用下方按钮清除。'
+          : '账户与全部登录会话已删除。本浏览器中的课程和学习记录可继续用下方按钮清除。',
+      });
+    } catch (error) {
+      setAccountMessage({
+        kind: 'error',
+        text: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setDeletingAccount(false);
+    }
   };
 
   return (
@@ -298,26 +383,31 @@ export default function PrivacyPage() {
           <div className="flex gap-3">
             <ShieldCheck className="mt-0.5 size-5 shrink-0 text-green-deep" />
             <div className="space-y-1 text-sm leading-relaxed text-green-deep">
-              <p className="font-medium">本系统目前未收集任何真实学员数据。</p>
+              <p className="font-medium">平台不要求提交真实身份资料。</p>
               <p>
-                开发、评测与演示使用的全部画像均为团队构造的合成用例，不对应任何自然人；
-                {accountsOn
-                  ? '账户只收用户名与密码（密码经加盐哈希存储），不收集姓名、学号、手机号、邮箱、身份证等字段。'
-                  : '系统没有账号体系，不存在姓名、学号、手机号、邮箱、身份证等字段。'}
-                本页描述的是「你现在使用它时」数据的实际去向。
+                注册只需要用户名与密码（密码经加盐哈希存储），不要求姓名、学号、手机号、邮箱或身份证。
+                学习目标和角色自述是自由文本，请不要主动填写与学习无关的身份信息。本页描述的是平台当前实际处理的数据。
               </p>
             </div>
           </div>
         </div>
+
+        {authError ? (
+          <div className="rounded-md border border-red-deep/20 bg-red-soft p-3 text-sm text-red-deep">
+            {authError}
+          </div>
+        ) : null}
 
         {/* 1. 数据清单 */}
         <Section
           icon={Database}
           title="一、收集了什么、存在哪、留多久"
           description={
-            persistenceOn
-              ? '本部署已开启账户持久化：登录后，课程与学习记录由平台按账户保存；未登录时数据只留在当前浏览器。'
-              : '本部署不保存学习数据：课程、画像与答题记录只留在当前浏览器，换浏览器或清除站点数据后不会保留。'
+            serverLearningData === undefined
+              ? '平台正在确认当前账户、课程与学习记录的保存范围。'
+              : persistenceOn
+                ? '登录后，课程与学习记录由平台按账户保存；未登录时数据只留在当前浏览器。'
+                : '平台保存账户与学习档案；课程和答题运行记录只留在当前浏览器，换浏览器或清除站点数据后不会保留。'
           }
         >
           <div className="overflow-x-auto">
@@ -347,22 +437,20 @@ export default function PrivacyPage() {
             </table>
           </div>
           <p className="text-sm leading-relaxed text-muted-foreground">
-            {persistenceOn
-              ? '除上表列出的账户数据外，平台运行日志只记录场景标题、生成计数、审核裁决理由与错误类型，不记录画像字段或输入原文。'
-              : '平台不建立学习数据库；运行日志只记录场景标题、生成计数、审核裁决理由与错误类型，不记录画像字段或输入原文。'}
+            平台运行日志只记录场景标题、生成计数、审核裁决理由与错误类型，不记录画像字段或输入原文。
           </p>
         </Section>
 
-        {/* 2. 出本机的数据 */}
+        {/* 2. 离开浏览器的数据 */}
         <Section
           icon={Network}
           title="二、哪些数据会离开当前浏览器、发给谁"
-          description="只有两个外发方向，都不含身份信息。"
+          description="只发送完成教学所需的内容，不发送账户密码或服务端密钥。"
         >
           <ol className="space-y-3 list-decimal list-inside">
             <li>
               <span className="font-medium text-foreground">大模型服务</span>
-              （由平台统一管理；学习者端不提供服务商或模型选择，也不接收 API Key）：收到的是
+              （由平台统一管理；平台不会向浏览器下发服务端密钥，当前学习界面也不要求学习者填写密钥）：收到的是
               <em className="not-italic font-mono text-xs"> 你输入的学习需求文本 </em>、
               由画像换算出的
               <em className="not-italic font-mono text-xs"> 讲法指令段 </em>
@@ -373,13 +461,8 @@ export default function PrivacyPage() {
             </li>
             <li>
               <span className="font-medium text-foreground">平台多智能体引擎</span>
-              ：由课堂服务在平台内部调用，不对公网提供直接入口，数据不出本部署。
-              {/* 具体地址来自 GROUNDING_URL，不在文案里写死——
-              写死过 127.0.0.1:8001，引擎一换机这页就成假话（2026-08-28 清查 M5）。 */}三个端点各自只收必要字段—— 学情诊断收 9
-              个画像字段（目标、背景描述、5 个档位、偏好、时长）；
-              证据检索收检索词、返回条数与语料库名；反馈决策收正确率与难度档
-              （接口另可接逐概念得分，当前测验场景只发正确率）。 引擎按白名单过滤入参、算完即返，
-              <strong>不保存请求内容</strong>，日志只记 traceId 与异常类型。
+              ：由课堂服务在平台内部调用。学情诊断只接收学习目标、背景与能力档位；证据检索只接收检索词和当前知识库；
+              反馈决策只接收答题结果与当前难度。引擎按白名单过滤输入，处理完成后不保存请求正文。
             </li>
             <li>
               <span className="font-medium text-foreground">无第三方统计</span>
@@ -391,74 +474,134 @@ export default function PrivacyPage() {
         {/* 3. 画像的最小化设计 */}
         <Section
           icon={UserCog}
-          title="三、学习者画像为什么不含身份信息"
-          description="这是结构性的：schema 里就没有身份字段，不是靠运行时过滤。"
+          title="三、学习档案如何减少身份信息"
+          description="教学只使用领域、目标、背景与能力档位；注册和画像都不要求真实身份资料。"
         >
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="rounded-md border border-border p-3">
-              <p className="mb-2 text-sm font-medium text-muted-foreground">画像包含的全部字段</p>
-              <ul className="space-y-1 font-mono text-sm text-foreground">
-                <li>domain / education / role（枚举 + 一句自述）</li>
-                <li>programming_level 0–4</li>
-                <li>python_level 0–4</li>
-                <li>agent_level 0–4</li>
-                <li>rag_level 0–4</li>
-                <li>engineering_level 0–4</li>
-                <li>learning_preference（偏好自述）</li>
-                <li>time_budget_hours（数字）</li>
+              <p className="mb-2 text-sm font-medium text-muted-foreground">教学档案使用的信息</p>
+              <ul className="space-y-1 text-sm text-foreground">
+                <li>培训领域、学习目标与学历档位</li>
+                <li>角色背景与已有经验</li>
+                <li>编程、工具与工程能力档位</li>
+                <li>学习偏好与可投入时间</li>
               </ul>
             </div>
             <div className="rounded-md border border-border p-3">
-              <p className="mb-2 text-sm font-medium text-muted-foreground">系统里不存在的字段</p>
+              <p className="mb-2 text-sm font-medium text-muted-foreground">平台不要求的字段</p>
               <ul className="space-y-1 text-sm text-foreground">
-                <li>姓名 / 昵称 / 头像</li>
+                <li>真实姓名 / 头像</li>
                 <li>学号 / 工号 / 身份证号</li>
                 <li>手机号 / 邮箱 / 住址</li>
                 <li>所在院校 / 班级 / 部门</li>
                 <li>位置、设备指纹、生物特征</li>
               </ul>
               <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                当前浏览器唯一的标识是随机 UUID（anon:…），仅用于把答题记录分区，重装浏览器即失效。
+                未登录时使用随机 UUID（anon:…）分区当前浏览器的答题记录；登录后改用账户随机
+                id，用户名不进入教学提示词。
               </p>
             </div>
           </div>
           <p className="text-sm leading-relaxed text-muted-foreground">
-            我们另外写了一个脱敏函数，覆盖手机号、邮箱、身份证、带标签的学号工号、API
-            Key、绝对路径等 12 类，配套自检用例随代码一起跑。
-            它接在两处：一是统一日志出口——服务端与浏览器端写出的每一行日志，落到控制台之前先过一遍脱敏，
-            例如接口把你填的学习目标原样写进日志的那类语句；二是「导出实操指南」 下载的
-            Markdown，里面的画像摘要行会脱敏。
+            平台日志出口会遮盖手机号、邮箱、身份证、学号工号、密钥和绝对路径等敏感格式；
+            导出的实操指南也会先对画像摘要做同样处理。
           </p>
           <p className="text-sm leading-relaxed text-muted-foreground">
-            以下情况不经过脱敏：绕开这个出口直接 <span className="font-mono text-xs">console</span>{' '}
-            打印的少数语句；课件正文（实操课里的路径、邮箱多半是教学素材，抹掉指南就没法用了）；
-            错误对象的堆栈帧（只脱敏消息首行，帧保留以便排障）；
-            发给大模型服务商的请求内容，那条链路的口径见第二节。
+            课件正文和发往模型服务的教学请求不经过日志脱敏；请不要在学习需求或课程资料中主动填写与教学无关的身份信息。
           </p>
         </Section>
 
         {/* 4. 用户控制权 */}
         <Section
           icon={Eraser}
-          title="四、你的控制权：查看与清除"
-          description="这些数据你自己就能查到，也能一键清掉浏览器里的那部分。"
+          title="四、你的控制权：导出、删除与浏览器清除"
+          description="服务端账户数据可下载、可凭当前密码删除；浏览器数据单独清除。"
         >
           <p>
             <span className="font-medium">查看：</span>
-            浏览器开发者工具 → Application → Local Storage / IndexedDB，
-            按上表的键名即可看到原始内容；学情诊断结果可在{' '}
+            登录后可下载账户、档案与机构关系
+            {persistenceOn ? '，以及服务端课程和运行记录' : ''}的 JSON 副本（不含密码哈希和会话
+            token）。 浏览器侧数据也可在开发者工具 → Application → Local Storage / IndexedDB
+            查看；学情诊断结果可在{' '}
             <Link href="/report" className={INLINE_LINK}>
               学情报告
             </Link>{' '}
             页看到人类可读版本。
           </p>
+          <div className="space-y-3 rounded-md border border-border p-3">
+            {authError ? (
+              <p className="text-red-deep">账户控制暂不可用：无法确认当前登录状态。</p>
+            ) : currentAccount === undefined ? (
+              <p className="text-muted-foreground">正在读取当前账户状态……</p>
+            ) : currentAccount === null ? (
+              <p className="text-muted-foreground">登录后可导出或删除当前账户。</p>
+            ) : (
+              <>
+                <p className="font-medium text-foreground">当前账户：{currentAccount.username}</p>
+                <div className="flex flex-wrap gap-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className={cn('gap-2', FOCUS_RING)}
+                    onClick={() => window.location.assign('/api/account/export')}
+                  >
+                    <Download className="size-4" />
+                    导出当前账户数据
+                  </Button>
+                </div>
+                <div className="space-y-2 border-t border-border-subtle pt-3">
+                  <label htmlFor="delete-account-password" className="font-medium text-foreground">
+                    删除账户前再次输入当前密码
+                  </label>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Input
+                      id="delete-account-password"
+                      type="password"
+                      autoComplete="current-password"
+                      value={deletePassword}
+                      onChange={(event) => setDeletePassword(event.target.value)}
+                      className={cn('sm:max-w-xs', FOCUS_RING)}
+                    />
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      disabled={deletingAccount || deletePassword.length === 0}
+                      onClick={handleDeleteAccount}
+                      className={cn('gap-2 text-red-deep', FOCUS_RING)}
+                    >
+                      {deletingAccount ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <Trash2 className="size-4" />
+                      )}
+                      删除账户及服务端名下数据
+                    </Button>
+                  </div>
+                  <p className="text-muted-foreground">
+                    此操作会注销全部会话并删除账户档案、名下课程和学习记录。机构所有者仍有成员时会被拒绝，须先移出全部成员。
+                  </p>
+                </div>
+              </>
+            )}
+            {accountMessage ? (
+              <p
+                className={cn(
+                  'rounded-md border p-2',
+                  accountMessage.kind === 'success'
+                    ? 'border-green-deep/20 bg-green-soft text-green-deep'
+                    : 'border-red-deep/20 bg-red-soft text-red-deep',
+                )}
+              >
+                {accountMessage.text}
+              </p>
+            ) : null}
+          </div>
           <p>
-            <span className="font-medium">清除：</span>
-            下面这个按钮会删除画像、匿名标识、答题记录（含 IndexedDB
-            <span className="font-mono text-xs"> maic-runtime</span>）、课堂进度指针（
-            <span className="font-mono text-xs">maic:device:*</span>
-            ，含当前场景、播放游标与迁移标记）、输入草稿与会话指针。
-            <strong className="text-foreground">不会动当前浏览器保存的平台连接信息与界面偏好</strong>
+            <span className="font-medium">只清当前浏览器：</span>
+            下面这个按钮会删除画像、匿名标识、答题记录、课堂进度、播放游标、输入草稿与会话指针。
+            <strong className="text-foreground">
+              不会动当前浏览器保存的平台连接信息与界面偏好
+            </strong>
             （清除浏览器站点数据可一并清掉），
             <strong className="text-foreground">也不会删已生成的课程内容</strong>
             （在课堂列表里逐门删除，避免误删作品）。
@@ -489,16 +632,22 @@ export default function PrivacyPage() {
             <div
               className={cn(
                 'space-y-2 rounded-md border p-3 text-sm',
-                result.db === 'deleted'
+                result.db === 'deleted' && result.localStorage === 'cleared'
                   ? 'border-green-deep/20 bg-green-soft'
                   : 'border-yellow-deep/20 bg-yellow-soft',
               )}
             >
-              <p className="font-medium text-foreground">
-                已删除 {result.keys.length} 个 localStorage 键
-                {result.keys.length === 0 ? '（当前浏览器原本没有这些数据）' : '：'}
-              </p>
-              {result.keys.length > 0 ? (
+              {result.localStorage === 'unavailable' ? (
+                <p className="font-medium text-foreground">
+                  localStorage 清除失败：浏览器隐私策略拒绝访问。
+                </p>
+              ) : (
+                <p className="font-medium text-foreground">
+                  已删除 {result.keys.length} 个 localStorage 键
+                  {result.keys.length === 0 ? '（当前浏览器原本没有这些数据）' : '：'}
+                </p>
+              )}
+              {result.localStorage === 'cleared' && result.keys.length > 0 ? (
                 <ul className="space-y-0.5 font-mono text-xs break-all text-foreground">
                   {result.keys.map((key) => (
                     <li key={key}>· {key}</li>
@@ -521,8 +670,8 @@ export default function PrivacyPage() {
         >
           <ul className="space-y-2 list-disc list-inside">
             <li>
-              入库切片全部来自开源许可来源（CC BY-NC-SA / MIT / Apache-2.0）。逐条来源、许可与原文由平台随接入记录保存；
-              所属机构管理者可在{' '}
+              入库切片全部来自开源许可来源（CC BY-NC-SA / MIT /
+              Apache-2.0）。逐条来源、许可与原文由平台随接入记录保存； 所属机构管理者可在{' '}
               <Link href="/admin/knowledge" className={INLINE_LINK}>
                 知识库页面
               </Link>{' '}

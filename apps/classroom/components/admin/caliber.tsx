@@ -12,7 +12,7 @@
 import { ChevronDown } from 'lucide-react';
 
 export function Caliber({
-  summary = '口径与复算',
+  summary = '口径与核验',
   children,
 }: {
   readonly summary?: string;

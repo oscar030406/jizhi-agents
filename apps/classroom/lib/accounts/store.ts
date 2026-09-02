@@ -28,6 +28,7 @@ import {
   type ProfileEnvelope,
   updateProfile,
 } from './profiles';
+import { withAccountFilesLock } from './file-lock';
 
 export const ROLES = ['learner', 'manager'] as const;
 export type AccountRole = (typeof ROLES)[number];
@@ -48,6 +49,8 @@ export interface Account {
 const SESSION_TTL_DAYS = 30;
 
 let poolPromise: Promise<Pool> | null = null;
+let learningPoolPromise: Promise<Pool> | null = null;
+let learningPoolUrl: string | null = null;
 
 function connectionString(): string | undefined {
   return process.env.PERSISTENCE_DATABASE_URL || process.env.DATABASE_URL;
@@ -69,7 +72,7 @@ export function accountsEnabled(): boolean {
 }
 
 /** 当前用哪个后端。配了数据库用 pg（多进程安全），否则文件（单进程，本机/演示）。 */
-function usePg(): boolean {
+function hasPostgres(): boolean {
   return !!connectionString();
 }
 
@@ -79,7 +82,11 @@ async function getPool(): Promise<Pool> {
     if (!url) throw new Error('accounts: PERSISTENCE_DATABASE_URL not configured');
     poolPromise = (async () => {
       const pool = new Pool({ connectionString: url, max: 4 });
-      await pool.query(`
+      try {
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          await client.query(`
         CREATE TABLE IF NOT EXISTS accounts (
           id           TEXT PRIMARY KEY,
           username     TEXT UNIQUE NOT NULL,
@@ -100,6 +107,42 @@ async function getPool(): Promise<Pool> {
         );
         CREATE INDEX IF NOT EXISTS account_sessions_account ON account_sessions(account_id);
       `);
+          const collision = await client.query(`
+          SELECT lower(username) AS normalized_username, count(*)::int AS account_count
+            FROM accounts
+           GROUP BY lower(username)
+          HAVING count(*) > 1
+           LIMIT 1
+        `);
+          if (collision.rowCount) {
+            const row = collision.rows[0];
+            throw new Error(
+              `账户完整性审计失败：用户名 ${String(row.normalized_username)} 忽略大小写后存在 ${String(row.account_count)} 条记录；未修改现存数据`,
+            );
+          }
+          try {
+            await client.query(
+              'CREATE UNIQUE INDEX IF NOT EXISTS accounts_username_lower_unique ON accounts (lower(username))',
+            );
+          } catch (error) {
+            if ((error as { code?: string }).code === '23505') {
+              throw new Error(
+                '账户完整性审计失败：检测到并发写入的大小写用户名碰撞；未修改现存数据',
+              );
+            }
+            throw error;
+          }
+          await client.query('COMMIT');
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        } finally {
+          client.release();
+        }
+      } catch (error) {
+        await pool.end();
+        throw error;
+      }
       return pool;
     })().catch((error) => {
       poolPromise = null;
@@ -107,6 +150,28 @@ async function getPool(): Promise<Pool> {
     });
   }
   return poolPromise;
+}
+
+async function getLearningPool(): Promise<Pool | null> {
+  const url = process.env.DATABASE_URL;
+  if (!url) return null;
+  if (url === connectionString()) return getPool();
+  if (!learningPoolPromise || learningPoolUrl !== url) {
+    learningPoolUrl = url;
+    learningPoolPromise = Promise.resolve(new Pool({ connectionString: url, max: 4 })).catch(
+      (error) => {
+        learningPoolPromise = null;
+        learningPoolUrl = null;
+        throw error;
+      },
+    );
+  }
+  return learningPoolPromise;
+}
+
+async function tableExists(queryable: Pick<Pool, 'query'>, table: string): Promise<boolean> {
+  const result = await queryable.query('SELECT to_regclass($1) AS table_name', [table]);
+  return result.rows[0]?.table_name != null;
 }
 
 async function hashPassword(password: string): Promise<string> {
@@ -143,7 +208,7 @@ export async function createAccount(
   role: AccountRole = DEFAULT_ROLE,
   displayName?: string,
 ): Promise<{ ok: true; account: Account } | { ok: false; message: string }> {
-  if (!usePg()) {
+  if (!hasPostgres()) {
     const { fileBackend } = await import('./file-store');
     return fileBackend.createAccount({
       id: `acct_${randomBytes(9).toString('hex')}`,
@@ -154,28 +219,27 @@ export async function createAccount(
     });
   }
   const pool = await getPool();
-  const exists = await pool.query('SELECT 1 FROM accounts WHERE lower(username) = lower($1)', [
-    username,
-  ]);
-  if (exists.rowCount) return { ok: false, message: '用户名已被占用' };
-
   const id = `acct_${randomBytes(9).toString('hex')}`;
   const password_hash = await hashPassword(password);
   const name = displayName?.trim() || username;
-  const row = await pool.query(
-    `INSERT INTO accounts (id, username, display_name, password, role)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, username, display_name, role, created_at`,
-    [id, username, name, password_hash, normalizeRole(role)],
-  );
-  return { ok: true, account: rowToAccount(row.rows[0]) };
+  try {
+    const row = await pool.query(
+      `INSERT INTO accounts (id, username, display_name, password, role)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, username, display_name, role, created_at`,
+      [id, username, name, password_hash, normalizeRole(role)],
+    );
+    return { ok: true, account: rowToAccount(row.rows[0]) };
+  } catch (error) {
+    if ((error as { code?: string }).code === '23505') {
+      return { ok: false, message: '用户名已被占用' };
+    }
+    throw error;
+  }
 }
 
-export async function authenticate(
-  username: string,
-  password: string,
-): Promise<Account | null> {
-  if (!usePg()) {
+export async function authenticate(username: string, password: string): Promise<Account | null> {
+  if (!hasPostgres()) {
     const { fileBackend } = await import('./file-store');
     const found = await fileBackend.accountWithHash(username);
     if (!found) return null;
@@ -192,15 +256,75 @@ export async function authenticate(
   return ok ? rowToAccount(record) : null;
 }
 
+export type AuthenticatedSession =
+  | { kind: 'success'; account: Account; token: string; maxAge: number }
+  | { kind: 'role-mismatch'; account: Account };
+
+/** 密码核验、角色核对与建会话在同一账户锁内完成；密码重置不能从两步之间穿过。 */
+export async function authenticateAndCreateSession(
+  username: string,
+  password: string,
+  expectedRole: AccountRole,
+): Promise<AuthenticatedSession | null> {
+  const token = randomBytes(32).toString('hex');
+  const maxAge = SESSION_TTL_DAYS * 24 * 3600;
+  if (!hasPostgres()) {
+    const { fileBackend } = await import('./file-store');
+    return fileBackend.authenticateAndCreateSession({
+      username,
+      token,
+      maxAgeSeconds: maxAge,
+      expectedRole,
+      verify: (passwordHash) => verifyPassword(password, passwordHash),
+    });
+  }
+
+  const pool = await getPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const row = await client.query(
+      `SELECT id, username, display_name, password, role, created_at
+         FROM accounts
+        WHERE lower(username) = lower($1)
+        FOR UPDATE`,
+      [username],
+    );
+    if (!row.rowCount || !(await verifyPassword(password, String(row.rows[0].password)))) {
+      await client.query('COMMIT');
+      return null;
+    }
+    const account = rowToAccount(row.rows[0]);
+    if (account.role !== expectedRole) {
+      await client.query('COMMIT');
+      return { kind: 'role-mismatch', account };
+    }
+    await client.query('DELETE FROM account_sessions WHERE expires_at <= now()');
+    await client.query(
+      `INSERT INTO account_sessions (token, account_id, expires_at)
+       VALUES ($1, $2, now() + ($3 || ' seconds')::interval)`,
+      [token, account.id, String(maxAge)],
+    );
+    await client.query('COMMIT');
+    return { kind: 'success', account, token, maxAge };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function createSession(accountId: string): Promise<{ token: string; maxAge: number }> {
   const token = randomBytes(32).toString('hex');
   const maxAge = SESSION_TTL_DAYS * 24 * 3600;
-  if (!usePg()) {
+  if (!hasPostgres()) {
     const { fileBackend } = await import('./file-store');
     await fileBackend.createSession(accountId, token, maxAge);
     return { token, maxAge };
   }
   const pool = await getPool();
+  await pool.query('DELETE FROM account_sessions WHERE expires_at <= now()');
   await pool.query(
     `INSERT INTO account_sessions (token, account_id, expires_at)
      VALUES ($1, $2, now() + ($3 || ' seconds')::interval)`,
@@ -211,11 +335,12 @@ export async function createSession(accountId: string): Promise<{ token: string;
 
 export async function accountForSession(token: string | undefined): Promise<Account | null> {
   if (!token) return null;
-  if (!usePg()) {
+  if (!hasPostgres()) {
     const { fileBackend } = await import('./file-store');
     return fileBackend.accountForSession(token);
   }
   const pool = await getPool();
+  await pool.query('DELETE FROM account_sessions WHERE expires_at <= now()');
   const row = await pool.query(
     `SELECT a.id, a.username, a.display_name, a.role, a.created_at
        FROM account_sessions s JOIN accounts a ON a.id = s.account_id
@@ -227,7 +352,7 @@ export async function accountForSession(token: string | undefined): Promise<Acco
 
 export async function destroySession(token: string | undefined): Promise<void> {
   if (!token) return;
-  if (!usePg()) {
+  if (!hasPostgres()) {
     const { fileBackend } = await import('./file-store');
     return fileBackend.destroySession(token);
   }
@@ -254,16 +379,13 @@ export async function readProfileEnvelope(accountId: string): Promise<ProfileEnv
   return toEnvelope(raw);
 }
 
-export async function writeProfileEnvelope(
-  accountId: string,
-  env: ProfileEnvelope,
-): Promise<void> {
+export async function writeProfileEnvelope(accountId: string, env: ProfileEnvelope): Promise<void> {
   await writeProfile(accountId, env);
 }
 
 /** 原样读那坨 JSON（可能是旧扁平画像，也可能是新信封）。 */
 async function readRawProfile(accountId: string): Promise<unknown | null> {
-  if (!usePg()) {
+  if (!hasPostgres()) {
     const { fileBackend } = await import('./file-store');
     return fileBackend.readProfile(accountId);
   }
@@ -299,7 +421,7 @@ export async function writeProfile(accountId: string, profile: unknown): Promise
 }
 
 async function writeRawProfile(accountId: string, profile: unknown): Promise<void> {
-  if (!usePg()) {
+  if (!hasPostgres()) {
     const { fileBackend } = await import('./file-store');
     return fileBackend.writeProfile(accountId, profile);
   }
@@ -314,15 +436,342 @@ async function writeRawProfile(accountId: string, profile: unknown): Promise<voi
  * 管理员重置成员密码（机构场景：无邮箱/手机号找回体系下的唯一兜底）。
  * 归属校验在接口层（只有机构 owner 对本机构 member 可用），这里只管落盘。
  */
-export async function resetPassword(accountId: string, newPassword: string): Promise<{ ok: true } | { ok: false; message: string }> {
+export async function resetPassword(
+  accountId: string,
+  newPassword: string,
+): Promise<{ ok: true } | { ok: false; message: string }> {
   const hash = await hashPassword(newPassword);
-  if (!usePg()) {
+  if (!hasPostgres()) {
     const { fileBackend } = await import('./file-store');
     return fileBackend.resetPassword(accountId, hash);
   }
   const pool = await getPool();
-  const res = await pool.query('UPDATE accounts SET password = $2 WHERE id = $1', [accountId, hash]);
-  return res.rowCount ? { ok: true } : { ok: false, message: '账户不存在' };
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const account = await client.query('SELECT id FROM accounts WHERE id = $1 FOR UPDATE', [
+      accountId,
+    ]);
+    if (!account.rowCount) {
+      await client.query('ROLLBACK');
+      return { ok: false, message: '账户不存在' };
+    }
+    await client.query('UPDATE accounts SET password = $2 WHERE id = $1', [accountId, hash]);
+    await client.query('DELETE FROM account_sessions WHERE account_id = $1', [accountId]);
+    await client.query('COMMIT');
+    return { ok: true };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function serverLearningData(accountId: string) {
+  const pool = await getLearningPool();
+  if (!pool) return { configured: false, runtimeSessions: [], documents: [] };
+
+  const [runtimeSessionsTable, runtimeRecordsTable, stagesTable, scenesTable, outlinesTable] =
+    await Promise.all([
+      tableExists(pool, 'runtime_sessions'),
+      tableExists(pool, 'runtime_records'),
+      tableExists(pool, 'document_stages'),
+      tableExists(pool, 'document_scenes'),
+      tableExists(pool, 'document_outlines'),
+    ]);
+  if (runtimeSessionsTable !== runtimeRecordsTable) {
+    throw new Error('服务端学习记录表不完整，无法导出');
+  }
+  if (new Set([stagesTable, scenesTable, outlinesTable]).size > 1) {
+    throw new Error('服务端课程表不完整，无法导出');
+  }
+
+  const runtimeSessions = runtimeSessionsTable
+    ? await pool.query(
+        `SELECT id, stage_id, kind, status, created_at, updated_at, data
+           FROM runtime_sessions
+          WHERE learner_key = $1
+          ORDER BY created_at, id`,
+        [accountId],
+      )
+    : { rows: [] as Record<string, unknown>[] };
+  const runtimeRecords = runtimeRecordsTable
+    ? await pool.query(
+        `SELECT records.id, records.session_id, records.seq, records.scene_id,
+                records.created_at, records.data
+           FROM runtime_records AS records
+           JOIN runtime_sessions AS sessions ON sessions.id = records.session_id
+          WHERE sessions.learner_key = $1
+          ORDER BY records.session_id, records.seq`,
+        [accountId],
+      )
+    : { rows: [] as Record<string, unknown>[] };
+  const recordsBySession = new Map<string, Record<string, unknown>[]>();
+  for (const row of runtimeRecords.rows as Record<string, unknown>[]) {
+    const sessionId = String(row.session_id);
+    const records = recordsBySession.get(sessionId) ?? [];
+    records.push({
+      id: String(row.id),
+      seq: Number(row.seq),
+      sceneId: row.scene_id === null ? null : String(row.scene_id),
+      createdAt: String(row.created_at),
+      data: row.data,
+    });
+    recordsBySession.set(sessionId, records);
+  }
+
+  const stages = stagesTable
+    ? await pool.query(
+        `SELECT id, name, description, interactive_mode, task_engine_mode,
+                created_at, updated_at, data
+           FROM document_stages
+          WHERE owner_account_id = $1
+          ORDER BY created_at, id`,
+        [accountId],
+      )
+    : { rows: [] as Record<string, unknown>[] };
+  const scenes = scenesTable
+    ? await pool.query(
+        `SELECT scenes.stage_id, scenes.id, scenes.scene_order, scenes.data
+           FROM document_scenes AS scenes
+           JOIN document_stages AS stages ON stages.id = scenes.stage_id
+          WHERE stages.owner_account_id = $1
+          ORDER BY scenes.stage_id, scenes.scene_order, scenes.id`,
+        [accountId],
+      )
+    : { rows: [] as Record<string, unknown>[] };
+  const outlines = outlinesTable
+    ? await pool.query(
+        `SELECT outlines.stage_id, outlines.data
+           FROM document_outlines AS outlines
+           JOIN document_stages AS stages ON stages.id = outlines.stage_id
+          WHERE stages.owner_account_id = $1`,
+        [accountId],
+      )
+    : { rows: [] as Record<string, unknown>[] };
+  const scenesByStage = new Map<string, Record<string, unknown>[]>();
+  for (const row of scenes.rows as Record<string, unknown>[]) {
+    const stageId = String(row.stage_id);
+    const entries = scenesByStage.get(stageId) ?? [];
+    entries.push({ id: String(row.id), order: Number(row.scene_order), data: row.data });
+    scenesByStage.set(stageId, entries);
+  }
+  const outlinesByStage = new Map(
+    (outlines.rows as Record<string, unknown>[]).map((row) => [String(row.stage_id), row.data]),
+  );
+
+  return {
+    configured: true,
+    runtimeSessions: (runtimeSessions.rows as Record<string, unknown>[]).map((row) => ({
+      id: String(row.id),
+      stageId: String(row.stage_id),
+      kind: String(row.kind),
+      status: String(row.status),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+      data: row.data,
+      records: recordsBySession.get(String(row.id)) ?? [],
+    })),
+    documents: (stages.rows as Record<string, unknown>[]).map((row) => ({
+      id: String(row.id),
+      name: String(row.name),
+      description: row.description === null ? null : String(row.description),
+      interactiveMode: row.interactive_mode === null ? null : Boolean(row.interactive_mode),
+      taskEngineMode: row.task_engine_mode === null ? null : Boolean(row.task_engine_mode),
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+      data: row.data,
+      scenes: scenesByStage.get(String(row.id)) ?? [],
+      outline: outlinesByStage.get(String(row.id)) ?? null,
+    })),
+  };
+}
+
+/** 当前账户可携出的完整服务端数据；永不导出密码哈希或会话 token。 */
+export async function exportAccountData(account: Account) {
+  let rawProfile: unknown;
+  let sessions: Array<{ createdAt: string | null; expiresAt: string }>;
+  if (!hasPostgres()) {
+    const { fileBackend } = await import('./file-store');
+    const stored = await fileBackend.accountData(account.id);
+    if (!stored) throw new Error('账户不存在');
+    rawProfile = stored.profile;
+    sessions = stored.sessions.map((session) => ({ createdAt: null, ...session }));
+  } else {
+    const pool = await getPool();
+    const [profileRow, sessionRows] = await Promise.all([
+      pool.query('SELECT profile FROM accounts WHERE id = $1', [account.id]),
+      pool.query(
+        `SELECT created_at, expires_at
+           FROM account_sessions
+          WHERE account_id = $1 AND expires_at > now()
+          ORDER BY created_at`,
+        [account.id],
+      ),
+    ]);
+    if (!profileRow.rowCount) throw new Error('账户不存在');
+    rawProfile = profileRow.rows[0].profile ?? null;
+    sessions = sessionRows.rows.map((row) => ({
+      createdAt: new Date(String(row.created_at)).toISOString(),
+      expiresAt: new Date(String(row.expires_at)).toISOString(),
+    }));
+  }
+
+  const [orgStore, learningData] = await Promise.all([
+    import('./org-store'),
+    serverLearningData(account.id),
+  ]);
+
+  return {
+    schemaVersion: 1,
+    exportedAt: new Date().toISOString(),
+    account,
+    profile: toEnvelope(rawProfile),
+    sessions,
+    organization: await orgStore.accountOrganizationData(account.id),
+    serverLearningData: learningData,
+  };
+}
+
+export type DeleteAccountResult =
+  | { ok: true }
+  | {
+      ok: false;
+      code:
+        | 'owner_has_members'
+        | 'owner_has_corpora'
+        | 'ownership_unavailable'
+        | 'storage_topology'
+        | 'not_found';
+      message: string;
+    };
+
+/** 删除账户、全部会话、账户课程与运行记录；机构 owner 有成员时拒绝。 */
+export async function deleteAccount(accountId: string): Promise<DeleteAccountResult> {
+  const accountUrl = connectionString();
+  const learningUrl = process.env.DATABASE_URL;
+  if (accountUrl && learningUrl && accountUrl !== learningUrl) {
+    return {
+      ok: false,
+      code: 'storage_topology',
+      message: '账户数据与学习数据位于不同数据库，平台无法保证原子删除，请联系维护人员',
+    };
+  }
+
+  if (!hasPostgres()) {
+    const { fileBackend } = await import('./file-store');
+    const { deleteFileAccountOrganizationData } = await import('./org-store');
+    return withAccountFilesLock(async () => {
+      if (!(await fileBackend.accountById(accountId))) {
+        return { ok: false as const, code: 'not_found' as const, message: '账户不存在' };
+      }
+      const orgResult = await deleteFileAccountOrganizationData(accountId);
+      if (!orgResult.ok) return orgResult;
+      return (await fileBackend.deleteAccount(accountId))
+        ? { ok: true as const }
+        : { ok: false as const, code: 'not_found' as const, message: '账户不存在' };
+    });
+  }
+
+  // org-store 负责建机构表；实际删除放到下面同一个数据库事务，避免半删。
+  const orgStore = await import('./org-store');
+  await orgStore.orgForAccount(accountId);
+  const pool = await getPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const existing = await client.query('SELECT 1 FROM accounts WHERE id = $1 FOR UPDATE', [
+      accountId,
+    ]);
+    if (!existing.rowCount) {
+      await client.query('ROLLBACK');
+      return { ok: false, code: 'not_found', message: '账户不存在' };
+    }
+
+    const owned = await client.query(
+      'SELECT id, name FROM orgs WHERE owner_account_id = $1 FOR UPDATE',
+      [accountId],
+    );
+    for (const org of owned.rows) {
+      const otherMember = await client.query(
+        'SELECT account_id FROM org_members WHERE org_id = $1 AND account_id <> $2 LIMIT 1 FOR UPDATE',
+        [org.id, accountId],
+      );
+      if (otherMember.rowCount) {
+        await client.query('ROLLBACK');
+        return {
+          ok: false,
+          code: 'owner_has_members',
+          message: `机构「${String(org.name)}」仍有成员，请先移出全部成员`,
+        };
+      }
+    }
+    if (owned.rowCount) {
+      const ownedIds = new Set(owned.rows.map((org) => String(org.id)));
+      let ownership: Map<string, string>;
+      try {
+        ownership = await orgStore.corpusOwnership();
+      } catch {
+        await client.query('ROLLBACK');
+        return {
+          ok: false,
+          code: 'ownership_unavailable',
+          message: '知识库归属服务暂不可用，平台无法确认私有库状态，账户未删除',
+        };
+      }
+      const active = [...ownership].find(([, orgId]) => ownedIds.has(orgId));
+      if (active) {
+        await client.query('ROLLBACK');
+        return {
+          ok: false,
+          code: 'owner_has_corpora',
+          message: `机构仍有私有知识库「${active[0]}」，请先释放知识库归属`,
+        };
+      }
+    }
+    for (const org of owned.rows) {
+      await client.query('DELETE FROM orgs WHERE id = $1', [org.id]);
+    }
+    await client.query(
+      'DELETE FROM org_assignments WHERE learner_account_id = $1 OR assigned_by = $1',
+      [accountId],
+    );
+    await client.query('DELETE FROM org_invitations WHERE created_by = $1', [accountId]);
+    await client.query('DELETE FROM org_members WHERE account_id = $1', [accountId]);
+    const hasDocuments = await tableExists(client, 'document_stages');
+    const hasRuntime = await tableExists(client, 'runtime_sessions');
+    if (hasDocuments) {
+      await client.query(
+        `DELETE FROM org_assignments
+          WHERE course_id IN (SELECT id FROM document_stages WHERE owner_account_id = $1)`,
+        [accountId],
+      );
+      if (hasRuntime) {
+        await client.query(
+          `DELETE FROM runtime_sessions
+            WHERE stage_id IN (SELECT id FROM document_stages WHERE owner_account_id = $1)`,
+          [accountId],
+        );
+      }
+      await client.query('DELETE FROM document_stages WHERE owner_account_id = $1', [accountId]);
+    }
+    if (hasRuntime) {
+      await client.query('DELETE FROM runtime_sessions WHERE learner_key = $1', [accountId]);
+    }
+    const deleted = await client.query('DELETE FROM accounts WHERE id = $1', [accountId]);
+    if (!deleted.rowCount) {
+      await client.query('ROLLBACK');
+      return { ok: false, code: 'not_found', message: '账户不存在' };
+    }
+    await client.query('COMMIT');
+    return { ok: true };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 function rowToAccount(row: Record<string, unknown>): Account {

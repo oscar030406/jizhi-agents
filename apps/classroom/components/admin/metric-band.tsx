@@ -55,7 +55,13 @@ function pct(v: number | null): string {
 export function splitValue(value: string): { head: string; detail: string } {
   const i = value.search(/——|；/);
   if (i < 0) return { head: value, detail: '' };
-  return { head: value.slice(0, i).trim(), detail: value.slice(i).replace(/^(——|；)/, '').trim() };
+  return {
+    head: value.slice(0, i).trim(),
+    detail: value
+      .slice(i)
+      .replace(/^(——|；)/, '')
+      .trim(),
+  };
 }
 
 /** 这段文字里带没带分母、样本量或置信区间——卡面那唯一一句要的就是这个。 */
@@ -86,7 +92,10 @@ export function qualifierLine(value: string, caliber: string): string {
   const fig = splitFigure(head);
   if (fig && carriesDenominator(`${fig.pre} ${fig.post}`)) return '';
   if (detail && carriesDenominator(detail)) return detail;
-  const sentences = caliber.split('。').map((s) => s.trim()).filter(Boolean);
+  const sentences = caliber
+    .split('。')
+    .map((s) => s.trim())
+    .filter(Boolean);
   const pick = sentences.find(carriesDenominator) ?? sentences[0];
   return pick ? `${pick}。` : detail;
 }
@@ -169,11 +178,12 @@ export function MetricBand({
           ))}
         </dl>
         <Caliber summary="展开口径：这些汇总怎么算的">
-          <p>每次打开当场从课程文件算，不读缓存。</p>
+          <p>页面每次打开都根据当前课程审核记录重新汇总，不使用旧结果。</p>
           <p>
-            这里的「判错占比」走的是<strong className="font-medium">课程审核链</strong>口径，与上面的幻觉率（评测链）
-            不可直接对比：两者的分母不是同一批断言。分母就在同一格里：核验断言 {totals.claims.toLocaleString()} 条 /
-            已审场景 {totals.audited} 个。
+            这里的「判错占比」走的是<strong className="font-medium">课程审核链</strong>
+            口径，与上面的幻觉率（评测链）
+            不可直接对比：两者的分母不是同一批断言。分母就在同一格里：核验断言{' '}
+            {totals.claims.toLocaleString()} 条 / 已审场景 {totals.audited} 个。
           </p>
         </Caliber>
       </div>

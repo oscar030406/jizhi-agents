@@ -142,7 +142,7 @@ def test_append_failure_never_deletes_the_existing_corpus():
     assert 'options"].get("append")' in src
     assert "skip_cleanup = " in src
     # 清理调用必须挂在 skip_cleanup 上，不能是裸的 checkup 判断
-    assert "removed = [] if skip_cleanup else _cleanup_partial(run.corpus)" in src
+    assert "removed = [] if skip_cleanup else _cleanup_partial(run.corpus, run.run_id)" in src
 
 
 def test_all_run_constructors_accept_append():

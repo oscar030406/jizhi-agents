@@ -13,7 +13,11 @@
 import { NextRequest } from 'next/server';
 import { auditSceneContent } from '@/lib/generation/hallucination-audit';
 import { extractContentVerifiables, verifyContent } from '@/lib/generation/content-verify';
-import { fetchEvidence, evidenceForJudge } from '@/lib/generation/evidence-grounding';
+import {
+  fetchEvidence,
+  requireEvidenceWhenConfigured,
+  evidenceForJudge,
+} from '@/lib/generation/evidence-grounding';
 import { corpusOf } from '@/lib/generation/learner-profile';
 import { isAuditGateEnabled } from '@/lib/config/feature-flags';
 import { createLogger } from '@/lib/logger';
@@ -59,9 +63,11 @@ export async function POST(req: NextRequest) {
     log.info(`Auditing scene "${outline.title}" [${panel.describe}] corpus=${corpus ?? 'default'}`);
 
     // Same retrieval as the content stage — the judge sees the same fact fence.
-    const bundle = await fetchEvidence(
-      `${courseTitle ?? ''} ${outline.title} ${outline.description ?? ''}`.trim(),
-      corpus,
+    const bundle = requireEvidenceWhenConfigured(
+      await fetchEvidence(
+        `${courseTitle ?? ''} ${outline.title} ${outline.description ?? ''}`.trim(),
+        corpus,
+      ),
     );
 
     // 消融开关：`AUDIT_GATE=0` 时逐屏路也跳过审核，与整课路同一口径。
@@ -92,7 +98,7 @@ export async function POST(req: NextRequest) {
             // scene was grounded at all — with no corpus reachable there is
             // nothing to re-query, and pretending otherwise would just burn calls.
             retrieveForClaim: async (claimText: string) => {
-              const hit = await fetchEvidence(claimText, corpus);
+              const hit = requireEvidenceWhenConfigured(await fetchEvidence(claimText, corpus));
               return hit
                 ? {
                     evidence: evidenceForJudge(hit),

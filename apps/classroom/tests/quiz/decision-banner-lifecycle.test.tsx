@@ -28,14 +28,27 @@ vi.mock('@/components/audio/speech-button', () => ({
 vi.mock('motion/react', async () => {
   const React = await import('react');
   const ANIMATION_PROPS = new Set([
-    'initial', 'animate', 'exit', 'transition', 'whileTap', 'whileHover', 'layout', 'layoutId',
-    'variants', 'custom', 'drag', 'onAnimationComplete',
+    'initial',
+    'animate',
+    'exit',
+    'transition',
+    'whileTap',
+    'whileHover',
+    'layout',
+    'layoutId',
+    'variants',
+    'custom',
+    'drag',
+    'onAnimationComplete',
   ]);
   const motion = new Proxy(
     {},
     {
       get: (_t, tag: string) =>
-        function MotionStub({ children, ...props }: Record<string, unknown> & { children?: unknown }) {
+        function MotionStub({
+          children,
+          ...props
+        }: Record<string, unknown> & { children?: unknown }) {
           const clean = Object.fromEntries(
             Object.entries(props).filter(([k]) => !ANIMATION_PROPS.has(k)),
           );
@@ -59,7 +72,7 @@ vi.mock('@/lib/evidence', () => ({
 }));
 vi.mock('@/lib/evidence/from-quiz', () => ({ quizEvidenceDraft: () => null }));
 vi.mock('@/lib/evidence/profile-bridge', () => ({
-  learnerDomain: () => 'ai',
+  courseDomain: vi.fn(async () => 'ai'),
   refreshDerivedProfile: vi.fn(async () => {}),
 }));
 vi.mock('@/lib/runtime/learner-key', () => ({ getLearnerKey: async () => 'anon:test' }));
@@ -119,6 +132,10 @@ let decisionRequests = 0;
 beforeEach(() => {
   decisionRequests = 0;
   releaseDecision = null;
+  localStorage.setItem(
+    'learnerProfile',
+    JSON.stringify({ domain: 'ai', corpus: 'ai', currentDifficultyByDomain: { ai: 'L2' } }),
+  );
   vi.stubGlobal(
     'fetch',
     vi.fn((input: RequestInfo | URL) => {
@@ -153,7 +170,14 @@ async function mountAndSubmit(): Promise<HTMLElement> {
   document.body.appendChild(host);
   await act(async () => {
     root = createRoot(host!);
-    root.render(<QuizView questions={QUESTIONS} sceneId="scene-1" stageId="stage-1" sceneTitle="Q/K/V 核心概念" />);
+    root.render(
+      <QuizView
+        questions={QUESTIONS}
+        sceneId="scene-1"
+        stageId="stage-1"
+        sceneTitle="Q/K/V 核心概念"
+      />,
+    );
   });
 
   const click = async (predicate: (b: HTMLButtonElement) => boolean) => {
@@ -199,7 +223,9 @@ describe('交卷 → 决策横幅', () => {
     // ⑤ 步挂在横幅上的执行按钮
     expect(banner!.textContent).toContain('执行：降维解释');
     // 决策写回画像，下一次交卷读到的是 L1
-    expect(JSON.parse(localStorage.getItem('learnerProfile') ?? '{}').currentDifficulty).toBe('L1');
+    const stored = JSON.parse(localStorage.getItem('learnerProfile') ?? '{}');
+    expect(stored.currentDifficultyByDomain.ai).toBe('L1');
+    expect(stored.currentDifficulty).toBeUndefined();
   });
 
   it('决策失败同样不许被吞：要么横幅要么「引擎未响应」，不能两个都没有', async () => {

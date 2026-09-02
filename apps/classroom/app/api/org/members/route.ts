@@ -1,6 +1,6 @@
 /**
  * 机构成员名册（owner 专用）：GET 列名册，DELETE 移出成员。
- * owner 本人不可被移出；移交所有权是 roadmap（P2）。
+ * owner 本人不可被移出；当前没有所有权移交入口。
  */
 
 import { cookies } from 'next/headers';
@@ -22,7 +22,9 @@ async function ownerOrg() {
   if (!account) return { error: apiError(API_ERROR_CODES.UNAUTHORIZED, 401, '未登录。') } as const;
   const org = await orgForAccount(account.id);
   if (!org || org.memberRole !== 'owner') {
-    return { error: apiError(API_ERROR_CODES.UNAUTHORIZED, 403, '只有机构所有者可以管理成员。') } as const;
+    return {
+      error: apiError(API_ERROR_CODES.UNAUTHORIZED, 403, '只有机构所有者可以管理成员。'),
+    } as const;
   }
   return { account, org } as const;
 }

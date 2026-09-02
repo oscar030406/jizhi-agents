@@ -5,8 +5,9 @@
  * base, scene generation is grounded: a retrieval agent supplies evidence
  * chunks with stable source ids, the (unchanged) layout generator is fenced to
  * those facts, and the audit judge verifies claims AGAINST the evidence rather
- * than against parametric memory. Any failure or empty hit degrades silently
- * to the original ungrounded pipeline — UX must never depend on the bridge.
+ * than against parametric memory. Once the bridge is configured, retrieval
+ * failure or an empty hit is a generation gate. Only an unconfigured local
+ * runtime may keep the original ungrounded pipeline.
  */
 
 import { createLogger } from '@/lib/logger';
@@ -38,6 +39,21 @@ export interface EvidenceBundle {
   selectionMode?: string;
 }
 
+export type EvidenceFetchResult =
+  | { status: 'ok'; bundle: EvidenceBundle }
+  | { status: 'empty'; reason: string }
+  | { status: 'unavailable'; configured: boolean; reason: string };
+
+export class EvidenceGateError extends Error {
+  override name = 'EvidenceGateError';
+}
+
+export function requireEvidenceWhenConfigured(result: EvidenceFetchResult): EvidenceBundle | null {
+  if (result.status === 'ok') return result.bundle;
+  if (result.status === 'unavailable' && !result.configured) return null;
+  throw new EvidenceGateError(result.reason);
+}
+
 const MAX_CHUNK_CHARS = 700;
 // 超时不是拍的，按引擎冷启动实测定（2026-08-17 复现，WO-L1）：引擎的按域检索器
 // 懒加载，首次命中要读 npz + 建 TF-IDF 兜底，最大库 odoo(3046 块)单次冷启动 7.2s、
@@ -48,14 +64,14 @@ const MAX_CHUNK_CHARS = 700;
 const FETCH_TIMEOUT_MS = 20_000;
 
 /**
- * Fetch evidence for a scene topic. Returns null when unconfigured, no hits, or any failure.
+ * Fetch evidence for a scene topic with an explicit ok/empty/unavailable result.
  *
  * `corpus` is the training domain (the learner profile's `domain`: ai /
  * manufacturing / industrial-internet / software). The engine keeps one corpus
  * per domain and returns an empty hit set for a domain whose corpus has not
  * been built — it never substitutes another domain's material. So picking
- * 智能制造 today yields ungrounded generation (badge: 未接地), which is the
- * honest outcome, not AI material dressed up as manufacturing evidence.
+ * 智能制造 today yields an explicit empty result and blocks the course; it never
+ * substitutes AI material or silently generates an ungrounded course.
  */
 export async function fetchEvidence(
   query: string,
@@ -76,9 +92,15 @@ export async function fetchEvidence(
   // 判据来自外部教材：蟒蛇书 1-6 章 129 个文件里这三种结构出现率都是 0%，
   // 全书才 57%/31%/25%（`scripts/experiments/textbook_code_ladder.py` 可复算）。
   beginnerCodeForm?: boolean,
-): Promise<EvidenceBundle | null> {
+): Promise<EvidenceFetchResult> {
   const base = process.env.GROUNDING_URL;
-  if (!base) return null;
+  if (!base) {
+    return {
+      status: 'unavailable',
+      configured: false,
+      reason: '本地未配置证据检索桥',
+    };
+  }
   try {
     const params: Record<string, string> = { query, top_k: '6', corpus: corpus || 'default' };
     // 掌握度触发引擎侧 outer-fringe 选段：跳过已会概念的块（带理由回传）。
@@ -109,12 +131,15 @@ export async function fetchEvidence(
       // 屏级重试一次再放弃。冷启动超时后引擎仍在后台把检索器建完
       // （客户端 abort 不取消引擎侧工作），立刻重试大概率命中已建好的缓存——
       // 一次失败就裸奔，等于把工程抖动记成「模型不会用资料」。
-      log.info(`Evidence fetch failed once (${err instanceof Error ? err.name : 'error'}), retrying`);
+      log.info(
+        `Evidence fetch failed once (${err instanceof Error ? err.name : 'error'}), retrying`,
+      );
       resp = await attempt();
     }
     if (!resp.ok) {
-      onFailure?.(`证据检索桥返回 HTTP ${resp.status}`);
-      return null;
+      const reason = `证据检索桥返回 HTTP ${resp.status}`;
+      onFailure?.(reason);
+      return { status: 'unavailable', configured: true, reason };
     }
     const payload = (await resp.json()) as {
       data?: {
@@ -127,29 +152,41 @@ export async function fetchEvidence(
       };
     };
     const chunks = payload.data?.chunks ?? [];
-    if (chunks.length === 0) return null;
+    if (chunks.length === 0) {
+      return {
+        status: 'empty',
+        reason: `知识库 ${params.corpus} 未命中可用于本课的证据`,
+      };
+    }
     // 引擎判定「证据不足」时会带回 missing_evidence_warning。
     // 这个字段以前在这里被静默丢弃，前端永远收不到信号，于是低质证据和高质证据
     // 在下游长得一模一样。现在透传上去，让调用方能选择降级为「未接地」。
     const warning = payload.data?.missing_evidence_warning ?? null;
     if (warning) {
-      log.info(`Grounding insufficient, degrading to ungrounded: ${warning}`);
-      return null;
+      log.info(`Grounding insufficient: ${warning}`);
+      return {
+        status: 'empty',
+        reason: `知识库 ${params.corpus} 证据不足：${warning}`,
+      };
     }
     return {
-      chunks,
-      matchedConcepts: payload.data?.matched_concepts ?? [],
-      summary: payload.data?.evidence_summary ?? '',
-      corpus: params.corpus,
-      // 引擎回传的选段决策（outer-fringe 跳过的块 + 模式）原样透传——
-      // 这是「车间」面板的检索行数据源，此前在这里被丢弃。
-      ...(payload.data?.skipped?.length ? { skipped: payload.data.skipped } : {}),
-      ...(payload.data?.selection_mode ? { selectionMode: payload.data.selection_mode } : {}),
+      status: 'ok',
+      bundle: {
+        chunks,
+        matchedConcepts: payload.data?.matched_concepts ?? [],
+        summary: payload.data?.evidence_summary ?? '',
+        corpus: params.corpus,
+        // 引擎回传的选段决策（outer-fringe 跳过的块 + 模式）原样透传——
+        // 这是「车间」面板的检索行数据源，此前在这里被丢弃。
+        ...(payload.data?.skipped?.length ? { skipped: payload.data.skipped } : {}),
+        ...(payload.data?.selection_mode ? { selectionMode: payload.data.selection_mode } : {}),
+      },
     };
   } catch (err) {
-    log.warn(`Evidence fetch failed (falling back to ungrounded): ${String(err)}`);
-    onFailure?.(`证据检索桥不可达（${err instanceof Error ? err.name : 'error'}）`);
-    return null;
+    const reason = `证据检索桥不可达（${err instanceof Error ? err.name : 'error'}）`;
+    log.warn(`Evidence fetch failed: ${String(err)}`);
+    onFailure?.(reason);
+    return { status: 'unavailable', configured: true, reason };
   }
 }
 
@@ -208,7 +245,10 @@ const EXCERPT_PLACEHOLDER = /\{\{\s*摘录\s*[:：]\s*([A-Za-z0-9_#\-]+)\s*\}\}/
  */
 export function stripExcerptPlaceholders(text: string): string {
   if (!text.includes('{{')) return text;
-  return text.replace(EXCERPT_PLACEHOLDER, '').replace(/\s{2,}/g, ' ').trim();
+  return text
+    .replace(EXCERPT_PLACEHOLDER, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 }
 // 讲义阅读流没有物理画布约束（2026-08-03 讲义真形态），盒预算上限放宽；
 // 无盒字段（表格单元等）维持保守上限。
@@ -252,7 +292,8 @@ export function excerptDirective(bundle: EvidenceBundle): string {
  * 两边口径一旦分家，就会出现「按 A 的标准要求写、按 B 的标准留不下来」的空头支票。
  */
 const hasQuoteIntent = (line: string): boolean =>
-  /[：:]\s*$/.test(line) || /教材|原文|引用|摘录|表述|展开|指出|写道|如下|来看/.test(line.slice(-30));
+  /[：:]\s*$/.test(line) ||
+  /教材|原文|引用|摘录|表述|展开|指出|写道|如下|来看/.test(line.slice(-30));
 
 /**
  * 同一件事的严口径：这一句**整句就是**一句预告，删掉它不会带走别的内容。
@@ -447,7 +488,12 @@ export async function injectExcerpts(
   if (usedIds) {
     try {
       const probe = injectOnce(
-        structuredClone(content), bundle, new Set(usedIds), null, true, relevance,
+        structuredClone(content),
+        bundle,
+        new Set(usedIds),
+        null,
+        true,
+        relevance,
       );
       if (probe.stats.injected === 0) exempt = probe.firstDeduped;
     } catch {
@@ -476,8 +522,16 @@ function injectOnce(
     bundle.chunks.filter((c) => c.quotable !== false).map((c) => [c.source_id, c]),
   );
   const stats: ExcerptStats = {
-    injected: 0, unknown: 0, deduped: 0, capped: 0,
-    rejected: 0, noLead: 0, irrelevant: 0, swapped: 0, placements: [], danglingRefsFixed: 0,
+    injected: 0,
+    unknown: 0,
+    deduped: 0,
+    capped: 0,
+    rejected: 0,
+    noLead: 0,
+    irrelevant: 0,
+    swapped: 0,
+    placements: [],
+    danglingRefsFixed: 0,
   };
   let firstDeduped: string | null = null;
   // 掉了几条摘录（unknown/capped/rejected/noLead/irrelevant 五条丢弃路径）。用于回收导语，
@@ -497,10 +551,13 @@ function injectOnce(
   // 「大部分引用都是诸如此类」）：摘录必须自包含可读。教材里的图引用/操作
   // 指引类段落对判官核事实无害，但不配整段贴给学习者当引文——宁缺毋滥。
   const FIGURE_REF = /如图\s*\d+[.．]\d+|如下图|见图\s*\d|所示.{0,6}(所示)?/;
-  const OPERATIONAL = /完整的?代码(可以)?在|code\/chapter|启动后访问|localhost:\d+|建议读者亲自|点击加载|如图所示/;
+  const OPERATIONAL =
+    /完整的?代码(可以)?在|code\/chapter|启动后访问|localhost:\d+|建议读者亲自|点击加载|如图所示/;
   const selfContained = (text: string): boolean => {
     const figureHits = (text.match(new RegExp(FIGURE_REF.source, 'g')) ?? []).length;
-    return figureHits < 2 && !(figureHits >= 1 && OPERATIONAL.test(text)) && !OPERATIONAL.test(text);
+    return (
+      figureHits < 2 && !(figureHits >= 1 && OPERATIONAL.test(text)) && !OPERATIONAL.test(text)
+    );
   };
   /**
    * 换一条更咬合的候选。返回 null 时用 reason 区分两种空手：
@@ -542,9 +599,7 @@ function injectOnce(
         const pick = pickCandidate(row, sid);
         if (pick.sid) {
           if (!dry) {
-            log.info(
-              `[swapped] ${sid}(${own.toFixed(3)}) → ${pick.sid}(${pick.score.toFixed(3)})`,
-            );
+            log.info(`[swapped] ${sid}(${own.toFixed(3)}) → ${pick.sid}(${pick.score.toFixed(3)})`);
           }
           stats.swapped += 1;
           sid = pick.sid;
@@ -553,7 +608,9 @@ function injectOnce(
           stats.irrelevant += 1;
           drops += 1;
           if (!dry) {
-            log.info(`[irrelevant] ${sid} 咬合 ${own.toFixed(3)} < ${relevance.threshold}，${pick.reason}`);
+            log.info(
+              `[irrelevant] ${sid} 咬合 ${own.toFixed(3)} < ${relevance.threshold}，${pick.reason}`,
+            );
           }
           return excerptGap(sid, '但那段原文与这里讲的不咬合，贴上去反而误导');
         }
@@ -585,7 +642,12 @@ function injectOnce(
       // HTML——直接取「前一行」会拿到 <p style=…> 开标签（首版实测 6/6 误杀）。
       // 剥标签解实体后取最后一个非空自然语言行再判。
       if (before.trim()) {
-        const lastLine = (before.split('\n').filter((l) => l.trim()).pop() ?? '').trim();
+        const lastLine = (
+          before
+            .split('\n')
+            .filter((l) => l.trim())
+            .pop() ?? ''
+        ).trim();
         if (!hasQuoteIntent(lastLine)) {
           stats.noLead += 1;
           drops += 1;
@@ -744,7 +806,7 @@ function truncateClean(source: string, limit: number): string {
   const floor = Math.floor(limit * 0.6);
   let cut = limit;
   const isBalanced = (s: string): boolean =>
-    ((s.match(/\$\$/g) ?? []).length % 2 === 0) && ((s.match(/\$/g) ?? []).length % 2 === 0);
+    (s.match(/\$\$/g) ?? []).length % 2 === 0 && (s.match(/\$/g) ?? []).length % 2 === 0;
   // 候选句界从后往前找
   for (let i = limit; i >= floor; i--) {
     if (/[。！？；\n]/.test(source[i - 1] ?? '') && isBalanced(source.slice(0, i))) {
@@ -793,9 +855,8 @@ function excerptCharBudget(el: Record<string, unknown>): number {
  *
  * ## 为什么要单开一个函数，不复用 `fetchEvidence`
  *
- * `fetchEvidence` 会把检索不可用降级成 `null`，但对**开跑前的判断**不够：
- * 「本机没配检索」和「已配置的检索桥失败」必须分开。前者保持本地开发语义，
- * 后者若静默放行，就会产出一门零据课。
+ * `fetchEvidence` 已显式区分 ok / empty / unavailable；这里保留单独的轻量
+ * 开跑前探针，以便在生成任何屏之前给出整课级的人话阻断理由。
  *
  * ## 为什么要有这道闸
  *

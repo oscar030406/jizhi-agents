@@ -79,7 +79,7 @@ function withLearningContract<T extends { outlines: Array<Record<string, unknown
   );
   const assessmentIndex = payload.outlines.findIndex(
     (outline, index) =>
-      index >= Math.max(practiceIndex, 0) && (outline.type === 'quiz' || outline.type === 'pbl'),
+      index > practiceIndex && (outline.type === 'quiz' || outline.type === 'pbl'),
   );
   const feedbackIndex = payload.outlines.findIndex(
     (outline, index) =>
@@ -90,11 +90,11 @@ function withLearningContract<T extends { outlines: Array<Record<string, unknown
   const practice = payload.outlines[practiceIndex] ?? first;
   const feedback = payload.outlines[feedbackIndex] ?? practice;
   const assessment = payload.outlines[assessmentIndex] ?? feedback;
-  const outlines = payload.outlines.map((outline, index) =>
-    [practiceIndex, feedbackIndex, assessmentIndex].includes(index)
-      ? { ...outline, teachingObjective: 'O1' }
-      : outline,
-  );
+  const outlines = payload.outlines.map((outline) => ({
+    ...outline,
+    teachingObjective: 'O1',
+    objectiveIds: ['O1'],
+  }));
 
   return {
     ...payload,
@@ -587,6 +587,29 @@ describe('task-engine outline route', () => {
                   issueCount: 2,
                   scenarioRoleplay: true,
                   scenarioBrief: '朋友压力很大，学习者练习倾听和支持。',
+                },
+              },
+              {
+                id: 'scene_feedback',
+                type: 'interactive',
+                title: '沟通反馈与重试',
+                description: '依据可见反馈修订回应，再完成一次对话尝试。',
+                keyPoints: ['反馈', '修订', '重试'],
+                order: 2,
+                widgetType: 'game',
+                widgetOutline: { challenge: '根据反馈修订回应' },
+              },
+              {
+                id: 'scene_assessment',
+                type: 'quiz',
+                title: '新情境沟通后测',
+                description: '在新的压力情境中选择并解释合适的回应。',
+                keyPoints: ['新情境', '回应依据', '迁移'],
+                order: 3,
+                quizConfig: {
+                  questionCount: 1,
+                  difficulty: 'medium',
+                  questionTypes: ['text'],
                 },
               },
             ],

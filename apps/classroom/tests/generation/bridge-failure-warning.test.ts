@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { fetchEvidence } from '@/lib/generation/evidence-grounding';
+import { fetchEvidence, requireEvidenceWhenConfigured } from '@/lib/generation/evidence-grounding';
 import { fetchLearnerBlueprint } from '@/lib/generation/learner-profile';
 
 // 四桥显式告警的语义锁：未配置可以降级；配置后失败必须显式抛出。
@@ -25,15 +25,19 @@ describe('bridge onFailure semantics', () => {
   test('未配置 GROUNDING_URL：不触发 onFailure', async () => {
     delete process.env[ENV_KEY];
     const onFailure = vi.fn();
-    expect(await fetchEvidence('q', undefined, undefined, onFailure)).toBeNull();
+    const result = await fetchEvidence('q', undefined, undefined, onFailure);
+    expect(result).toMatchObject({ status: 'unavailable', configured: false });
+    expect(requireEvidenceWhenConfigured(result)).toBeNull();
     expect(await fetchLearnerBlueprint('goal', {}, onFailure)).toBeNull();
     expect(onFailure).not.toHaveBeenCalled();
   });
 
-  test('HTTP 500：触发 onFailure 且返回 null', async () => {
+  test('HTTP 500：显式 unavailable，生产调用不得继续', async () => {
     global.fetch = vi.fn().mockResolvedValue(new Response('boom', { status: 500 }));
     const onFailure = vi.fn();
-    expect(await fetchEvidence('q', undefined, undefined, onFailure)).toBeNull();
+    const result = await fetchEvidence('q', undefined, undefined, onFailure);
+    expect(result).toMatchObject({ status: 'unavailable', configured: true });
+    expect(() => requireEvidenceWhenConfigured(result)).toThrow('HTTP 500');
     expect(onFailure).toHaveBeenCalledWith(expect.stringContaining('500'));
   });
 
@@ -51,6 +55,33 @@ describe('bridge onFailure semantics', () => {
     expect(onFailure).toHaveBeenCalledWith(expect.stringContaining('503'));
   });
 
+  test('学情诊断把证据账本折出的概念掌握度送进引擎', async () => {
+    global.fetch = vi.fn(async (_url, init) => {
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        corpus: 'smart-manufacturing',
+        concept_mastery: { plc_scan_cycle: 0.82 },
+      });
+      return new Response(
+        JSON.stringify({
+          data: {
+            mastery_vector: { plc_scan_cycle: 0.82 },
+            weak_concepts: [],
+            recommended_difficulty: 'L2',
+            learning_risks: [],
+            diagnosis_summary: '',
+            blueprint: null,
+          },
+        }),
+        { status: 200 },
+      );
+    });
+    const result = await fetchLearnerBlueprint('PLC 联调', {
+      corpus: 'smart-manufacturing',
+      conceptMastery: { plc_scan_cycle: 0.82 },
+    });
+    expect(result?.mastery_vector).toEqual({ plc_scan_cycle: 0.82 });
+  });
+
   // 证据桥屏级重试（WO-L1 根因修复的一半）：引擎按域检索器冷启动 3.4~13.2s 实测，
   // 首次超时后引擎仍在后台把检索器建完，立刻重试命中缓存。语义锁两条：
   // 只重试一次；两次都失败才算失败（onFailure 恰好一次）。
@@ -58,7 +89,9 @@ describe('bridge onFailure semantics', () => {
     const mock = vi.fn().mockRejectedValue(new DOMException('t', 'TimeoutError'));
     global.fetch = mock;
     const onFailure = vi.fn();
-    expect(await fetchEvidence('q', undefined, undefined, onFailure)).toBeNull();
+    const result = await fetchEvidence('q', undefined, undefined, onFailure);
+    expect(result).toMatchObject({ status: 'unavailable', configured: true });
+    expect(() => requireEvidenceWhenConfigured(result)).toThrow('证据检索桥不可达');
     expect(mock).toHaveBeenCalledTimes(2);
     expect(onFailure).toHaveBeenCalledTimes(1);
     expect(onFailure).toHaveBeenCalledWith(expect.stringContaining('TimeoutError'));
@@ -76,18 +109,21 @@ describe('bridge onFailure semantics', () => {
       .mockResolvedValue(new Response(JSON.stringify(payload), { status: 200 }));
     global.fetch = mock;
     const onFailure = vi.fn();
-    const bundle = await fetchEvidence('q', undefined, undefined, onFailure);
+    const result = await fetchEvidence('q', undefined, undefined, onFailure);
+    const bundle = requireEvidenceWhenConfigured(result);
     expect(bundle?.chunks).toHaveLength(1);
     expect(mock).toHaveBeenCalledTimes(2);
     expect(onFailure).not.toHaveBeenCalled();
   });
 
-  test('200 但零命中：正常降级，不触发 onFailure', async () => {
+  test('200 但零命中：显式 empty 并阻断整课', async () => {
     global.fetch = vi
       .fn()
       .mockResolvedValue(new Response(JSON.stringify({ data: { chunks: [] } }), { status: 200 }));
     const onFailure = vi.fn();
-    expect(await fetchEvidence('q', undefined, undefined, onFailure)).toBeNull();
+    const result = await fetchEvidence('q', undefined, undefined, onFailure);
+    expect(result).toMatchObject({ status: 'empty' });
+    expect(() => requireEvidenceWhenConfigured(result)).toThrow('未命中可用于本课的证据');
     expect(onFailure).not.toHaveBeenCalled();
   });
 });

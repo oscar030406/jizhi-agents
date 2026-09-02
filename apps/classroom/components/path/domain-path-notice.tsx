@@ -10,15 +10,13 @@
  * corpus 由挂载方传入而不是自己再读一遍画像：挂载方走到这一步时已经判过域，
  * 自己读第二遍除了多一次 localStorage 往返，还会多一帧「注记比路径晚一拍出现」。
  *
- * 本页策展数据的所属域用 JOB_MAP_CORPUS 判，不内联 'ai'
- * （2026-08-28 清查 L11：与 skills 页曾经的写死是同一假设的两处落点）。
+ * 所有库都显示引擎根据本域索引与前置图生成的路径。
  */
 import { Info } from 'lucide-react';
-import { JOB_MAP_CORPUS } from '@/components/skills/practice-projects';
 import { domainLabel } from '@/lib/knowledge/domain-labels';
 
 export function DomainPathNotice({ corpus, caliber }: { corpus: string; caliber?: string }) {
-  if (!corpus || corpus === JOB_MAP_CORPUS) return null;
+  if (!corpus) return null;
 
   return (
     <div
@@ -28,7 +26,6 @@ export function DomainPathNotice({ corpus, caliber }: { corpus: string; caliber?
       <Info className="mt-0.5 size-4 shrink-0" />
       <span>
         这条路径由机器排出：概念与前置关系取自「{domainLabel(corpus)}」接入时跑的流水线，
-        与「{domainLabel(JOB_MAP_CORPUS)}」那条按教材人工策展、逐节挂课的路径不是一回事。
         {caliber ? `口径：${caliber}。` : '边未经人工复核，只作推荐，不拦人。'}
       </span>
     </div>

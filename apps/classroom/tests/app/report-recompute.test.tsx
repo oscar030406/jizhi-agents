@@ -60,6 +60,18 @@ async function flush() {
 let host: HTMLElement;
 let root: Root;
 
+const profileResponse = () => ({
+  ok: true,
+  status: 200,
+  json: async () => ({ fields: { domain: 'ai', role: '学生' } }),
+});
+
+const unavailableResponse = () => ({
+  ok: false,
+  status: 503,
+  json: async () => ({}),
+});
+
 function button(label: string): HTMLButtonElement {
   const found = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes(label));
   if (!found) throw new Error(`没找到按钮：${label}`);
@@ -87,7 +99,15 @@ describe('/report 重新计算', () => {
     let release: (res: unknown) => void = () => {};
     vi.stubGlobal(
       'fetch',
-      vi.fn(() => new Promise((resolve) => (release = resolve))),
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/profile') return Promise.resolve(profileResponse());
+        if (url === '/api/adaptive/blueprint') {
+          return new Promise((resolve) => (release = resolve));
+        }
+        if (url === '/api/domain-path/ai') return Promise.resolve(unavailableResponse());
+        throw new Error(`未预期的请求：${url}`);
+      }),
     );
 
     await act(async () => root.render(<ReportPage />));
@@ -134,7 +154,15 @@ describe('/report 重新计算', () => {
     let release: (res: unknown) => void = () => {};
     vi.stubGlobal(
       'fetch',
-      vi.fn(() => new Promise((resolve) => (release = resolve))),
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/profile') return Promise.resolve(profileResponse());
+        if (url === '/api/adaptive/blueprint') {
+          return new Promise((resolve) => (release = resolve));
+        }
+        if (url === '/api/domain-path/ai') return Promise.resolve(unavailableResponse());
+        throw new Error(`未预期的请求：${url}`);
+      }),
     );
     await act(async () => root.render(<ReportPage />));
     await flush();
@@ -170,7 +198,15 @@ describe('/report 重新计算', () => {
     // 骨架卡会永远停在那里。所以判据必须是 bpState.kind === 'loading'。
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) })),
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/profile') return profileResponse();
+        if (url === '/api/adaptive/blueprint') {
+          return unavailableResponse();
+        }
+        if (url === '/api/domain-path/ai') return unavailableResponse();
+        throw new Error(`未预期的请求：${url}`);
+      }),
     );
     await act(async () => root.render(<ReportPage />));
     await flush();
@@ -183,7 +219,15 @@ describe('/report 重新计算', () => {
   it('引擎返回非 2xx 时弹的是失败，不是成功', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) })),
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/profile') return profileResponse();
+        if (url === '/api/adaptive/blueprint') {
+          return unavailableResponse();
+        }
+        if (url === '/api/domain-path/ai') return unavailableResponse();
+        throw new Error(`未预期的请求：${url}`);
+      }),
     );
 
     await act(async () => root.render(<ReportPage />));

@@ -49,7 +49,6 @@ export function MechanismCards() {
       <div className="mt-5 grid gap-4 sm:grid-cols-3">
         {MECHANISMS.map((m) => (
           <div key={m.title} className={`${CARD_RECIPE_STATIC} p-5`}>
-            {/* eslint-disable-next-line @next/next/no-img-element -- 静态定稿插图 */}
             <img
               src={m.art}
               alt=""

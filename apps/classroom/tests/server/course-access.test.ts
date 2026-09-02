@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { courseVisibleToOrg } from '@/lib/server/course-access';
+import { canReadCourse, courseVisibleToOrg, type CourseReader } from '@/lib/server/course-access';
 
 function course(
   origin?: { corpus?: string; domain?: string },
@@ -50,5 +50,37 @@ describe('courseVisibleToOrg', () => {
     const conflicted = course({ corpus: 'private-a' }, { corpus: 'private-b' });
     expect(courseVisibleToOrg(conflicted, 'org-a', ownership)).toBe(false);
     expect(courseVisibleToOrg(conflicted, 'org-b', ownership)).toBe(false);
+  });
+});
+
+describe('canReadCourse', () => {
+  const ownership = new Map([['private-a', 'org-a']]);
+  const reader = (
+    memberRole: CourseReader['memberRole'],
+    assignedCourseIds: string[] = [],
+  ): CourseReader => ({
+    accountId: memberRole ? `${memberRole}-a` : null,
+    orgId: memberRole ? 'org-a' : null,
+    memberRole,
+    assignedCourseIds: new Set(assignedCourseIds),
+  });
+
+  it('机构 owner 可读本机构课程，普通 member 只读明确指派课程', () => {
+    const privateCourse = course({ corpus: 'private-a' });
+    expect(canReadCourse('course-a', privateCourse, reader('owner'), ownership)).toBe(true);
+    expect(canReadCourse('course-a', privateCourse, reader('member'), ownership)).toBe(false);
+    expect(
+      canReadCourse('course-a', privateCourse, reader('member', ['course-a']), ownership),
+    ).toBe(true);
+  });
+
+  it('存量公共课仍可匿名浏览，但机构 member 登录后只进入机构明确指派的课程', () => {
+    const legacyPublic = course({ corpus: 'public-corpus' });
+    expect(canReadCourse('legacy', legacyPublic, reader(null), ownership)).toBe(true);
+    expect(canReadCourse('legacy', legacyPublic, reader('owner'), ownership)).toBe(true);
+    expect(canReadCourse('legacy', legacyPublic, reader('member'), ownership)).toBe(false);
+    expect(canReadCourse('legacy', legacyPublic, reader('member', ['legacy']), ownership)).toBe(
+      true,
+    );
   });
 });

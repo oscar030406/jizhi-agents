@@ -14,6 +14,7 @@ const access = vi.hoisted(() => ({
   requireCorpusVisible: vi.fn(),
 }));
 const profiles = vi.hoisted(() => ({ readProfile: vi.fn() }));
+const blueprints = vi.hoisted(() => ({ fetchLearnerBlueprint: vi.fn() }));
 
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
@@ -23,6 +24,9 @@ vi.mock('@/lib/server/corpus-access', () => ({
   requireCorpusVisible: access.requireCorpusVisible,
 }));
 vi.mock('@/lib/accounts/store', () => ({ readProfile: profiles.readProfile }));
+vi.mock('@/lib/generation/learner-profile', () => ({
+  fetchLearnerBlueprint: blueprints.fetchLearnerBlueprint,
+}));
 
 const req = {} as NextRequest;
 
@@ -47,6 +51,32 @@ describe('GET /api/domain-path/[corpus]', () => {
       corpus: 'ai',
       education: '本科',
       conceptMastery: { PID控制器: 0.82 },
+      conceptMasteryByDomain: {
+        ai: { rag: 0.9 },
+        'smart-manufacturing': { plc_scan_cycle: 0.82 },
+      },
+      conceptConfidence: { rag: 0.95 },
+      conceptConfidenceByDomain: {
+        ai: { rag: 0.95 },
+        'smart-manufacturing': { plc_scan_cycle: 0.67 },
+      },
+      conceptRecall: { rag: 0.91 },
+      conceptRecallByDomain: {
+        ai: { rag: 0.91 },
+        'smart-manufacturing': { plc_scan_cycle: 0.61 },
+      },
+      currentDifficulty: 'L4',
+      currentDifficultyByDomain: { ai: 'L4', 'smart-manufacturing': 'L2' },
+      eloRating: 1600,
+      eloRatingByDomain: { ai: 1600, 'smart-manufacturing': 1040 },
+    });
+    blueprints.fetchLearnerBlueprint.mockResolvedValue({
+      mastery_vector: { plc_scan_cycle: 0.82 },
+      weak_concepts: [],
+      recommended_difficulty: 'L2',
+      learning_risks: [],
+      diagnosis_summary: '',
+      blueprint: null,
     });
   });
   afterEach(() => {
@@ -92,8 +122,19 @@ describe('GET /api/domain-path/[corpus]', () => {
       expect(init?.method).toBe('POST');
       const sent = JSON.parse(String(init?.body)) as {
         corpus: string;
-        profile: { domain: string; corpus: string; education: string };
-        conceptMastery: Record<string, number>;
+        profile: {
+          domain: string;
+          corpus: string;
+          education: string;
+          conceptMastery?: unknown;
+          conceptConfidence?: unknown;
+          conceptRecall?: unknown;
+          currentDifficulty?: string;
+          eloRating?: number;
+        };
+        masteryVector: Record<string, number>;
+        masteryCorpus: string;
+        conceptMastery?: unknown;
       };
       expect(sent).toMatchObject({
         corpus: 'smart-manufacturing',
@@ -101,9 +142,16 @@ describe('GET /api/domain-path/[corpus]', () => {
           domain: 'smart-manufacturing',
           corpus: 'smart-manufacturing',
           education: '本科',
+          conceptMastery: { plc_scan_cycle: 0.82 },
+          conceptConfidence: { plc_scan_cycle: 0.67 },
+          conceptRecall: { plc_scan_cycle: 0.61 },
+          currentDifficulty: 'L2',
+          eloRating: 1040,
         },
-        conceptMastery: { PID控制器: 0.82 },
+        masteryVector: { plc_scan_cycle: 0.82 },
+        masteryCorpus: 'smart-manufacturing',
       });
+      expect(sent).not.toHaveProperty('conceptMastery');
       // 引擎那侧是 `ApiResponse(data=...)`，桥必须拆到 data
       return new Response(JSON.stringify({ code: 'SUCCESS', data: payload, traceId: 't1' }), {
         status: 200,
@@ -115,23 +163,61 @@ describe('GET /api/domain-path/[corpus]', () => {
     const body = (await res.json()) as { success: boolean; path: typeof payload };
     expect(body.success).toBe(true);
     expect(body.path).toEqual(payload);
+    expect(blueprints.fetchLearnerBlueprint).toHaveBeenCalledWith(
+      'smart-manufacturing',
+      expect.objectContaining({
+        domain: 'smart-manufacturing',
+        corpus: 'smart-manufacturing',
+        education: '本科',
+      }),
+    );
+    expect(blueprints.fetchLearnerBlueprint.mock.calls[0]?.[1]).toHaveProperty('conceptMastery', {
+      plc_scan_cycle: 0.82,
+    });
   });
 
-  it('AI 主域把既有 curated 路径随账户画像送进同一个引擎端点', async () => {
+  it('同源诊断桥失败：路径结构照常返回，并显式标注本次未个性化', async () => {
+    blueprints.fetchLearnerBlueprint.mockRejectedValue(new Error('学情诊断桥不可达'));
+    const spy = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              corpus: 'smart-manufacturing',
+              source: 'intake',
+              stages: [{ index: 1, title: '第 1 阶', concepts: [{ id: 'plc', name: 'PLC' }] }],
+              personalization: { matched_mastery: 0 },
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+    );
+    globalThis.fetch = spy as unknown as typeof fetch;
+
+    const res = await get();
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.success).toBe(true);
+    expect(body.path.stages).toHaveLength(1);
+    expect(body.path.personalization.mastery_available).toBe(false);
+    expect(body.path.personalization.reason).toContain('学情诊断暂时不可用');
+    expect(spy).toHaveBeenCalledOnce();
+  });
+
+  it('AI 主域不再把手工路径送进引擎', async () => {
     globalThis.fetch = vi.fn(async (url: unknown, init?: RequestInit) => {
       expect(String(url)).toBe('http://engine.test/internal/v1/personalize/domain-path/ai');
       const sent = JSON.parse(String(init?.body)) as {
         corpus: string;
-        curatedPath?: { tracks?: unknown[]; nodes?: unknown[] };
+        curatedPath?: unknown;
       };
       expect(sent.corpus).toBe('ai');
-      expect(sent.curatedPath?.tracks?.length).toBeGreaterThan(0);
-      expect(sent.curatedPath?.nodes?.length).toBeGreaterThan(0);
+      expect(sent).not.toHaveProperty('curatedPath');
       return new Response(
         JSON.stringify({
           data: {
             corpus: 'ai',
-            source: 'curated',
+            source: 'index-graph',
             stages: [],
           },
         }),
@@ -141,7 +227,7 @@ describe('GET /api/domain-path/[corpus]', () => {
 
     const res = await get('ai');
     expect(res.status).toBe(200);
-    expect((await res.json()).path.source).toBe('curated');
+    expect((await res.json()).path.source).toBe('index-graph');
   });
 
   // source=none 是引擎的正常回答（该库没跑过接入流水线），桥不许把它改写成错误：

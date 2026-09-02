@@ -9,7 +9,11 @@ import {
   type LearningContract,
 } from '@/lib/generation/learning-contract';
 import type { SceneOutline } from '@/lib/types/generation';
-import { hashCourseScenes, type SceneAudit } from '@/lib/generation/hallucination-audit';
+import {
+  hashCourseScenes,
+  hashLearningContractPlan,
+  type SceneAudit,
+} from '@/lib/generation/hallucination-audit';
 
 function audit(overrides: Partial<SceneAudit> = {}): SceneAudit {
   const base: SceneAudit = {
@@ -40,14 +44,37 @@ function audit(overrides: Partial<SceneAudit> = {}): SceneAudit {
 describe('学习者发布资格纯函数', () => {
   const releaseOutlines: SceneOutline[] = [
     {
+      id: 'outline-demo',
+      type: 'slide',
+      title: '激活经验并完整示范',
+      description: '先回忆判断依据，再示范如何完成同类任务。',
+      keyPoints: ['已有经验', '逐步示范', '判断依据'],
+      objectiveIds: ['O1'],
+      order: 1,
+    },
+    {
       id: 'outline-practice',
       type: 'interactive',
       title: '练习并按反馈重试',
       description: '完成练习并根据反馈修正。',
       keyPoints: ['练习', '反馈', '重试'],
-      order: 1,
+      order: 2,
+      teachingObjective: 'O1',
+      objectiveIds: ['O1'],
       widgetType: 'game',
       widgetOutline: { gameType: 'strategy', challenge: '完成练习' },
+    },
+    {
+      id: 'outline-feedback',
+      type: 'interactive',
+      title: '依据反馈修订并重试',
+      description: '读取错误反馈，修改答案后重新提交。',
+      keyPoints: ['错误定位', '修订', '重试'],
+      order: 3,
+      teachingObjective: 'O1',
+      objectiveIds: ['O1'],
+      widgetType: 'game',
+      widgetOutline: { gameType: 'strategy', challenge: '根据反馈完成第二次尝试' },
     },
     {
       id: 'outline-assessment',
@@ -55,7 +82,9 @@ describe('学习者发布资格纯函数', () => {
       title: '迁移测验',
       description: '在新情境中验收。',
       keyPoints: ['迁移', '测验', '验收'],
-      order: 2,
+      order: 4,
+      teachingObjective: 'O1',
+      objectiveIds: ['O1'],
       quizConfig: { questionCount: 1, difficulty: 'medium', questionTypes: ['text'] },
     },
   ];
@@ -64,29 +93,81 @@ describe('学习者发布资格纯函数', () => {
     objectives: [
       { id: 'O1', action: '完成任务', condition: '给定新情境', successCriterion: '通过测验' },
     ],
-    prerequisiteActivation: ['outline-practice'],
-    demonstration: ['outline-practice'],
+    prerequisiteActivation: ['outline-demo'],
+    demonstration: ['outline-demo'],
     learnerPractice: ['outline-practice'],
-    feedbackRetry: ['outline-practice'],
+    feedbackRetry: ['outline-feedback'],
     transferApplication: ['outline-assessment'],
     assessmentMap: [{ sceneId: 'outline-assessment', objectiveIds: ['O1'] }],
     grounding: { sourceRefs: ['corpus:ai'], claimPolicy: 'cite-or-mark-uncertain' },
   };
   const releasePlan = buildLearningContractPlan(releaseContract, releaseOutlines);
   const releasePlanV1 = { ...releasePlan, version: 1 };
+  const passedVerification = {
+    codePassed: 0,
+    codeFailed: 0,
+    codeUnverifiable: 0,
+    arithmeticChecked: 1,
+    arithmeticPassed: 1,
+    failures: [],
+  };
   const releasedScenes = [
+    {
+      id: 'scene-demo',
+      outlineId: 'outline-demo',
+      type: 'slide',
+      content: {
+        type: 'slide',
+        canvas: {
+          elements: [
+            {
+              type: 'text',
+              content:
+                '<p>先回忆如何判断答案是否有依据，再逐步示范读取任务、选择证据和复核结论。</p>',
+            },
+          ],
+        },
+      },
+      audit: audit(),
+    },
     {
       id: 'scene-practice',
       outlineId: 'outline-practice',
       type: 'interactive',
-      content: { type: 'interactive', widgetType: 'game', html: '<button>完成练习</button>' },
+      content: {
+        type: 'interactive',
+        widgetType: 'game',
+        html: '<p>给定三张设备巡检记录，找出异常项并写出判断依据。</p><textarea id="answer"></textarea><button onclick="submitAttempt()">提交</button><output id="feedback"></output><script>function submitAttempt(){document.getElementById("feedback").textContent="请依据反馈修订后重试";}</script>',
+      },
       audit: audit(),
+      verification: passedVerification,
+    },
+    {
+      id: 'scene-feedback',
+      outlineId: 'outline-feedback',
+      type: 'interactive',
+      content: {
+        type: 'interactive',
+        widgetType: 'game',
+        html: '<textarea id="retry"></textarea><button onclick="retryAttempt()">再次提交</button><output id="feedback"></output><script>function retryAttempt(){document.getElementById("feedback").textContent="已完成反馈后的重试";}</script>',
+      },
+      audit: audit(),
+      verification: passedVerification,
     },
     {
       id: 'scene-assessment',
       outlineId: 'outline-assessment',
       type: 'quiz',
-      content: { type: 'quiz', questions: [{ id: 'q1', type: 'text', question: '迁移作答' }] },
+      content: {
+        type: 'quiz',
+        questions: [
+          {
+            id: 'q1',
+            type: 'text',
+            question: '面对一份未见过的交接记录，判断能否放行并说明核验证据。',
+          },
+        ],
+      },
       audit: audit(),
     },
   ];
@@ -100,18 +181,21 @@ describe('学习者发布资格纯函数', () => {
     evidenceCount: 0,
     panelComplete: true,
     courseContentHash: hashCourseScenes(releasedScenes),
+    learningAlignment: {
+      courseContentHash: hashCourseScenes(releasedScenes),
+      learningContractHash: hashLearningContractPlan(releasePlan),
+      complete: true,
+      aligned: true,
+      violations: [],
+      judges: [
+        { judgeModel: 'judge-a', verdict: 'aligned', rationale: '逐项履约。', items: [] },
+        { judgeModel: 'judge-b', verdict: 'aligned', rationale: '逐项履约。', items: [] },
+      ],
+    },
   });
   const numericContent = {
     type: 'slide',
     canvas: { elements: [{ type: 'text', content: '<p>2 + 2 = 4</p>' }] },
-  };
-  const passedVerification = {
-    codePassed: 0,
-    codeFailed: 0,
-    codeUnverifiable: 0,
-    arithmeticChecked: 1,
-    arithmeticPassed: 1,
-    failures: [],
   };
 
   it('有事实断言且审核通过、证据接地时可发布', () => {
@@ -236,10 +320,11 @@ describe('学习者发布资格纯函数', () => {
   it('一门课只要有一个场景不合格，整门课仍是草稿', () => {
     const result = decideCourseLearnerRelease({
       stage: { learningContract: releasePlan, courseAudit: cleanCourseAudit },
-      scenes: [
-        releasedScenes[0],
-        { ...releasedScenes[1], audit: audit({ decision: 'block_pending_review' }) },
-      ],
+      scenes: releasedScenes.map((scene) =>
+        scene.id === 'scene-assessment'
+          ? { ...scene, audit: audit({ decision: 'block_pending_review' }) }
+          : scene,
+      ),
     });
 
     expect(result.eligible).toBe(false);
@@ -277,6 +362,79 @@ describe('学习者发布资格纯函数', () => {
         'transferApplication scene is missing: outline-assessment',
         'assessment scene is missing: outline-assessment',
       ]),
+    );
+  });
+
+  it('课程发布共同门禁拒绝空洞示范与原题复述迁移', () => {
+    const hollowDemoScenes = releasedScenes.map((scene) =>
+      scene.id === 'scene-demo' ? { ...scene, content: { type: 'slide' } } : scene,
+    );
+    const hollowDemo = decideCourseLearnerRelease({
+      stage: {
+        learningContract: releasePlan,
+        courseAudit: { ...cleanCourseAudit, courseContentHash: hashCourseScenes(hollowDemoScenes) },
+      },
+      scenes: hollowDemoScenes,
+    });
+    expect(hollowDemo.courseReasons).toContain('learning_contract_unfulfilled');
+    expect(hollowDemo.contractViolations).toContain(
+      'demonstration scene lacks substantive teaching evidence: outline-demo',
+    );
+
+    const repeatedTransferScenes = releasedScenes.map((scene) =>
+      scene.id === 'scene-assessment'
+        ? {
+            ...scene,
+            content: {
+              type: 'quiz',
+              questions: [
+                {
+                  id: 'q1',
+                  type: 'text',
+                  question: '给定三张设备巡检记录，找出异常项并写出判断依据。',
+                },
+              ],
+            },
+          }
+        : scene,
+    );
+    const repeatedTransfer = decideCourseLearnerRelease({
+      stage: {
+        learningContract: releasePlan,
+        courseAudit: {
+          ...cleanCourseAudit,
+          courseContentHash: hashCourseScenes(repeatedTransferScenes),
+        },
+      },
+      scenes: repeatedTransferScenes,
+    });
+    expect(repeatedTransfer.courseReasons).toContain('learning_contract_unfulfilled');
+    expect(repeatedTransfer.contractViolations).toContain(
+      'transferApplication scene does not establish a new context: outline-assessment',
+    );
+  });
+
+  it('事实有出处但教学内容与目标无关时仍 fail-closed', () => {
+    const result = decideCourseLearnerRelease({
+      stage: {
+        learningContract: releasePlan,
+        courseAudit: {
+          ...cleanCourseAudit,
+          learningAlignment: {
+            ...cleanCourseAudit.learningAlignment!,
+            aligned: false,
+            violations: [
+              'judge-a: O1/demonstration/outline-demo — 内容只介绍设备历史，没有示范目标动作',
+            ],
+          },
+        },
+      },
+      scenes: releasedScenes,
+    });
+
+    expect(result.courseReasons).toContain('learning_contract_unfulfilled');
+    expect(result.contractViolations).toContain(
+      'semantic alignment: judge-a: O1/demonstration/outline-demo — 内容只介绍设备历史，没有示范目标动作',
     );
   });
 

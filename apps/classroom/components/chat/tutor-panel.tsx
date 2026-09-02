@@ -29,6 +29,7 @@ import { AGENT_ART, AGENT_PERSONAS } from '@/components/agents/agent-avatar';
 import { useStageStore } from '@/lib/store';
 import { LECTURE_TEXT_CAP, sceneLectureText } from '@/lib/classroom/lecture-text';
 import { stripSourceIds } from '@/lib/generation/tutor-prose';
+import { projectProfileToDomain } from '@/lib/knowledge/domain-context';
 import { createLogger } from '@/lib/logger';
 import type {
   TutorTurn,
@@ -37,23 +38,22 @@ import type {
   HintLadder,
 } from '@/app/api/tutor/route';
 
-type Entry =
-  | { kind: 'turn'; turn: TutorTurn }
-  | { kind: 'answer'; text: string };
+type Entry = { kind: 'turn'; turn: TutorTurn } | { kind: 'answer'; text: string };
 
 type Status = 'checking' | 'idle' | 'loading' | 'active' | 'offline' | 'done';
 
-const DECISION_META: Record<string, { icon: typeof ArrowDownCircle; label: string; tone: string }> = {
-  probe: { icon: HelpCircle, label: '探测提问', tone: 'text-blue-deep' },
-  simplify: { icon: ArrowDownCircle, label: '降维追问', tone: 'text-yellow-deep' },
-  advance: { icon: ArrowRightCircle, label: '推进', tone: 'text-blue-deep' },
-  challenge: { icon: ArrowUpCircle, label: '进阶挑战', tone: 'text-green-deep' },
-  complete: { icon: CheckCircle2, label: '完成', tone: 'text-green-deep' },
-  // 讲义驱动判分的三档裁决（自由作答，无选择题式对错）
-  correct: { icon: CheckCircle2, label: '答对了', tone: 'text-green-deep' },
-  partial: { icon: ArrowDownCircle, label: '部分正确', tone: 'text-yellow-deep' },
-  incorrect: { icon: XCircle, label: '还没到位', tone: 'text-red-deep' },
-};
+const DECISION_META: Record<string, { icon: typeof ArrowDownCircle; label: string; tone: string }> =
+  {
+    probe: { icon: HelpCircle, label: '探测提问', tone: 'text-blue-deep' },
+    simplify: { icon: ArrowDownCircle, label: '降维追问', tone: 'text-yellow-deep' },
+    advance: { icon: ArrowRightCircle, label: '推进', tone: 'text-blue-deep' },
+    challenge: { icon: ArrowUpCircle, label: '进阶挑战', tone: 'text-green-deep' },
+    complete: { icon: CheckCircle2, label: '完成', tone: 'text-green-deep' },
+    // 讲义驱动判分的三档裁决（自由作答，无选择题式对错）
+    correct: { icon: CheckCircle2, label: '答对了', tone: 'text-green-deep' },
+    partial: { icon: ArrowDownCircle, label: '部分正确', tone: 'text-yellow-deep' },
+    incorrect: { icon: XCircle, label: '还没到位', tone: 'text-red-deep' },
+  };
 
 /** 讲义出题轮 → 复用 TurnCard 的 TutorTurn 形态（options 空 = 自由作答）。 */
 function askToTurn(t: LectureTutorTurn, sceneTitle: string): TutorTurn {
@@ -82,7 +82,9 @@ function askToTurn(t: LectureTutorTurn, sceneTitle: string): TutorTurn {
 
 /** 讲义判分轮 → TurnCard 形态：verdict 直接当决策类型，降维解释带讲义原句引用。 */
 function verdictToTurn(t: LectureTutorTurn, sceneTitle: string): TutorTurn {
-  const text = [t.explanation, t.quote ? `讲义原句：「${t.quote}」` : ''].filter(Boolean).join('\n');
+  const text = [t.explanation, t.quote ? `讲义原句：「${t.quote}」` : '']
+    .filter(Boolean)
+    .join('\n');
   return {
     decision: { type: t.verdict || 'partial', because: t.because ?? [] },
     question: null,
@@ -97,9 +99,14 @@ function verdictToTurn(t: LectureTutorTurn, sceneTitle: string): TutorTurn {
 }
 
 /** 画像读取：推荐难度 + 本节概念的历史掌握度（写回口径见下方判分分支）。 */
-function readProfile(concept: string): { recommendedDifficulty?: string; priorMastery?: number } {
+function readProfile(
+  concept: string,
+  domain: string,
+): { recommendedDifficulty?: string; priorMastery?: number } {
+  if (!domain) return {};
   try {
-    const stored = JSON.parse(localStorage.getItem('learnerProfile') ?? 'null');
+    const raw = JSON.parse(localStorage.getItem('learnerProfile') ?? 'null');
+    const stored = raw ? projectProfileToDomain(raw, domain) : null;
     const m = stored?.conceptMastery?.[concept];
     return {
       recommendedDifficulty:
@@ -125,12 +132,18 @@ const HINT_LEVELS = [
 
 export function TutorPanel({ currentSceneId }: { currentSceneId?: string | null }) {
   const scenes = useStageStore((s) => s.scenes);
+  const stageId = useStageStore((s) => s.stage?.id ?? '');
   const courseTitle = useStageStore((s) => s.stage?.name ?? '');
+  const courseDomain = useStageStore(
+    (s) => s.stage?.origin?.corpus?.trim() || s.stage?.origin?.domain?.trim() || '',
+  );
   const [status, setStatus] = useState<Status>('checking');
   const [entries, setEntries] = useState<Entry[]>([]);
   // 多轮状态：已判分交互（每轮全量回传给无状态引擎）、待答的问题与判分要点、作答草稿
   const historyRef = useRef<LectureExchange[]>([]);
-  const [lectureQA, setLectureQA] = useState<{ question: string; expectedPoints: string[] } | null>(null);
+  const [lectureQA, setLectureQA] = useState<{ question: string; expectedPoints: string[] } | null>(
+    null,
+  );
   const [answerDraft, setAnswerDraft] = useState('');
   const [unavailable, setUnavailable] = useState<string | null>(null);
   /**
@@ -155,13 +168,15 @@ export function TutorPanel({ currentSceneId }: { currentSceneId?: string | null 
     const own = sceneLectureText(currentScene);
     if (own) return own;
     const idx = scenes.findIndex((s) => s.id === currentSceneId);
-    return (idx > 0 ? scenes.slice(0, idx) : scenes)
-      .map((s) => sceneLectureText(s))
-      .filter(Boolean)
-      .join('\n')
-      // 取尾是有意的：多屏历史里最靠近当前屏的一段最相关（单屏路径在
-      // sceneLectureText 里取头）。常量真源见 lib/classroom/lecture-text.ts。
-      .slice(-LECTURE_TEXT_CAP);
+    return (
+      (idx > 0 ? scenes.slice(0, idx) : scenes)
+        .map((s) => sceneLectureText(s))
+        .filter(Boolean)
+        .join('\n')
+        // 取尾是有意的：多屏历史里最靠近当前屏的一段最相关（单屏路径在
+        // sceneLectureText 里取头）。常量真源见 lib/classroom/lecture-text.ts。
+        .slice(-LECTURE_TEXT_CAP)
+    );
   }, [currentScene, scenes, currentSceneId]);
   const sceneTitle = currentScene?.title ?? '';
 
@@ -195,7 +210,7 @@ export function TutorPanel({ currentSceneId }: { currentSceneId?: string | null 
       qa?: { question: string; expectedPoints: string[] },
     ): Promise<LectureTutorTurn['mode'] | 'error'> => {
       setStatus('loading');
-      const profile = readProfile(sceneTitle);
+      const profile = readProfile(sceneTitle, courseDomain);
       try {
         const res = await fetch('/api/tutor', {
           method: 'POST',
@@ -262,21 +277,16 @@ export function TutorPanel({ currentSceneId }: { currentSceneId?: string | null 
         // 落 per-kc 不是降级。
         void (async () => {
           try {
-            const { appendEvidence, evidenceFor, readLedger, LEGACY_DOMAIN } = await import(
-              '@/lib/evidence'
-            );
+            const { appendEvidence, evidenceFor, readLedger } = await import('@/lib/evidence');
             const { tutorEvidenceDraft } = await import('@/lib/evidence/from-tutor');
             const { getLearnerKey } = await import('@/lib/runtime/learner-key');
-            const { learnerDomain, refreshDerivedProfile } = await import(
-              '@/lib/evidence/profile-bridge'
-            );
+            const { courseDomain, refreshDerivedProfile } =
+              await import('@/lib/evidence/profile-bridge');
             const learnerKey = await getLearnerKey();
             const concept = (turn.profile_evidence?.concept || sceneTitle || '').trim();
             if (!concept) return;
-            // 领域与 quiz 那条同源：画像里录的 domain。取不到时兜到 LEGACY_DOMAIN，
-            // 和 2026-08-13 之前写死 'ai' 的旧证据归进同一个桶。
-            const domain = learnerDomain();
-            const measured = { kind: 'concept' as const, domain: domain ?? LEGACY_DOMAIN, concept };
+            const domain = await courseDomain(stageId);
+            const measured = { kind: 'concept' as const, domain, concept };
             const ledger = await readLedger({ learnerKey });
             const prior = evidenceFor(ledger, measured);
             const lastAt = prior.at(-1)?.source.at;
@@ -285,7 +295,7 @@ export function TutorPanel({ currentSceneId }: { currentSceneId?: string | null 
               interactionId: `tutor:${currentSceneId ?? 'unknown'}:${historyRef.current.length}`,
               sceneId: currentSceneId ?? '',
               sceneTitle,
-              ...(domain ? { domain } : {}),
+              domain,
               turn,
               at: new Date().toISOString(),
               priorEncounters: prior.length,
@@ -293,7 +303,7 @@ export function TutorPanel({ currentSceneId }: { currentSceneId?: string | null 
             });
             if (draft) await appendEvidence(draft, { learnerKey });
             // 画像 = fold(履历)：写完证据立刻重算。幂等，跑几次都一样。
-            await refreshDerivedProfile({ learnerKey });
+            await refreshDerivedProfile({ learnerKey }, domain);
           } catch (error) {
             // 履历写失败不拦导学——这一轮的判分卡已经渲染了，只是少记一条轨迹。
             log.warn('Failed to append tutor evidence:', error);
@@ -305,7 +315,7 @@ export function TutorPanel({ currentSceneId }: { currentSceneId?: string | null 
         return 'error';
       }
     },
-    [lectureText, sceneTitle, courseTitle],
+    [lectureText, sceneTitle, courseTitle, currentSceneId, stageId, courseDomain],
   );
 
   /**
@@ -319,7 +329,7 @@ export function TutorPanel({ currentSceneId }: { currentSceneId?: string | null 
     async (level: number) => {
       if (!lectureQA) return;
       setStatus('loading');
-      const profile = readProfile(sceneTitle);
+      const profile = readProfile(sceneTitle, courseDomain);
       try {
         const res = await fetch('/api/tutor', {
           method: 'POST',
@@ -351,7 +361,7 @@ export function TutorPanel({ currentSceneId }: { currentSceneId?: string | null 
         setStatus('active');
       }
     },
-    [lectureQA, lectureText, sceneTitle, courseTitle],
+    [lectureQA, lectureText, sceneTitle, courseTitle, courseDomain],
   );
 
   const handleStart = useCallback(() => {
@@ -389,16 +399,13 @@ export function TutorPanel({ currentSceneId }: { currentSceneId?: string | null 
       // 掉出 1.4.3 AA 的 4.5:1——恰恰是出问题时最需要读清楚的那句话。
       // 离线的语义交给灰度头像和禁用按钮表达，文字本身不再压暗。
       <div className="h-full flex flex-col items-center justify-center text-center p-6">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={AGENT_ART.tutor.bust}
           alt={`${AGENT_PERSONAS.tutor.name}（${AGENT_PERSONAS.tutor.role}）`}
           className="mb-3 size-12 rounded-full object-cover grayscale opacity-60"
         />
         <p className="text-sm font-medium text-foreground">导学服务未连接</p>
-        <p className="text-xs text-muted-foreground mt-1">
-          需要多智能体引擎在线才能发起导师追问
-        </p>
+        <p className="text-xs text-muted-foreground mt-1">需要多智能体引擎在线才能发起导师追问</p>
         <button
           type="button"
           disabled
@@ -415,7 +422,6 @@ export function TutorPanel({ currentSceneId }: { currentSceneId?: string | null 
       {/* 发起区 */}
       {entries.length === 0 ? (
         <div className="flex flex-col items-center text-center p-4 gap-3">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={AGENT_ART.tutor.full ?? AGENT_ART.tutor.bust}
             alt={`${AGENT_PERSONAS.tutor.name}（${AGENT_PERSONAS.tutor.role}）`}
@@ -427,7 +433,9 @@ export function TutorPanel({ currentSceneId }: { currentSceneId?: string | null 
           <p className="text-sm text-muted-foreground">
             不是你问导师，是导师考你：主动提问定位盲区，答错降维追问，连对进阶挑战。
           </p>
-          {unavailable && <p className="text-xs text-yellow-deep">导学探问不可用（{unavailable}）</p>}
+          {unavailable && (
+            <p className="text-xs text-yellow-deep">导学探问不可用（{unavailable}）</p>
+          )}
           <p className="w-full rounded-lg border border-border px-2 py-1.5 text-xs text-muted-foreground text-left">
             {lectureText
               ? `考核范围：当前讲义节「${sceneTitle || '未命名'}」——题目现场从讲义正文生成`
@@ -579,7 +587,6 @@ function TurnCard({ turn }: { turn: TutorTurn }) {
     /* 导学裁决卡属 AI 生成内容：blue-soft 底标识（规格3.2.7⑦③） */
     <div className="rounded-xl border border-blue-deep/20 px-3 py-2.5 space-y-2 bg-blue-soft/60">
       <div className="flex items-center gap-2">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={AGENT_ART.tutor.bust}
           alt={AGENT_PERSONAS.tutor.name}
@@ -633,7 +640,8 @@ function TurnCard({ turn }: { turn: TutorTurn }) {
               : turn.question.engine === 'llm'
                 ? '苏格拉底改写'
                 : '题库原文'}
-            {turn.question.source_ids.length > 0 && ` · 来源：${turn.question.source_ids.join('、')}`}
+            {turn.question.source_ids.length > 0 &&
+              ` · 来源：${turn.question.source_ids.join('、')}`}
           </p>
         </div>
       )}

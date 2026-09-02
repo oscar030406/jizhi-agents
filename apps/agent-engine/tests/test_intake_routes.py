@@ -101,6 +101,39 @@ def test_token_required(client):
     assert resp.status_code == 401
 
 
+def test_corpus_owner_api_uses_engine_identity_and_internal_token(client, monkeypatch, tmp_path):
+    c, _ = client
+    root = tmp_path / "corpora"
+    marker = root / "probe" / intake_routes.domain_intake.CORPUS_OWNER_MARKER
+    marker.parent.mkdir(parents=True)
+    marker.write_text("org-a\n", encoding="utf-8")
+    monkeypatch.setattr(intake_routes.domain_intake, "CORPORA_DIR", root)
+
+    assert c.get("/api/domain-intake/corpus-owners").status_code == 401
+    headers = {"x-internal-token": "probe-token"}
+    assert c.get("/api/domain-intake/corpus-owners", headers=headers).json() == {
+        "ownership": {"probe": "org-a"}
+    }
+
+    denied = c.delete(
+        "/api/domain-intake/corpus-owners/probe",
+        headers={**headers, "x-jizhi-owner-org": "org-b"},
+    )
+    assert denied.status_code == 403
+    assert marker.read_text(encoding="utf-8").strip() == "org-a"
+
+    released = c.delete(
+        "/api/domain-intake/corpus-owners/probe",
+        headers={**headers, "x-jizhi-owner-org": "org-a"},
+    )
+    assert released.status_code == 200
+    assert not marker.exists()
+    assert c.delete(
+        "/api/domain-intake/corpus-owners/probe",
+        headers={**headers, "x-jizhi-owner-org": "org-a"},
+    ).status_code == 404
+
+
 def test_proxy_corpus_header_must_match_form(client):
     c, seen = client
     resp = c.post(
@@ -115,6 +148,36 @@ def test_proxy_corpus_header_must_match_form(client):
     assert resp.status_code == 400
     assert "归属" in resp.json()["detail"]
     assert "kind" not in seen
+
+
+def test_private_proxy_request_without_owner_org_is_rejected_before_run_creation(client):
+    c, seen = client
+    response = c.post(
+        "/api/domain-intake/runs",
+        headers={
+            "x-internal-token": "probe-token",
+            "x-jizhi-corpus": "private-probe",
+        },
+        files=[("files", ("a.md", b"# t", "text/markdown"))],
+        data={"corpus": "private-probe"},
+    )
+
+    assert response.status_code == 400
+    assert "机构归属" in response.json()["detail"]
+    assert "kind" not in seen
+
+
+def test_capacity_rejection_is_explicit_http_429(client, monkeypatch):
+    c, _seen = client
+
+    def reject(_run):
+        raise intake_routes.domain_intake.IntakeCapacityError("全局接入任务已达上限 3")
+
+    monkeypatch.setattr(intake_routes.domain_intake, "start_run", reject)
+    response = _post(c, {"corpus": "probe"})
+
+    assert response.status_code == 429
+    assert "全局接入任务已达上限" in response.json()["detail"]
 
 
 def test_tier_definitions_land_in_run_options(client):

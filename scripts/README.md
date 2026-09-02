@@ -35,9 +35,6 @@ python scripts/audit_outward_numbers.py      # 对外数字位对账
 
 - **`.pptx` 默认不扫**。`audit_outward_numbers.py --pptx` 能扫（解压读 slide XML），
   但慢、且图表数据点会被当数字误报，所以要显式开。改完 PPT 记得单独跑一次。
-- **`apps/classroom/public/skill-map.json` 一个脚本都不扫**。那是 `/skills`
-  公开页的构建期快照，197 个数值字段是市场数据，与实验指标无交叉引用。
-  **但它确实缺过期检测**——语料重建后里面的块数会失真。这一条记在下批清单里。
 - **口径注记齐不齐，脚本判不了**。`audit_outward_numbers.py` 只清点冻结指标
   出现在几处，「这句话算不算把口径写清了」得人看。
 

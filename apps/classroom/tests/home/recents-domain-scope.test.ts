@@ -28,10 +28,8 @@ describe('最近学习的域归属判据', () => {
     }
   });
 
-  it('归属表里没有的课算可见——刚生成的课不该凭空消失', () => {
-    // 归属表是异步推导的，新课有一段时间不在表里。
-    // 宁可多显示一门，也不要让学习者刚造好的课在首页找不到。
-    expect(belongsToDomain('just-created', 'smart-manufacturing', DOMAINS)).toBe(true);
+  it('归属表里没有的课不放进学习者视图', () => {
+    expect(belongsToDomain('just-created', 'smart-manufacturing', DOMAINS)).toBe(false);
   });
 
   it('corpus 与 domain 两种键都认', () => {

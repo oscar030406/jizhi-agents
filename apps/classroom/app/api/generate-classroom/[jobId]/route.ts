@@ -6,6 +6,7 @@ import {
   isValidClassroomJobId,
   readClassroomGenerationJob,
 } from '@/lib/server/classroom-job-store';
+import { authorizeInternalCorpusService } from '@/lib/server/corpus-access';
 import { buildRequestOrigin } from '@/lib/server/classroom-storage';
 import { createLogger } from '@/lib/logger';
 
@@ -23,9 +24,26 @@ export async function GET(req: NextRequest, context: { params: Promise<{ jobId: 
       return apiError('INVALID_REQUEST', 400, 'Invalid classroom generation job id');
     }
 
+    const serviceAccess = await authorizeInternalCorpusService(
+      req,
+      req.headers.get('x-jizhi-service-corpus')?.trim() ?? '',
+    );
+    if (serviceAccess.attempted && !serviceAccess.ok) return serviceAccess.response;
+
     const job = await readClassroomGenerationJob(jobId);
-    if (
-      !job ||
+    if (!job) {
+      return apiError('INVALID_REQUEST', 404, 'Classroom generation job not found');
+    }
+    if (serviceAccess.attempted) {
+      if (
+        !job.ownerOrgId ||
+        job.ownerOrgId !== serviceAccess.orgId ||
+        job.corpus !== serviceAccess.corpus
+      ) {
+        return apiError('UNAUTHORIZED', 403, '内部服务无权访问该造课任务。');
+      }
+    } else if (
+      job.ownerOrgId ||
       (job.ownerAccountId &&
         (await accountForSession(req.cookies.get(SESSION_COOKIE)?.value))?.id !==
           job.ownerAccountId)

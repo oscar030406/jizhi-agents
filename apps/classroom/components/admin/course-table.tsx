@@ -22,12 +22,13 @@ function VerdictBar({ verdicts }: { readonly verdicts: CourseAudit['verdicts'] }
   const total = Object.values(verdicts).reduce((a, b) => a + b, 0);
   if (!total) return <span className="text-[10px] text-muted-foreground">未审</span>;
   return (
-    <span className="flex h-1.5 w-24 overflow-hidden rounded-full bg-muted" title={
-      Object.entries(verdicts)
+    <span
+      className="flex h-1.5 w-24 overflow-hidden rounded-full bg-muted"
+      title={Object.entries(verdicts)
         .filter(([, n]) => n > 0)
         .map(([k, n]) => `${VERDICT_STYLE[k]?.label ?? k} ${n}`)
-        .join(' · ')
-    }>
+        .join(' · ')}
+    >
       {Object.entries(verdicts).map(([k, n]) =>
         n > 0 ? (
           <span
@@ -53,8 +54,8 @@ function GeneratedCell({ course }: { readonly course: CourseAudit }) {
     <span
       title={
         n > 0
-          ? `墙钟 ${mins} 分；这段时间另有 ${n} 个生成任务在跑，时长被并发抬高，不能当单课成本读`
-          : `墙钟 ${mins} 分；独占运行`
+          ? `实际经过 ${mins} 分；同期另有 ${n} 个生成任务，不能当作单门课程独占耗时`
+          : `实际经过 ${mins} 分；本次没有其他生成任务重叠`
       }
     >
       {mins} 分
@@ -116,39 +117,49 @@ export function AdminCourseTable({
             // 那正是 08-13 那次两个数字打架的成因。
             const cov = coverage.find((r) => r.courseId === c.id);
             return (
-            <tr key={c.id} className="border-b border-border/60 last:border-0 hover:bg-accent/50 transition-colors">
-              <td className="px-5 py-3.5">
-                <Link href={`/admin/course/${c.id}`} className="font-medium hover:text-purple-600 transition-colors">
-                  {c.title}
-                </Link>
-              </td>
-              <td className="px-3 py-3.5 tabular-nums text-muted-foreground whitespace-nowrap">
-                {c.auditedScenes}/{c.sceneCount}
-              </td>
-              <td className="px-3 py-3.5">
-                <VerdictBar verdicts={c.verdicts} />
-              </td>
-              <td className="px-3 py-3.5 text-right tabular-nums">{c.claims}</td>
-              <td className="px-3 py-3.5 text-right tabular-nums font-medium">{c.incorrect}</td>
-              <td className="px-3 py-3.5 text-right tabular-nums text-muted-foreground">{c.uncertain}</td>
-              <td className="px-3 py-3.5 text-right tabular-nums text-muted-foreground">{c.sources}</td>
-              <td
-                className="px-3 py-3.5 text-right tabular-nums text-muted-foreground"
-                title={
-                  cov
-                    ? `金标 ${cov.topic}：${Math.round(cov.coverage * cov.total)}/${cov.total} 个知识点`
-                    : '这门课没有金标知识点清单，覆盖率没测过——不补 0 也不补估计值'
-                }
+              <tr
+                key={c.id}
+                className="border-b border-border/60 last:border-0 hover:bg-accent/50 transition-colors"
               >
-                {cov ? `${(cov.coverage * 100).toFixed(0)}%` : '—'}
-              </td>
-              <td className="px-3 py-3.5 text-right tabular-nums text-muted-foreground whitespace-nowrap">
-                {c.durationMs ? `${Math.round(c.durationMs / 60000)} 分` : '—'}
-              </td>
-              <td className="px-3 py-3.5 text-right tabular-nums text-muted-foreground whitespace-nowrap">
-                <GeneratedCell course={c} />
-              </td>
-            </tr>
+                <td className="px-5 py-3.5">
+                  <Link
+                    href={`/admin/course/${c.id}`}
+                    className="font-medium hover:text-purple-600 transition-colors"
+                  >
+                    {c.title}
+                  </Link>
+                </td>
+                <td className="px-3 py-3.5 tabular-nums text-muted-foreground whitespace-nowrap">
+                  {c.auditedScenes}/{c.sceneCount}
+                </td>
+                <td className="px-3 py-3.5">
+                  <VerdictBar verdicts={c.verdicts} />
+                </td>
+                <td className="px-3 py-3.5 text-right tabular-nums">{c.claims}</td>
+                <td className="px-3 py-3.5 text-right tabular-nums font-medium">{c.incorrect}</td>
+                <td className="px-3 py-3.5 text-right tabular-nums text-muted-foreground">
+                  {c.uncertain}
+                </td>
+                <td className="px-3 py-3.5 text-right tabular-nums text-muted-foreground">
+                  {c.sources}
+                </td>
+                <td
+                  className="px-3 py-3.5 text-right tabular-nums text-muted-foreground"
+                  title={
+                    cov
+                      ? `金标 ${cov.topic}：${Math.round(cov.coverage * cov.total)}/${cov.total} 个知识点`
+                      : '这门课没有金标知识点清单，覆盖率没测过——不补 0 也不补估计值'
+                  }
+                >
+                  {cov ? `${(cov.coverage * 100).toFixed(0)}%` : '—'}
+                </td>
+                <td className="px-3 py-3.5 text-right tabular-nums text-muted-foreground whitespace-nowrap">
+                  {c.durationMs ? `${Math.round(c.durationMs / 60000)} 分` : '—'}
+                </td>
+                <td className="px-3 py-3.5 text-right tabular-nums text-muted-foreground whitespace-nowrap">
+                  <GeneratedCell course={c} />
+                </td>
+              </tr>
             );
           })}
         </tbody>

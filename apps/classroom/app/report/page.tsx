@@ -36,7 +36,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { EmptyState } from '@/components/ui/empty-state';
 import { SiteHeader } from '@/components/site-header';
 import { EvidenceTrajectoryChart } from '@/components/report/evidence-trajectory-chart';
-import { orderByPrereq, prereqGraphFor } from '@/lib/generation/prereq-graph';
+import { PathOrDomainCard } from '@/components/home/learning-overview';
 import {
   CONFIDENCE_FLOOR,
   MASTERY_GATE,
@@ -51,23 +51,13 @@ import { measuredKey, type Evidence } from '@/lib/evidence/types';
 import { inferKnowledgeType, qualitativePassed, replayRepetition } from '@/lib/evidence/spaced';
 import { readMistakes, type MistakeEntry } from '@/lib/evidence/mistake-bank';
 import { parseTier, rankRepractice } from '@/lib/quiz/item-selection';
-import { learnerDomain } from '@/lib/evidence/profile-bridge';
 import { belongsToDomain } from '@/lib/knowledge/use-course-domains';
-import { LEGACY_DOMAIN } from '@/lib/evidence/types';
 import { applyEffectiveDomain, type EffectiveDomainContext } from '@/lib/knowledge/domain-context';
+import { useAccountProfile } from '@/lib/knowledge/account-profile';
 import {
   loadEffectiveDomainContext,
   type EffectiveDomainContextState,
 } from '@/lib/knowledge/use-domain-context';
-import {
-  knowledgeState,
-  prereqClosure,
-  rankNext,
-  reviewCandidates,
-  TARGET_SUCCESS_MAX,
-  TARGET_SUCCESS_MIN,
-  unmetPrereqs,
-} from '@/lib/generation/selection';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { useStageStore } from '@/lib/store/stage';
@@ -132,20 +122,46 @@ const EDUCATION_LABEL: Record<string, string> = {
 
 const PROFILE_STORAGE_KEY = 'learnerProfile';
 
+type ReportProfile = LearnerProfileFields & {
+  conceptMasteryByDomain?: Record<string, Record<string, number>>;
+  conceptConfidenceByDomain?: Record<string, Record<string, number>>;
+  conceptRecallByDomain?: Record<string, Record<string, number>>;
+};
+
 /**
  * Read the profile the user actually stored. Returns null when nothing was ever
  * saved — the page must not silently substitute DEFAULT_LEARNER_PROFILE and
  * present the result as "your" diagnosis.
  */
-function readStoredProfile(): LearnerProfileFields | null {
+function readStoredProfile(): ReportProfile | null {
   if (typeof window === 'undefined') return null;
   try {
     const raw = window.localStorage.getItem(PROFILE_STORAGE_KEY);
     if (!raw) return null;
-    return { ...DEFAULT_LEARNER_PROFILE, ...(JSON.parse(raw) as LearnerProfileFields) };
+    return { ...DEFAULT_LEARNER_PROFILE, ...(JSON.parse(raw) as ReportProfile) };
   } catch {
     return null;
   }
+}
+
+/**
+ * 报告只消费当前有效领域的三张画像缓存。旧扁平表不带领域，无法证明归属；即使当前域
+ * 是 AI 也不能拿它兜底，否则同名概念仍会把另一领域的历史值带进来。
+ */
+function profileForDomain(
+  profile: ReportProfile | null,
+  domain: string | null,
+): ReportProfile | null {
+  if (!profile || !domain) return null;
+  const masteryByDomain = profile.conceptMasteryByDomain;
+  if (!masteryByDomain || !Object.prototype.hasOwnProperty.call(masteryByDomain, domain))
+    return null;
+  return {
+    ...profile,
+    conceptMastery: masteryByDomain[domain] ?? {},
+    conceptConfidence: profile.conceptConfidenceByDomain?.[domain] ?? {},
+    conceptRecall: profile.conceptRecallByDomain?.[domain] ?? {},
+  };
 }
 
 /**
@@ -524,9 +540,8 @@ function BlindSpotChart({ bp }: { bp: LearnerBlueprint }) {
 }
 
 /**
- * 实测掌握度（quiz 动态层）。与上面引擎推断的 mastery_vector 不同源：这里是
- * quiz-decision 写回 localStorage 的逐概念 EMA 分（键=场景标题），是答出来的，
- * 不是画像推出来的。引擎离线时它照样能画——数据在本机。
+ * 实测掌握度（证据动态层）。与上面引擎推断的 mastery_vector 不同源：这里是
+ * 当前有效领域的证据账本经 fold 导出的 estimate 缓存，是答出来的，不是引擎推断的。
  */
 /**
  * 到期复习与下一步（掌握策略层）。与上面两块不同源：这里消费的是证据折叠出的
@@ -535,13 +550,21 @@ function BlindSpotChart({ bp }: { bp: LearnerBlueprint }) {
  * 旧画像没有置信表时按 0 处理，所以这块可能显示「没有已掌握项」——那是
  * 诚实结论（证据不足），不是数据丢了。
  */
-function ReviewNextBlock({ profile }: { profile: LearnerProfileFields | null }) {
+function ReviewNextBlock({
+  profile,
+  domain,
+}: {
+  profile: LearnerProfileFields | null;
+  domain: string;
+}) {
   // 错题置顶的原料：最近一次判定失分的测项。从账本读最新一条证据的 outcome，
-  // 与轨迹图同源；账本读失败不拦渲染——没有错题信息时排序退回纯 recall。
+  // 与轨迹图同源；账本读失败时显式未覆盖，不拿其它领域或旧扁平画像补排序依据。
   const [errorProne, setErrorProne] = useState<ReadonlySet<string>>(new Set());
   const [errorKind, setErrorKind] = useState<ReadonlyMap<string, string>>(new Map());
   const [qualitative, setQualitative] = useState<ReadonlySet<string>>(new Set());
   const [plan, setPlan] = useState<ReadonlyMap<string, number>>(new Map());
+  const [ledgerState, setLedgerState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [renderedAt] = useState(Date.now);
   useEffect(() => {
     let alive = true;
     readLedger()
@@ -549,6 +572,7 @@ function ReviewNextBlock({ profile }: { profile: LearnerProfileFields | null }) 
         if (!alive) return;
         const byKey = new Map<string, Evidence[]>();
         for (const e of history(ledger)) {
+          if (e.measured.kind !== 'concept' || e.measured.domain !== domain) continue;
           // 键必须与画像缓存三张表同形——那边是**裸概念名**（profile-bridge:
           // `key = m.measured.concept`）。此前用带命名空间的 measuredKey，
           // errorProne.has() 永远假，错题置顶与错因提示全哑（验收实测抓到）。
@@ -576,12 +600,26 @@ function ReviewNextBlock({ profile }: { profile: LearnerProfileFields | null }) 
         setErrorKind(new Map(bad.filter(([, t]) => t).map(([k, t]) => [k, t!])));
         setQualitative(passed);
         setPlan(nextAt);
+        setLedgerState('ready');
       })
-      .catch(() => {});
+      .catch(() => {
+        if (alive) setLedgerState('error');
+      });
     return () => {
       alive = false;
     };
-  }, []);
+  }, [domain]);
+  if (ledgerState === 'loading') {
+    return <p className="text-xs text-muted-foreground">正在读取当前领域的证据账本…</p>;
+  }
+  if (ledgerState === 'error') {
+    return (
+      <p className="rounded-md border border-dashed border-border/70 p-2.5 text-xs leading-relaxed text-muted-foreground">
+        <span className="font-medium text-foreground">当前领域的复习证据未覆盖：</span>
+        证据账本暂时无法读取；没有回退到全域历史或旧扁平画像。
+      </p>
+    );
+  }
   const snapshots = snapshotsFromProfile(profile ?? {});
   if (Object.keys(snapshots).length === 0) return null;
   const opts = { errorProne, qualitative };
@@ -598,7 +636,7 @@ function ReviewNextBlock({ profile }: { profile: LearnerProfileFields | null }) 
     .sort((a, b) => a.at - b.at)
     .slice(0, 5);
   const fmtDue = (at: number): string => {
-    const days = Math.ceil((at - Date.now()) / (24 * 60 * 60 * 1000));
+    const days = Math.ceil((at - renderedAt) / (24 * 60 * 60 * 1000));
     return days <= 0 ? '已到期' : `${days} 天后`;
   };
   // 错因分型（DeepTutor 粗分提炼）指补救方向：空答=不会→重讲；答错=会用错→订正练习。
@@ -683,15 +721,13 @@ function MistakeBankBlock({
   domain,
 }: {
   profile: LearnerProfileFields | null;
-  domain?: string | null;
+  domain: string;
 }) {
   const [mistakes, setMistakes] = useState<MistakeEntry[]>([]);
   /* eslint-disable react-hooks/set-state-in-effect -- localStorage 错题需在有效领域变化后重新分桶 */
   useEffect(() => {
-    // 按当前画像域过滤（联动清单 C2：换库后两个知识库的错题不许混排）。
-    // 老记录没有 domain 字段：归入 LEGACY_DOMAIN（ai）桶——与证据层同一兜底口径。
-    const current = domain ?? learnerDomain() ?? LEGACY_DOMAIN;
-    setMistakes(readMistakes().filter((m) => (m.domain ?? LEGACY_DOMAIN) === current));
+    // 没写领域的旧错题无法证明归属，不能猜成 AI；只展示与当前有效领域严格相等的记录。
+    setMistakes(readMistakes().filter((m) => m.domain === domain));
   }, [domain]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
@@ -706,7 +742,7 @@ function MistakeBankBlock({
    * 空答排在答错之后不是 MFI 带来的，是既有判据（`lib/quiz/grading.ts`）：
    * 空答是「不知道」该降档重讲，答了但错是「会用错」才该加练订正。
    *
-   * 能力用画像的 `conceptMastery` **整体均值**，不按题目主题取。
+   * 能力用当前有效领域画像的 `conceptMastery` **整体均值**，不按题目主题取。
    * 理由是键空间不可靠——这张表的键是概念名，跨域同名会撞、与错题的主题也对不上
    * （学情报告的下一步面板里记着同一件事：不要拿它当主题级判据用）。
    * 取均值是把它当「这个人现在大概什么水平」用，这一层它站得住。
@@ -782,8 +818,8 @@ function QuizMasteryBlock({ profile }: { profile: LearnerProfileFields | null })
     return (
       <p className="rounded-md border border-dashed border-border/70 p-2.5 text-xs leading-relaxed text-muted-foreground">
         <span className="font-medium text-foreground">实测盲区（来自测验）：</span>
-        暂无数据——完成课程中的测验后生成。每次交卷，该场景主题的掌握度会以 EMA 累积写回画像，低于
-        0.6 的主题在此突出显示。
+        暂无数据——完成当前领域课程中的测验后生成。证据账本会按领域折叠出掌握度，低于 0.6
+        的主题在此突出显示。
       </p>
     );
   }
@@ -792,7 +828,7 @@ function QuizMasteryBlock({ profile }: { profile: LearnerProfileFields | null })
     <div className="space-y-2 rounded-md border border-border/70 p-2.5">
       <p className="text-xs leading-relaxed text-muted-foreground">
         <span className="font-medium text-foreground">实测盲区（来自测验）：</span>
-        以下掌握度来自当前账户测验成绩的 EMA 累积（quiz-decision 写回），与上图引擎推断值不同源。
+        以下掌握度来自当前有效领域的证据账本折叠结果，与上图引擎推断值不同源。
         {weak.length > 0
           ? `低于 0.6 的 ${weak.length} 个主题为实测薄弱点。`
           : '当前没有低于 0.6 的主题。'}
@@ -1199,191 +1235,6 @@ function DifficultyCurveChart({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 下一步先学什么 —— 选点算法的唯一生产调用点
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * 把 `lib/generation/selection.ts` 接到真实数据上：图纸 §5.3/§6.1 那套（outer fringe
- * 硬约束、目标成功率 0.75–0.85、ALEKS layer、inner fringe 复习候选）此前只有单测，
- * 一个生产调用点都没有——「材料里能讲、代码里没路径走到」是最难被问穿的那种缺口。
- *
- * 数据来源两条，都是页面上已有的：
- * - 前置图 `lib/generation/data/prereq-graph.json`（模型从教材抽、未经人工确认）；
- * - 掌握度 `bp.mastery_vector`（引擎推断，键与前置图同一套 id）。
- *   **不用 `profile.conceptMastery`**——那份的键是场景标题，与前置图不同源，接错了会
- *   静默算出一份看似合理的排序。
- *
- * 这个面板不改 `LearningPathChart` 的节点顺序（那条是拓扑序，管的是「别让人撞墙」），
- * 它回答的是另一个问题：**这份缺口清单本身够不够学**。两者结论不一样时以这里为准，
- * 因为拓扑序只在缺口清单内部排，图上必经但清单没列的点它看不见。
- */
-export function NextStepPanel({
-  bp,
-  gapConcepts,
-  domain,
-}: {
-  bp: LearnerBlueprint;
-  gapConcepts: string[];
-  domain?: string | null;
-}) {
-  // 按学习者画像取域，不焊死主域（2026-08-28 清查 M1）。没有图的域返回空图 →
-  // matched 为 0 → 面板不渲染，与下面的降级注释同一条路，不会拿错域的图硬排。
-  const graph = prereqGraphFor(domain ?? learnerDomain() ?? LEGACY_DOMAIN);
-  const inGraph = new Set(graph.items);
-  const matched = gapConcepts.filter((c) => inGraph.has(c));
-  // 一个缺口都不在图的词表内时不渲染：那时所有结论都退化成「不可达」，
-  // 显示出来只会让人以为学习者一个点都学不了。降级提示由下面的「节点顺序」那段负责。
-  if (matched.length === 0) return null;
-
-  const mastery = bp.mastery_vector ?? {};
-  const known = knowledgeState(mastery);
-  const picks = rankNext(graph, mastery, { candidates: matched });
-  const ready = picks.filter((p) => p.layer === 1);
-  const blocked = picks.filter((p) => p.layer !== 1);
-  const gapSet = new Set(matched);
-  const offList = prereqClosure(graph, matched, known).filter((c) => !gapSet.has(c));
-  const review = reviewCandidates(graph, known);
-  // 冷启动时所有没学过的点预测正确率都等于猜对率，首排序键在候选之间毫无区分度。
-  // 这是 predictedCorrect 的已知性质，不是 bug——但不说出来，读者会以为排序是它排的。
-  const bandTie =
-    picks.length > 1 && picks.every((p) => Math.abs(p.bandDistance - picks[0].bandDistance) < 1e-9);
-
-  const pct = (n: number) => `${Math.round(n * 100)}%`;
-
-  return (
-    <div className="space-y-2.5 rounded-lg border border-border/70 p-3.5">
-      <h4 className="text-sm font-medium">下一步先学什么</h4>
-
-      {ready.length > 0 ? (
-        <ol className="space-y-1.5">
-          {ready.map((p, i) => (
-            <li key={p.kc} className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm">
-              <span className="tabular-nums text-muted-foreground">{i + 1}.</span>
-              <span className="font-medium">{conceptLabel(p.kc)}</span>
-              <span className="text-xs text-muted-foreground">
-                预测正确率 {pct(p.predicted)}
-                {p.bandDistance === 0 ? '（落在目标带内）' : `，距目标带 ${pct(p.bandDistance)}`}
-                {p.unlocks > 0 ? ` · 解锁 ${p.unlocks} 个后续` : ''}
-              </span>
-            </li>
-          ))}
-        </ol>
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          缺口清单里没有一个点的前置是现在就满足的——要先补下面这些必经前置。
-        </p>
-      )}
-
-      {blocked.length > 0 && (
-        <div className="space-y-1 border-t border-border/60 pt-2">
-          <p className="text-xs font-medium text-muted-foreground">
-            还要先过前置（按距当前步数排）
-          </p>
-          <ul className="space-y-1 text-xs text-muted-foreground">
-            {blocked.map((p) => {
-              const need = unmetPrereqs(graph, p.kc, known);
-              return (
-                <li key={p.kc}>
-                  <span className="text-foreground">{conceptLabel(p.kc)}</span>
-                  {need.length > 0
-                    ? ` ← 还差${need.map(conceptLabel).join('、')}`
-                    : ' ← 前置在图上不可达（前置项不在词表内，或有环）'}
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      )}
-
-      {offList.length > 0 && (
-        <p className="rounded-md bg-muted/50 p-2.5 text-xs leading-relaxed text-muted-foreground">
-          <span className="font-medium text-foreground">缺口清单不自足：</span>
-          按前置图展开，学完这批缺口还必须经过{' '}
-          <span className="text-foreground">{offList.map(conceptLabel).join('、')}</span>
-          ，而引擎的缺口清单没有列出它们。两份数据不同源——缺口是按目标反推的差距，
-          前置关系是从教材抽的，对不齐属于预期内，这里把差集显式说出来而不是替引擎补上。
-        </p>
-      )}
-
-      {review.length > 0 && (
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          复习候选（刚学会、最容易忘的一层）：{review.map(conceptLabel).join('、')}。
-        </p>
-      )}
-
-      <Caliber summary="候选集与排序口径">
-        候选集 = 前置已满足的缺口；排序键依次为目标成功率 {pct(TARGET_SUCCESS_MIN)}–
-        {pct(TARGET_SUCCESS_MAX)}、距当前步数、解锁数。
-        {bandTie
-          ? ' 这批候选的预测正确率完全并列（都还没学过，预测值等于四选一的猜对率 25%），首排序键在此不起区分作用，实际顺序由「距当前几步」决定。'
-          : ' 预测正确率按 DINA 观测通道算（guess 0.25 / slip 0.1），越靠近目标带越优先。'}
-      </Caliber>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Chart 3 — 学习路径规划图
-// ─────────────────────────────────────────────────────────────────────────────
-
-function LearningPathChart({ bp, domain }: { bp: LearnerBlueprint; domain?: string | null }) {
-  const byPriority = [...(bp.blueprint?.skill_gaps ?? [])].sort(
-    (a, b) => (a.priority ?? 99) - (b.priority ?? 99) || b.gap - a.gap,
-  );
-  // priority 排的是「差距多大」，不是「能不能学」——一个前置没满足的概念排在最前，
-  // 学习者点进去就撞墙。用前置图再排一次拓扑序，同层保持 priority 序，
-  // 所以这是在原排序上加一层约束，不是换一套排序。
-  const ordering = orderByPrereq(
-    byPriority.map((g) => g.concept),
-    domain ?? learnerDomain() ?? LEGACY_DOMAIN,
-  );
-  const gapByConceptId = new Map(byPriority.map((g) => [g.concept, g] as const));
-  const gaps = ordering.concepts.map((c) => gapByConceptId.get(c)!).filter(Boolean);
-
-  if (gaps.length === 0) {
-    return (
-      <EmptyState
-        title="学情诊断未产出技能缺口"
-        hint="学情诊断认为当前画像下没有需要补齐的前置技能，因此没有待规划的路径节点。"
-      />
-    );
-  }
-
-  return (
-    <div className="space-y-3">
-      <NextStepPanel bp={bp} gapConcepts={gaps.map((g) => g.concept)} domain={domain} />
-
-      <Caliber summary="这份缺口清单的排序口径">
-        {ordering.usedGraph ? (
-          <>
-            先按概念前置图排拓扑序（{ordering.matched}/{gaps.length} 个概念在前置图词表内），
-            同层再按引擎缺口清单给的优先级。前置关系由模型从教材抽取、
-            <span className="font-medium text-foreground">尚未人工确认</span>
-            ，因此只影响推荐顺序，不拦学习顺序。
-          </>
-        ) : (
-          <>
-            取自引擎缺口清单给的优先级（同级按缺口从大到小）。
-            <span className="font-medium text-yellow-deep">
-              本领域没有前置图，节点顺序未经依赖关系校正。
-            </span>
-          </>
-        )}
-      </Caliber>
-
-      <div className="grid gap-1.5">
-        {gaps.map((g) => (
-          <p key={g.concept} className="text-xs leading-relaxed text-muted-foreground">
-            <span className="font-medium text-foreground">{conceptLabel(g.concept)}：</span>
-            {humanize(g.reason)}
-          </p>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Page
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1402,9 +1253,10 @@ type CourseState =
   | { kind: 'error'; message: string };
 
 export default function ReportPage() {
+  const accountProfileState = useAccountProfile<ReportProfile>(readStoredProfile);
   const [stages, setStages] = useState<StageListItem[] | null>(null);
   const [stageId, setStageId] = useState<string | null | undefined>(undefined);
-  const [profile, setProfile] = useState<LearnerProfileFields | null>(null);
+  const [profile, setProfile] = useState<ReportProfile | null>(null);
   const [domainContextState, setDomainContextState] = useState<EffectiveDomainContextState>({
     kind: 'loading',
   });
@@ -1420,9 +1272,17 @@ export default function ReportPage() {
   // Resolve the profile + which classroom to report on. `useSearchParams` would
   // force a Suspense boundary; the raw query string is the same information.
   useEffect(() => {
+    if (accountProfileState.kind === 'loading') return;
     let cancelled = false;
+    if (accountProfileState.kind === 'error') {
+      setDomainContextState({ kind: 'error', reason: accountProfileState.reason });
+      setProfile(null);
+      setStages([]);
+      setStageId(null);
+      return;
+    }
     (async () => {
-      const stored = readStoredProfile();
+      const stored = accountProfileState.profile;
       const [resolved, loadedStages] = await Promise.all([
         loadEffectiveDomainContext(stored),
         listStages().catch(() => [] as StageListItem[]),
@@ -1445,14 +1305,11 @@ export default function ReportPage() {
           // 已有画像或机构指派、却解析不出领域时，不能再拿第一门（通常是 AI）课程顶上。
           if (stored || context.assignment) list = [];
         } else if (context.assignment) {
-          // 指派接口已经按当前 learner 过滤；只选这名学习者实际收到的课程。
-          list = list.filter((stage) => stage.id === context.assignment?.courseId);
+          // 最新指派只负责定域；报告选择器保留该 learner 在本领域收到的全部可用课程。
+          const assignedCourseIds = new Set(context.courseIds ?? [context.assignment.courseId]);
+          list = list.filter((stage) => assignedCourseIds.has(stage.id));
         } else if (context.isAi) {
-          // 保留既有 AI 行为：新课尚未进入归属表时仍可见，且只有过滤结果非空才收窄。
-          const filtered = list.filter((stage) =>
-            belongsToDomain(stage.id, context.domain!, domains),
-          );
-          if (filtered.length > 0) list = filtered;
+          list = list.filter((stage) => belongsToDomain(stage.id, context.domain!, domains));
         } else {
           // 已知非 AI 域必须有运行时归属证据才展示；缺表时不能把全量 AI 课程放回来。
           list = list.filter((stage) => {
@@ -1470,7 +1327,7 @@ export default function ReportPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [accountProfileState]);
 
   // Load the classroom, then ask the engine for the blueprint.
   useEffect(() => {
@@ -1611,6 +1468,7 @@ export default function ReportPage() {
   const effectiveDomainName =
     effectiveContext?.label ?? (effectiveDomain ? domainLabel(effectiveDomain) : '领域待确认');
   const isAiDomain = effectiveContext?.isAi === true;
+  const domainProfile = profileForDomain(profile, effectiveDomain);
 
   // 核心大数（⑪）：全部从页内已有数据推算，不引新数据源。
   const dynLevel =
@@ -1649,7 +1507,11 @@ export default function ReportPage() {
     if (bpState.kind === 'domain-unavailable') {
       return (
         <EmptyState
-          title="当前课程的有效领域尚未确认"
+          title={
+            effectiveContext?.status === 'assignment-unavailable'
+              ? '机构课程暂不可用'
+              : '当前课程的有效领域尚未确认'
+          }
           hint={`${bpState.reason} 学情报告不会改用 AI 画像或 AI 诊断代替。`}
         />
       );
@@ -1668,7 +1530,7 @@ export default function ReportPage() {
         hint="多智能体引擎未响应。请确认引擎服务已启动后点右上角「重新计算」。"
       />
     );
-  }, [bpState, effectiveDomain, effectiveDomainName, isAiDomain]);
+  }, [bpState, effectiveContext?.status, effectiveDomain, effectiveDomainName, isAiDomain]);
 
   const audit = course ? summarizeAudits(course.scenes) : null;
 
@@ -1915,10 +1777,28 @@ export default function ReportPage() {
           >
             <div className="space-y-4">
               {bp ? <BlindSpotChart bp={bp} /> : blueprintFallback()}
-              {/* 旧画像里的 conceptMastery 没有领域键；非 AI 域不能把它当成本领域测验。 */}
-              {isAiDomain && <QuizMasteryBlock profile={profile} />}
-              {isAiDomain && <ReviewNextBlock profile={profile} />}
-              {effectiveDomain && <MistakeBankBlock profile={profile} domain={effectiveDomain} />}
+              {domainProfile ? (
+                <>
+                  <QuizMasteryBlock profile={domainProfile} />
+                  <ReviewNextBlock
+                    key={effectiveDomain}
+                    profile={domainProfile}
+                    domain={effectiveDomain!}
+                  />
+                </>
+              ) : (
+                <EmptyState
+                  title="当前领域的证据画像未覆盖"
+                  hint={
+                    effectiveDomain
+                      ? `当前档案没有「${effectiveDomainName}」的分域掌握度；本页没有使用旧的全域扁平画像代替。完成该领域测验并成功写回证据后再查看。`
+                      : '当前有效领域尚未确认；本页没有展示任何全域扁平画像。'
+                  }
+                />
+              )}
+              {effectiveDomain && (
+                <MistakeBankBlock profile={domainProfile} domain={effectiveDomain} />
+              )}
             </div>
           </SectionCard>
 
@@ -1947,30 +1827,14 @@ export default function ReportPage() {
             )}
           </SectionCard>
 
-          {/* ── 4. 本次诊断缺口 + 统一路径入口 ── */}
+          {/* ── 4. 当前领域全景路径（与首页、/path 同源） ── */}
           <div id="learning-path" className="scroll-mt-6">
             <SectionCard
               icon={GitBranch}
-              title="本次诊断的技能缺口"
-              description="这里只解释本次学情引擎返回的缺口及其补齐顺序；领域全景路径以路径页的引擎产物为唯一口径。"
+              title="当前领域全景学习路径"
+              description="报告、首页与路径页读取同一份引擎产物；机构切换课程领域后，这里随有效领域一起切换。"
             >
-              {bp ? <LearningPathChart bp={bp} domain={effectiveDomain} /> : blueprintFallback()}
-              <a
-                href="/path"
-                className="mt-5 flex items-center justify-between gap-4 rounded-xl border border-border bg-card px-5 py-4 shadow-card transition-colors hover:bg-accent"
-              >
-                <span>
-                  <span className="block text-sm font-medium">
-                    查看「{effectiveDomainName}」的引擎全景路径 →
-                  </span>
-                  <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
-                    本页只列本次诊断返回的概念缺口，不维护第二份静态培养路线。
-                    完整路径统一由路径全景页按当前有效领域读取引擎产物；
-                    缺失或生成中会在该页如实显示。
-                  </span>
-                </span>
-                <GitBranch className="size-5 shrink-0 text-muted-foreground" />
-              </a>
+              <PathOrDomainCard corpus={effectiveDomain ?? undefined} className="shadow-none" />
             </SectionCard>
           </div>
 

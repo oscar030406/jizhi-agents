@@ -101,13 +101,16 @@ export function CoveragePanel({ rows }: { readonly rows: readonly CoverageRow[] 
         {draft.length > 0 && (
           <p>
             上面标注的那 {draft.length} 个主题，金标不是生成前冻结的，归档状态写作
-            <span className="mx-1 font-mono">{[...new Set(draft.map((r) => r.status))].join('、')}</span>
+            <span className="mx-1 font-mono">
+              {[...new Set(draft.map((r) => r.status))].join('、')}
+            </span>
             ——课先生成、金标后补。
           </p>
         )}
         <p>
-          只列<strong className="font-medium">实测过</strong>的主题，共 {rows.length} 个（其中生成前冻结金标 {frozen.length} 个）。
-          没跑过覆盖率的课不在这里，也不补 0 或估计值。竖线是 {TARGET}% 达标线，绿色 = 过线。
+          只列<strong className="font-medium">实测过</strong>的主题，共 {rows.length}{' '}
+          个（其中生成前冻结金标 {frozen.length} 个）。 没跑过覆盖率的课不在这里，也不补 0
+          或估计值。竖线是 {TARGET}% 达标线，绿色 = 过线。
           本表采用最近一次归档评测；上面“全局指标”的汇总覆盖率采用重生成后复测口径。
           个别复测尚未归档时，两处可能暂时不一致，以平台全局指标台账为准。
         </p>
@@ -153,14 +156,13 @@ export function DifficultySupply({
       </div>
       <Caliber summary="展开口径：这张分布图能说明什么、不能说明什么">
         <p>
-          这是<strong className="font-medium">资源供给按难度档的分布</strong>，不是「资源难度匹配曲线」。
-          那条曲线要把<strong className="font-medium">学习者</strong>的能力分布与资源难度对起来，
-          属于个人维度，可在{' '}
+          这是<strong className="font-medium">资源供给按难度档的分布</strong>
+          ，不是「资源难度匹配曲线」。 那条曲线要把<strong className="font-medium">学习者</strong>
+          的能力分布与资源难度对起来， 属于个人维度，可在{' '}
           <Link href="/report" className="underline underline-offset-2 hover:text-foreground">
             学习报告页面
           </Link>{' '}
-          查看。
-          机构维度画不出同一条曲线——我们没有跨学习者的数据，所以本页给的是供给侧分布。
+          查看。 平台不汇总跨学习者数据，因此机构维度仅展示供给侧分布。
         </p>
         {total > 0 && (
           <>
@@ -173,7 +175,8 @@ export function DifficultySupply({
             {/* 逐档概念名：默认视图里它是一大坨顿号串，收进来但一个不删 */}
             {tiers.map((t) => (
               <p key={t.tier}>
-                <strong className="font-medium">{tierLabel(t.tier)}</strong>：{t.concepts.join('、')}
+                <strong className="font-medium">{tierLabel(t.tier)}</strong>：
+                {t.concepts.join('、')}
               </p>
             ))}
           </>

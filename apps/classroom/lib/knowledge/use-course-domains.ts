@@ -3,8 +3,8 @@
 /**
  * 课程 → 域 的归属表（客户端读取）。
  *
- * 归属主从：**运行时推导（`/api/course-domains`，现读磁盘）为主，打包快照为首帧兜底**。
- * 快照是构建时的世界——投币新建的课不在里面，只读快照的话新域的课全部隐形。
+ * 唯一来源是当前会话下的 `/api/course-domains`。接口负责课程权限过滤；客户端不能
+ * 回退构建期快照，否则机构切换或指派变化后会重新露出旧领域映射。
  *
  * 抽成 hook 是因为它现在有两个消费方（首页「本域课程」卡、最近学习列表），
  * 各写一份 fetch 迟早会长歪：一处改了兜底顺序、另一处没改，两张卡显示不同的课。
@@ -12,14 +12,12 @@
  */
 import { useEffect, useState } from 'react';
 
-import rawCourseDomains from '@/data/course-domains.json';
-
 export type CourseDomainEntry = { domain?: string; corpus?: string };
 
-const SNAPSHOT = rawCourseDomains as Record<string, CourseDomainEntry>;
+const EMPTY_COURSE_DOMAINS: Record<string, CourseDomainEntry> = {};
 
 /**
- * @param injected 测试注入用。给了就不发请求，也不用快照。
+ * @param injected 测试注入用。给了就不发请求。
  */
 export function useCourseDomains(
   injected?: Record<string, CourseDomainEntry>,
@@ -41,17 +39,14 @@ export function useCourseDomains(
     };
   }, [injected]);
 
-  return injected ?? runtime ?? SNAPSHOT;
+  return injected ?? runtime ?? EMPTY_COURSE_DOMAINS;
 }
 
 /**
  * 这门课属不属于当前画像选定的域。
  *
- * 判据与「本域课程」卡同源。三条规则：
- *  - 画像没选库（跟随培训领域）→ 全部可见，不过滤
- *  - 归属表里没有这门课 → **算可见**。宁可多显示也不要让刚生成的课凭空消失——
- *    归属表是异步推导的，新课有一段时间不在表里。
- *  - 有记录 → 按 corpus 比对
+ * 判据与「本域课程」卡同源。画像没选库时不筛；选了域以后，课程必须有
+ * 同域归属记录才可见。新课在写入 origin 后才进入学习者视图，未知归属不放行。
  */
 export function belongsToDomain(
   courseId: string,
@@ -61,6 +56,6 @@ export function belongsToDomain(
   const want = corpus?.trim();
   if (!want) return true;
   const entry = domains[courseId];
-  if (!entry) return true;
+  if (!entry) return false;
   return (entry.corpus ?? entry.domain ?? '') === want;
 }

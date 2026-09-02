@@ -22,7 +22,12 @@ import { useStageStore } from '@/lib/store';
 import { useMediaGenerationStore } from '@/lib/store/media-generation';
 import { useExportPPTX } from '@/lib/export/use-export-pptx';
 import { useExportClassroom } from '@/lib/export/use-export-classroom';
-import { useExportScript } from '@/lib/export/use-export-script';
+import {
+  ensureMediaFreeExportReady,
+  isFullMediaExportReady,
+  isMediaFreeExportReady,
+  useExportScript,
+} from '@/lib/export/use-export-script';
 import { exportPracticeGuide, isProceduralScene } from '@/lib/export/practice-guide';
 import { isVideoExportEnabled } from '@/lib/config/feature-flags';
 import { useVideoRenderStore } from '@/lib/store/video-render';
@@ -78,7 +83,8 @@ export function HeaderControls({
   // across mode swaps (was previously in `Header` only, missing from
   // CommandBar's right cluster).
   const scenes = useStageStore((s) => s.scenes);
-  const stageId = useStageStore((s) => s.stage?.id);
+  const stage = useStageStore((s) => s.stage);
+  const stageId = stage?.id;
   const generatingOutlines = useStageStore((s) => s.generatingOutlines);
   const failedOutlines = useStageStore((s) => s.failedOutlines);
   const mediaTasks = useMediaGenerationStore((s) => s.tasks);
@@ -95,11 +101,9 @@ export function HeaderControls({
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const exportRef = useRef<HTMLDivElement>(null);
 
-  const canExport =
-    scenes.length > 0 &&
-    generatingOutlines.length === 0 &&
-    failedOutlines.length === 0 &&
-    Object.values(mediaTasks).every((task) => task.status === 'done' || task.status === 'failed');
+  const readinessState = { stage, scenes, generatingOutlines, failedOutlines };
+  const mediaFreeExportReady = isMediaFreeExportReady(readinessState);
+  const fullMediaExportReady = isFullMediaExportReady(readinessState, mediaTasks);
 
   const handleClickOutside = useCallback(
     (e: MouseEvent) => {
@@ -250,13 +254,17 @@ export function HeaderControls({
       <div className="relative" ref={exportRef}>
         <button
           onClick={() => {
-            if (canExport && !isExporting && !isExportingZip) {
+            if (
+              ensureMediaFreeExportReady(t('share.notReady')) &&
+              !isExporting &&
+              !isExportingZip
+            ) {
               setExportMenuOpen(!exportMenuOpen);
             }
           }}
-          disabled={!canExport || isExporting || isExportingZip}
+          disabled={!mediaFreeExportReady || isExporting || isExportingZip}
           title={
-            canExport
+            mediaFreeExportReady
               ? isExporting || isExportingZip
                 ? t('export.exporting')
                 : t('export.pptx')
@@ -264,7 +272,7 @@ export function HeaderControls({
           }
           className={cn(
             'shrink-0 p-2 rounded-full transition-all',
-            canExport && !isExporting && !isExportingZip
+            mediaFreeExportReady && !isExporting && !isExportingZip
               ? 'text-muted-foreground hover:bg-accent hover:text-foreground'
               : 'text-muted-foreground/50 cursor-not-allowed opacity-50',
           )}
@@ -287,10 +295,17 @@ export function HeaderControls({
                 setExportMenuOpen(false);
                 exportPPTX();
               }}
-              className="w-full px-4 py-2.5 text-left text-sm hover:bg-accent transition-colors flex items-center gap-2.5"
+              disabled={!fullMediaExportReady || isExporting}
+              title={!fullMediaExportReady ? t('share.notReady') : undefined}
+              className="w-full px-4 py-2.5 text-left text-sm hover:bg-accent transition-colors flex items-center gap-2.5 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <FileDown className="w-4 h-4 text-muted-foreground shrink-0" />
-              <span>{t('export.pptx')}</span>
+              <div>
+                <div>{t('export.pptx')}</div>
+                {!fullMediaExportReady && (
+                  <div className="text-xs text-muted-foreground">{t('share.notReady')}</div>
+                )}
+              </div>
             </button>
             {/* 讲稿导出 — 把各页 speech 旁白汇成一份 Markdown。文案中文
                 （export.scriptMd 未进 locale 词表，与页内其他中文注释同一口径）。 */}
@@ -309,23 +324,29 @@ export function HeaderControls({
                 setExportMenuOpen(false);
                 exportResourcePack();
               }}
-              className="w-full px-4 py-2.5 text-left text-sm hover:bg-accent transition-colors flex items-center gap-2.5"
+              disabled={!fullMediaExportReady || isExporting}
+              title={!fullMediaExportReady ? t('share.notReady') : undefined}
+              className="w-full px-4 py-2.5 text-left text-sm hover:bg-accent transition-colors flex items-center gap-2.5 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Package className="w-4 h-4 text-muted-foreground shrink-0" />
               <div>
                 <div>{t('export.resourcePack')}</div>
-                <div className="text-xs text-muted-foreground">{t('export.resourcePackDesc')}</div>
+                <div className="text-xs text-muted-foreground">
+                  {fullMediaExportReady ? t('export.resourcePackDesc') : t('share.notReady')}
+                </div>
               </div>
             </button>
             {scenes.some(isProceduralScene) && (
               <button
                 onClick={() => {
+                  if (!ensureMediaFreeExportReady(t('share.notReady'))) return;
                   setExportMenuOpen(false);
                   const { stage, scenes: currentScenes, outlines } = useStageStore.getState();
                   exportPracticeGuide(
                     stage?.name || t('common.untitledCourse'),
                     currentScenes,
                     outlines,
+                    stage?.origin?.corpus?.trim() || stage?.origin?.domain?.trim(),
                   );
                 }}
                 className="w-full px-4 py-2.5 text-left text-sm hover:bg-accent transition-colors flex items-center gap-2.5"
@@ -344,16 +365,24 @@ export function HeaderControls({
                 setExportMenuOpen(false);
                 exportClassroomZip();
               }}
-              disabled={isExportingZip}
-              className="w-full px-4 py-2.5 text-left text-sm hover:bg-accent transition-colors flex items-center gap-2.5"
+              disabled={!fullMediaExportReady || isExportingZip}
+              title={!fullMediaExportReady ? t('share.notReady') : undefined}
+              className="w-full px-4 py-2.5 text-left text-sm hover:bg-accent transition-colors flex items-center gap-2.5 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Archive className="w-4 h-4 text-muted-foreground shrink-0" />
               <div>
                 <div>{t('export.classroomZip')}</div>
-                <div className="text-xs text-muted-foreground">{t('export.classroomZipDesc')}</div>
+                <div className="text-xs text-muted-foreground">
+                  {fullMediaExportReady ? t('export.classroomZipDesc') : t('share.notReady')}
+                </div>
               </div>
             </button>
-            {videoExportEnabled && <VideoExportMenu onClose={() => setExportMenuOpen(false)} />}
+            {videoExportEnabled && (
+              <VideoExportMenu
+                fullMediaReady={fullMediaExportReady}
+                onClose={() => setExportMenuOpen(false)}
+              />
+            )}
           </div>
         )}
       </div>

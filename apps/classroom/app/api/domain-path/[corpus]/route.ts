@@ -16,12 +16,16 @@
 
 import type { NextRequest } from 'next/server';
 
-import curatedPath from '@/data/learning-path.json';
 import { readProfile } from '@/lib/accounts/store';
+import {
+  fetchLearnerBlueprint,
+  type LearnerBlueprint,
+  type LearnerProfileInput,
+} from '@/lib/generation/learner-profile';
 import { API_ERROR_CODES, apiError, apiSuccess } from '@/lib/server/api-response';
 import { requireCorpusVisible } from '@/lib/server/corpus-access';
-import { PATH_HOME_DOMAIN } from '@/lib/server/course-domains';
 import { createLogger } from '@/lib/logger';
+import { projectProfileToDomain } from '@/lib/knowledge/domain-context';
 
 const log = createLogger('DomainPath API');
 
@@ -43,16 +47,28 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ cor
   }
   try {
     const storedProfile = access.account ? await readProfile(access.account.id) : null;
-    const profile: Record<string, unknown> =
+    const profile =
       storedProfile && typeof storedProfile === 'object' && !Array.isArray(storedProfile)
-        ? { ...(storedProfile as Record<string, unknown>), domain: corpus, corpus }
+        ? projectProfileToDomain(storedProfile as LearnerProfileInput, corpus)
         : { domain: corpus, corpus };
-    const conceptMastery =
-      profile.conceptMastery &&
-      typeof profile.conceptMastery === 'object' &&
-      !Array.isArray(profile.conceptMastery)
-        ? profile.conceptMastery
-        : {};
+    const profileForPath = profile;
+    const profileRecord = profile as LearnerProfileInput & Record<string, unknown>;
+    const rawGoal = profileRecord.learningGoal ?? profileRecord.learning_goal ?? profileRecord.goal;
+    const learningGoal = typeof rawGoal === 'string' && rawGoal.trim() ? rawGoal.trim() : corpus;
+    let blueprint: LearnerBlueprint | null = null;
+    let masteryUnavailable = false;
+    if (access.account) {
+      try {
+        blueprint = await fetchLearnerBlueprint(
+          learningGoal,
+          profileForPath as LearnerProfileInput,
+        );
+        masteryUnavailable = !blueprint;
+      } catch (error) {
+        masteryUnavailable = true;
+        log.warn(`domain path mastery unavailable for ${corpus}: ${String(error)}`);
+      }
+    }
     const resp = await fetch(
       `${base.replace(/\/$/, '')}/internal/v1/personalize/domain-path/${encodeURIComponent(corpus)}`,
       {
@@ -63,9 +79,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ cor
         },
         body: JSON.stringify({
           corpus,
-          profile,
-          conceptMastery,
-          ...(corpus === PATH_HOME_DOMAIN ? { curatedPath } : {}),
+          profile: profileForPath,
+          masteryCorpus: corpus,
+          masteryVector: blueprint?.mastery_vector ?? {},
         }),
         signal: AbortSignal.timeout(TIMEOUT_MS),
         cache: 'no-store',
@@ -84,11 +100,21 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ cor
     // 与 skill-map 那条桥一样要拆到 data 才是路径本体；直接透传信封的话，前端拿到的
     // stages 是 undefined——看起来就是「这个域没有路径」，又是一次静默兜底。
     const payload = (await resp.json()) as { data?: unknown } | null;
-    const path =
-      payload && typeof payload === 'object' && 'data' in payload ? payload.data : payload;
+    let path = payload && typeof payload === 'object' && 'data' in payload ? payload.data : payload;
     if (!path || typeof path !== 'object') {
       log.warn(`domain path empty envelope for ${corpus}`);
       return apiError(API_ERROR_CODES.UPSTREAM_ERROR, 502, '学习路径服务没有给出路径数据。');
+    }
+    if (masteryUnavailable) {
+      const current = (path as Record<string, unknown>).personalization;
+      path = {
+        ...(path as Record<string, unknown>),
+        personalization: {
+          ...(current && typeof current === 'object' && !Array.isArray(current) ? current : {}),
+          mastery_available: false,
+          reason: '学情诊断暂时不可用；路径结构仍来自当前领域的引擎产物，本次未按掌握度移动。',
+        },
+      };
     }
     return apiSuccess({ path });
   } catch (error) {

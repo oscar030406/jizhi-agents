@@ -166,21 +166,32 @@ export interface LearnerProfileFields {
   time_budget_hours?: number;
   /** 动态层：quiz 决策写回的当前难度（L1-L4）。可选，旧画像无此字段。 */
   currentDifficulty?: string;
+  /** 当前难度按课程领域隔离；送往引擎前只投影当前领域。 */
+  currentDifficultyByDomain?: Record<string, string>;
+  /** Elo 评级按课程领域隔离；送往引擎前只投影当前领域。 */
+  eloRatingByDomain?: Record<string, number>;
   /**
    * 动态层：逐概念掌握度（键=场景标题或概念 id，值 0-1，EMA 累积）。
    * 引擎 evidence 端点吃它做 outer-fringe 选段（跳过已会内容）。可选。
    */
   conceptMastery?: Record<string, number>;
   /**
+   * 按课程领域隔离的逐概念掌握度。首页与报告只读取当前有效领域对应的桶；
+   * 旧的 `conceptMastery` 保留给尚未迁移的内部策略，不得作为跨域展示回退。
+   */
+  conceptMasteryByDomain?: Record<string, Record<string, number>>;
+  /**
    * 动态层：逐概念置信度（0-1，来自证据折叠的有效样本量，profile-bridge 写回）。
    * 掌握判定的第二个条件——估计高但置信低不算掌握（证据封顶）。可选，旧画像无。
    */
   conceptConfidence?: Record<string, number>;
+  conceptConfidenceByDomain?: Record<string, Record<string, number>>;
   /**
    * 动态层：逐概念可提取度（0-1，estimate × 时间衰减，profile-bridge 写回）。
    * 到期复习的判据。可选，旧画像无。
    */
   conceptRecall?: Record<string, number>;
+  conceptRecallByDomain?: Record<string, Record<string, number>>;
   /**
    * 前测校准证据（键=维度 agent/rag/engineering，值=「答对x/y」）。
    * 存在即表示该维档位已被前测校正过。可选，旧画像无此字段。
@@ -236,6 +247,18 @@ export interface SceneOutline {
   description: string; // 1-2 sentences describing the purpose
   keyPoints: string[]; // 3-5 core key points
   teachingObjective?: string;
+  /** Machine-checked objective ids this scene must serve. */
+  objectiveIds?: string[];
+  /**
+   * Validated objective contracts attached after outline review. Model-supplied
+   * values are overwritten; content generators consume these exact contracts.
+   */
+  learningObjectives?: Array<{
+    id: string;
+    action: string;
+    condition: string;
+    successCriterion: string;
+  }>;
   estimatedDuration?: number; // seconds
   order: number;
   languageNote?: string; // LLM-inferred language note for this scene

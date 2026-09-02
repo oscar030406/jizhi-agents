@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   corpora: [] as Array<Record<string, unknown>>,
-  drift: [] as string[],
   corpus: null as null | Record<string, unknown>,
   notFound: vi.fn(() => {
     throw new Error('NEXT_NOT_FOUND');
@@ -46,7 +45,7 @@ vi.mock('@/lib/accounts/org-store', () => ({ corpusVisibilityFor: async () => ()
 vi.mock('@/lib/server/domain-registry', () => ({ readDomainRegistry: async () => ({}) }));
 vi.mock('@/lib/server/knowledge-center', () => ({
   isValidCorpusName: () => true,
-  readCorporaWithDrift: async () => ({ corpora: mocks.corpora, drift: mocks.drift }),
+  readCorpora: async () => mocks.corpora,
   readCorpus: async () => mocks.corpus,
 }));
 vi.mock('@/lib/server/knowledge-source', () => ({ readSourceView: async () => null }));
@@ -57,7 +56,6 @@ import KnowledgeCenterPage from '@/app/admin/knowledge/page';
 describe('知识库页面的提供方文案', () => {
   beforeEach(() => {
     mocks.corpora = [];
-    mocks.drift = [];
     mocks.corpus = null;
     mocks.notFound.mockClear();
   });
@@ -70,21 +68,16 @@ describe('知识库页面的提供方文案', () => {
     expect(html).not.toMatch(/服务器上|本站运维|mtime|data[\\/]|knowledge_base[\\/]/i);
   });
 
-  it('总览过滤 probe/fullprobe 测试库与对应漂移记录', async () => {
+  it('总览过滤 probe/fullprobe 测试库', async () => {
     mocks.corpora = [
       { corpus: 'fullprobe', available: true },
       { corpus: 'probe_fixture', available: true },
       { corpus: 'iotdb', available: true },
     ];
-    mocks.drift = [
-      'fullpath-probe 数据待更新',
-      'iotdb 数据待更新：D:\\data\\knowledge_base\\iotdb\\snapshot.json',
-    ];
-
     const html = renderToStaticMarkup(await KnowledgeCenterPage());
 
     expect(html).toContain('iotdb');
-    expect(html).not.toMatch(/D:\\|data[\\/]|fullpath-probe|fullprobe|probe_fixture/i);
+    expect(html).not.toMatch(/fullprobe|probe_fixture/i);
   });
 
   it('详情保留真实状态与页面核验入口，不展示内部文件位置', async () => {
@@ -109,7 +102,7 @@ describe('知识库页面的提供方文案', () => {
     expect(html).toContain('系统已经收到');
     expect(html).toContain('联系平台维护人员');
     expect(html).not.toMatch(
-      /服务器上|本站运维|mtime|data[\\/]|knowledge_base[\\/]|source_dir|复算脚本/i,
+      /服务器上|本站运维|mtime|data[\\/]|knowledge_base[\\/]|source_dir|source_id|front-matter|磁盘|复算/i,
     );
   });
 

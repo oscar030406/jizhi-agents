@@ -26,10 +26,7 @@ import { AdaptiveDecisionBanner } from '@/components/scene-renderers/adaptive-de
 import type { AdaptiveDecision } from '@/app/api/adaptive/quiz-decision/route';
 import { useStageStore } from '@/lib/store/stage';
 import { useInteractionProgress } from '@/lib/store/interaction-progress';
-import {
-  generateRemediationScene,
-  type RemediationPhase,
-} from '@/lib/hooks/use-scene-generator';
+import { generateRemediationScene, type RemediationPhase } from '@/lib/hooks/use-scene-generator';
 import { gradeChoiceQuestions, isShortAnswer, type QuestionResult } from '@/lib/quiz/grading';
 import { renderQuizMathText } from '@/lib/quiz/math-text';
 import { writeDraftRecovery } from '@/lib/quiz/persistence';
@@ -284,26 +281,18 @@ function SingleChoiceQuestion({
                 // Review states — 答错去红（规格3.2.3⑤⑧）：错选项走中性 muted，不弹红
                 isReview && isCorrectOpt && 'border-green-solid/40 bg-green-soft',
                 isReview && isWrong && !isCorrectOpt && 'border-border bg-muted',
-                isReview &&
-                  !isCorrectOpt &&
-                  !selected &&
-                  'border-border-subtle opacity-60',
+                isReview && !isCorrectOpt && !selected && 'border-border-subtle opacity-60',
                 disabled && !isReview && 'cursor-default',
               )}
             >
               <span
                 className={cn(
                   'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 transition-colors',
-                  !isReview &&
-                    !selected &&
-                    'bg-muted text-muted-foreground',
+                  !isReview && !selected && 'bg-muted text-muted-foreground',
                   !isReview && selected && 'bg-violet-500 text-white',
                   isReview && isCorrectOpt && 'bg-green-solid text-white',
                   isReview && isWrong && !isCorrectOpt && 'bg-muted-foreground/60 text-white',
-                  isReview &&
-                    !isCorrectOpt &&
-                    !selected &&
-                    'bg-muted text-muted-foreground/70',
+                  isReview && !isCorrectOpt && !selected && 'bg-muted text-muted-foreground/70',
                 )}
               >
                 {opt.value}
@@ -371,9 +360,7 @@ function MultipleChoiceQuestion({
   return (
     <QuestionCard question={question} index={index} result={result}>
       {!isReview && (
-        <p className="text-xs text-muted-foreground mb-2">
-          {t('quiz.multipleChoiceHint')}
-        </p>
+        <p className="text-xs text-muted-foreground mb-2">{t('quiz.multipleChoiceHint')}</p>
       )}
       <div className="grid gap-2">
         {question.options?.map((opt) => {
@@ -396,26 +383,18 @@ function MultipleChoiceQuestion({
                   'border-violet-400 bg-violet-50 dark:bg-violet-900/30 ring-1 ring-violet-200 dark:ring-violet-700',
                 isReview && isCorrectOpt && 'border-green-solid/40 bg-green-soft',
                 isReview && isWrong && 'border-border bg-muted',
-                isReview &&
-                  !isCorrectOpt &&
-                  !isSelected &&
-                  'border-border-subtle opacity-60',
+                isReview && !isCorrectOpt && !isSelected && 'border-border-subtle opacity-60',
                 disabled && !isReview && 'cursor-default',
               )}
             >
               <span
                 className={cn(
                   'w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold shrink-0 transition-colors',
-                  !isReview &&
-                    !isSelected &&
-                    'bg-muted text-muted-foreground',
+                  !isReview && !isSelected && 'bg-muted text-muted-foreground',
                   !isReview && isSelected && 'bg-violet-500 text-white',
                   isReview && isCorrectOpt && 'bg-green-solid text-white',
                   isReview && isWrong && 'bg-muted-foreground/60 text-white',
-                  isReview &&
-                    !isCorrectOpt &&
-                    !isSelected &&
-                    'bg-muted text-muted-foreground/70',
+                  isReview && !isCorrectOpt && !isSelected && 'bg-muted text-muted-foreground/70',
                 )}
               >
                 {!isReview && isSelected ? <Check className="w-3.5 h-3.5" /> : opt.value}
@@ -496,9 +475,7 @@ function ShortAnswerQuestion({
             {value ? (
               <QuizMathText text={value} />
             ) : (
-              <span className="text-muted-foreground italic">
-                {t('quiz.notAnswered')}
-              </span>
+              <span className="text-muted-foreground italic">{t('quiz.notAnswered')}</span>
             )}
           </div>
           {result.aiComment && (
@@ -506,9 +483,7 @@ function ShortAnswerQuestion({
             <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-blue-soft border border-blue-deep/20">
               <Sparkles className="w-4 h-4 text-blue-deep shrink-0 mt-0.5" />
               <div>
-                <p className="text-xs font-medium text-blue-deep mb-0.5">
-                  {t('quiz.aiComment')}
-                </p>
+                <p className="text-xs font-medium text-blue-deep mb-0.5">{t('quiz.aiComment')}</p>
                 <p className="text-xs text-blue-deep/80">
                   <QuizMathText text={result.aiComment} />
                 </p>
@@ -542,6 +517,8 @@ function QuestionCard({
 
   return (
     <motion.div
+      data-testid="quiz-question"
+      data-question-id={question.id}
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.05 }}
@@ -677,34 +654,27 @@ function ScoreBanner({
             draggable={false}
           />
           <div>
-          <p className={cn('text-sm font-medium', tier.heading)}>{tier.text}</p>
-          <div className="flex items-baseline gap-1 mt-1 text-foreground">
-            <span className="text-4xl font-black">{score}</span>
-            <span className="text-muted-foreground text-lg">/ {total}</span>
-          </div>
-          <div className="flex gap-3 mt-3 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1">
-              <CheckCircle2 className="w-3.5 h-3.5 text-green-solid" /> {correctCount}{' '}
-              {t('quiz.correct')}
-            </span>
-            <span className="flex items-center gap-1">
-              <XCircle className="w-3.5 h-3.5" /> {incorrectCount} {t('quiz.incorrect')}
-            </span>
-          </div>
+            <p className={cn('text-sm font-medium', tier.heading)}>{tier.text}</p>
+            <div className="flex items-baseline gap-1 mt-1 text-foreground">
+              <span className="text-4xl font-black">{score}</span>
+              <span className="text-muted-foreground text-lg">/ {total}</span>
+            </div>
+            <div className="flex gap-3 mt-3 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1">
+                <CheckCircle2 className="w-3.5 h-3.5 text-green-solid" /> {correctCount}{' '}
+                {t('quiz.correct')}
+              </span>
+              <span className="flex items-center gap-1">
+                <XCircle className="w-3.5 h-3.5" /> {incorrectCount} {t('quiz.incorrect')}
+              </span>
+            </div>
           </div>
         </div>
 
         {/* Percentage ring */}
         <div className="relative w-20 h-20">
           <svg className="w-20 h-20 -rotate-90" viewBox="0 0 80 80">
-            <circle
-              cx="40"
-              cy="40"
-              r="34"
-              fill="none"
-              stroke="var(--border)"
-              strokeWidth="6"
-            />
+            <circle cx="40" cy="40" r="34" fill="none" stroke="var(--border)" strokeWidth="6" />
             <motion.circle
               cx="40"
               cy="40"
@@ -759,9 +729,7 @@ function EncouragementCard() {
         </span>
         {t('quiz.encourage.suffix')}
       </p>
-      <p className="mt-1.5 text-sm text-muted-foreground">
-        {t('quiz.encourage.note')}
-      </p>
+      <p className="mt-1.5 text-sm text-muted-foreground">{t('quiz.encourage.note')}</p>
     </div>
   );
 }
@@ -775,26 +743,22 @@ const CONFETTI_PASTELS = [
   'var(--purple-soft)',
 ];
 
-function PastelConfetti() {
-  const particles = useMemo(
-    () =>
-      Array.from({ length: 20 }, (_, i) => ({
-        id: i,
-        left: 8 + Math.random() * 84,
-        x: (Math.random() - 0.5) * 120,
-        y: 120 + Math.random() * 160,
-        r: (Math.random() - 0.5) * 720,
-        size: 5 + Math.random() * 5,
-        delay: Math.random() * 0.15,
-        color: CONFETTI_PASTELS[i % CONFETTI_PASTELS.length],
-        round: Math.random() > 0.7,
-      })),
-    [],
-  );
+const CONFETTI_PARTICLES = Array.from({ length: 20 }, (_, id) => ({
+  id,
+  left: 8 + ((id * 37 + 11) % 85),
+  x: ((id * 53 + 17) % 121) - 60,
+  y: 120 + ((id * 71 + 29) % 161),
+  r: ((id * 97 + 43) % 721) - 360,
+  size: 5 + ((id * 13 + 3) % 6),
+  delay: ((id * 7) % 16) / 100,
+  color: CONFETTI_PASTELS[id % CONFETTI_PASTELS.length],
+  round: id % 4 === 0,
+}));
 
+function PastelConfetti() {
   return (
     <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-0 z-10">
-      {particles.map((p) => (
+      {CONFETTI_PARTICLES.map((p) => (
         <span
           key={p.id}
           className="absolute block animate-[confetti-drop_1s_var(--ease-out-quad)_forwards]"
@@ -1019,22 +983,16 @@ export function QuizView({
       // 旧的留在账本里不用迁移——「证据只追加、永不丢弃」的用处正在这里。
       void (async () => {
         try {
-          const { appendEvidence, evidenceFor, readLedger, LEGACY_DOMAIN } = await import(
-            '@/lib/evidence'
-          );
+          const { appendEvidence, evidenceFor, readLedger } = await import('@/lib/evidence');
           const { quizEvidenceDraft } = await import('@/lib/evidence/from-quiz');
           const { getLearnerKey } = await import('@/lib/runtime/learner-key');
-          const { learnerDomain, refreshDerivedProfile } = await import(
-            '@/lib/evidence/profile-bridge'
-          );
+          const { courseDomain, refreshDerivedProfile } =
+            await import('@/lib/evidence/profile-bridge');
           const learnerKey = await getLearnerKey();
-          // 领域取画像里录的那个（ai / manufacturing / industrial-internet / software），
-          // 掌握度才分得开域。课程本身不带领域字段，画像是唯一拿得到的来源。
-          // 取不到时 quizEvidenceDraft 兜到 LEGACY_DOMAIN，与旧证据归同一个桶。
-          const domain = learnerDomain();
+          const domain = await courseDomain(stageId);
           const measured = {
             kind: 'concept' as const,
-            domain: domain ?? LEGACY_DOMAIN,
+            domain,
             concept: (sceneTitle ?? '').trim(),
           };
           const ledger = await readLedger({ learnerKey });
@@ -1045,7 +1003,7 @@ export function QuizView({
             interactionId: attemptId,
             sceneId,
             sceneTitle: sceneTitle ?? '',
-            ...(domain ? { domain } : {}),
+            domain,
             questions: questions.map((q) => ({
               id: q.id,
               prompt: q.question ?? q.id,
@@ -1063,7 +1021,7 @@ export function QuizView({
           });
           if (draft) await appendEvidence(draft, { learnerKey });
           // 画像 = fold(履历)：写完证据立刻重算。**幂等**，跑几次都一样。
-          await refreshDerivedProfile({ learnerKey });
+          await refreshDerivedProfile({ learnerKey }, domain);
 
           // 错题进错题本（DeepTutor Question Bank 提炼）：answer/analysis 作答时
           // 不展示，答错后连同学习者答案存进去，学情报告错题本块回放。
@@ -1140,13 +1098,26 @@ export function QuizView({
       // conceptScores 用场景标题当键——一个 quiz 场景一个主题，题目粒度的概念标签
       // 生成端还不产出，场景粒度是当前诚实能给的最细粒度。
       let currentDifficulty: string | undefined;
+      let adaptiveDomain = '';
       try {
         const stored = JSON.parse(localStorage.getItem('learnerProfile') ?? 'null');
-        if (stored && typeof stored.currentDifficulty === 'string') {
-          currentDifficulty = stored.currentDifficulty;
+        const origin = useStageStore.getState().stage?.origin;
+        adaptiveDomain = String(
+          origin?.corpus ?? origin?.domain ?? stored?.corpus ?? stored?.domain ?? '',
+        ).trim();
+        if (
+          adaptiveDomain &&
+          stored?.currentDifficultyByDomain &&
+          typeof stored.currentDifficultyByDomain[adaptiveDomain] === 'string'
+        ) {
+          currentDifficulty = stored.currentDifficultyByDomain[adaptiveDomain];
         }
       } catch {
         /* 画像损坏不拦交卷 */
+      }
+      if (!adaptiveDomain) {
+        if (decisionLive()) setDecisionFailed(true);
+        return;
       }
       void fetch('/api/adaptive/quiz-decision', {
         method: 'POST',
@@ -1176,8 +1147,16 @@ export function QuizView({
             try {
               const stored = JSON.parse(localStorage.getItem('learnerProfile') ?? 'null') ?? {};
               let dirty = false;
-              if (typeof next === 'string' && /^L[1-4]$/.test(next) && stored.currentDifficulty !== next) {
-                stored.currentDifficulty = next;
+              if (
+                typeof next === 'string' &&
+                /^L[1-4]$/.test(next) &&
+                stored.currentDifficultyByDomain?.[adaptiveDomain] !== next
+              ) {
+                stored.currentDifficultyByDomain = {
+                  ...(stored.currentDifficultyByDomain ?? {}),
+                  [adaptiveDomain]: next,
+                };
+                delete stored.currentDifficulty;
                 dirty = true;
               }
               // 掌握度不在这里改了。**画像已切成导出量**：值由 `refreshDerivedProfile()`
@@ -1191,7 +1170,11 @@ export function QuizView({
               // Elo 评级写回：难度行走的连续状态（决策 agent 的 L 档仍是权威）
               const elo = (payload as { elo?: { rating?: number } }).elo;
               if (elo && typeof elo.rating === 'number') {
-                stored.eloRating = elo.rating;
+                stored.eloRatingByDomain = {
+                  ...(stored.eloRatingByDomain ?? {}),
+                  [adaptiveDomain]: elo.rating,
+                };
+                delete stored.eloRating;
                 dirty = true;
               }
               if (dirty) localStorage.setItem('learnerProfile', JSON.stringify(stored));
@@ -1209,7 +1192,20 @@ export function QuizView({
     return () => {
       cancelled = true;
     };
-  }, [phase, questions, answers, locale, sceneId, stageId, sceneTitle, attemptId, runtimeWriter, totalPoints, confidence, viewLifetime]);
+  }, [
+    phase,
+    questions,
+    answers,
+    locale,
+    sceneId,
+    stageId,
+    sceneTitle,
+    attemptId,
+    runtimeWriter,
+    totalPoints,
+    confidence,
+    viewLifetime,
+  ]);
 
   const handleRetry = useCallback(async () => {
     if (!attemptId || retrying) return;
@@ -1348,9 +1344,7 @@ export function QuizView({
             <div className="flex items-center justify-between px-6 py-3 border-b border-border-subtle bg-card shrink-0">
               <div className="flex items-center gap-2">
                 <PieChart className="w-4 h-4 text-violet-500" />
-                <span className="text-sm font-semibold text-foreground">
-                  {t('quiz.answering')}
-                </span>
+                <span className="text-sm font-semibold text-foreground">{t('quiz.answering')}</span>
                 <span className="text-sm text-muted-foreground ml-1">
                   {
                     Object.keys(answers).filter((k) => {
@@ -1456,9 +1450,7 @@ export function QuizView({
               <Loader2 className="w-10 h-10 text-violet-500" />
             </motion.div>
             <div className="text-center">
-              <p className="text-base font-semibold text-foreground">
-                {t('quiz.aiGrading')}
-              </p>
+              <p className="text-base font-semibold text-foreground">{t('quiz.aiGrading')}</p>
               <p className="text-sm text-muted-foreground mt-1">{t('quiz.aiGradingWait')}</p>
             </div>
             <div className="flex gap-1 mt-2">
@@ -1510,9 +1502,7 @@ export function QuizView({
               <ScoreBanner score={earnedScore} total={totalPoints} results={results} />
 
               {/* 连错≥2 触发鼓励卡（规格3.2.4⑧⑫），不给答案 */}
-              {results.filter((r) => r.status === 'incorrect').length >= 2 && (
-                <EncouragementCard />
-              )}
+              {results.filter((r) => r.status === 'incorrect').length >= 2 && <EncouragementCard />}
 
               {/* 决策桥失联时如实告知，不再静默无横幅（四桥显式告警之一） */}
               {decisionFailed && !adaptiveDecision && (

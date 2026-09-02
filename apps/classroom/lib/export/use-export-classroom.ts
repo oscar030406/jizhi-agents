@@ -28,6 +28,7 @@ import { createProxiedFetch } from './proxied-fetch';
 import type { SceneContent } from '@/lib/types/stage';
 import { preparePBLScenesForDocumentPersistence } from '@/lib/pbl/v2/runtime/document-persistence';
 import { accessDocument } from '@/lib/document-store';
+import { ensureFullMediaExportReady } from './use-export-script';
 
 export async function inlineSceneContent(
   content: SceneContent,
@@ -47,6 +48,7 @@ export function useExportClassroom() {
   const { t } = useI18n();
 
   const exportClassroomZip = useCallback(async () => {
+    if (!ensureFullMediaExportReady(t('share.notReady'))) return;
     const { stage, scenes } = useStageStore.getState();
     if (!stage?.id || scenes.length === 0) return;
 

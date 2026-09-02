@@ -36,7 +36,9 @@ describe('教具三层轮', () => {
     const i = code.indexOf('degrading to lecture slide');
     expect(i).toBeGreaterThan(0);
     // 讲义调用要跟在降级日志后面，参数与 case 'slide' 同源
-    expect(code.slice(i, i + 500)).toMatch(/generateSlideContent\(\s*\{ \.\.\.outline, type: 'slide' \}/);
+    expect(code.slice(i, i + 500)).toMatch(
+      /generateSlideContent\(\s*\{ \.\.\.outline, type: 'slide' \}/,
+    );
   });
 
   it('注释与实现一致：承诺的降级真的写了', () => {
@@ -70,8 +72,6 @@ describe('同课形态去重', () => {
   });
 
   it('批量生成侧真的收集并透传——不是又一个建了没接线', () => {
-    const { readFileSync } = require('node:fs') as typeof import('node:fs');
-    const { join } = require('node:path') as typeof import('node:path');
     const src = readFileSync(join(process.cwd(), 'lib/server/classroom-generation.ts'), 'utf-8');
     // 参数加了、目录会标注了，但如果没人填，永远收到空数组
     expect(src).toContain('usedTemplateIds.add(usedId)');

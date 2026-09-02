@@ -92,7 +92,6 @@ describe.skipIf(!OUT_DIR)('materialize a Hyperframes project for real-CLI E2E', 
 
     expect(existsSync(join(dir, 'index.html'))).toBe(true);
     expect(existsSync(gsapDst)).toBe(true);
-    // eslint-disable-next-line no-console
     console.log(`\n[hf-e2e] project written to ${dir}\n  cd ${dir} && npx hyperframes lint\n`);
   });
 });

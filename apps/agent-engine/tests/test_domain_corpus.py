@@ -130,12 +130,23 @@ def test_一次性验证库不对学习者露面():
 
     用命名约定不用手工黑名单：名单要人记得维护，约定不用。
     """
+    from backend.integration import personalize_service as ps
     from backend.integration.personalize_service import is_scratch_corpus
 
-    for name in ("fullpath-probe", "timeout-probe", "test-foo", "tmp-x", "bodysize-probe"):
+    for name in (
+        "fullpath-probe",
+        "timeout-probe",
+        "test-foo",
+        "tmp-x",
+        "bodysize-probe",
+        "fullprobe-20260901",
+    ):
         assert is_scratch_corpus(name), name
     for name in ("smart-manufacturing", "iotdb", "odoo", "ai", "protein-design"):
         assert not is_scratch_corpus(name), f"{name} 是正经库，不许被误挡"
+    gate = ps._corpus_gate("fullprobe-20260901", chunks=300, retrievable=True)
+    assert gate["passed"] is False
+    assert any("一次性验证库" in reason for reason in gate["reasons"])
 
 
 # ── 岗位技能图谱的域化（2026-08-30 静默错配修复）─────────────────────────

@@ -4,6 +4,7 @@ import { NextRequest } from 'next/server';
 const mocks = vi.hoisted(() => ({
   after: vi.fn(),
   accountForSession: vi.fn(),
+  authorizeInternalCorpusService: vi.fn(),
   requireCorpusVisible: vi.fn(),
   createClassroomGenerationJob: vi.fn(),
   readClassroomGenerationJob: vi.fn(),
@@ -20,6 +21,7 @@ vi.mock('@/lib/accounts/store', () => ({ accountForSession: mocks.accountForSess
 vi.mock('@/lib/accounts/session', () => ({ SESSION_COOKIE: 'jizhi_session' }));
 vi.mock('@/lib/accounts/org-store', () => ({ orgForAccount: mocks.orgForAccount }));
 vi.mock('@/lib/server/corpus-access', () => ({
+  authorizeInternalCorpusService: mocks.authorizeInternalCorpusService,
   requireCorpusVisible: mocks.requireCorpusVisible,
 }));
 vi.mock('@/lib/server/classroom-job-store', () => ({
@@ -54,10 +56,11 @@ function postRequest(corpus?: string, token?: string) {
   });
 }
 
-function storedJob(ownerAccountId: string | null) {
+function storedJob(ownerAccountId: string | null, ownerOrgId: string | null = null) {
   return {
     id: 'job_123',
     ownerAccountId,
+    ownerOrgId,
     corpus: 'ai',
     status: 'queued',
     step: 'queued',
@@ -78,6 +81,7 @@ function storedJob(ownerAccountId: string | null) {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.accountForSession.mockResolvedValue(null);
+  mocks.authorizeInternalCorpusService.mockResolvedValue({ attempted: false });
   mocks.requireCorpusVisible.mockResolvedValue({ ok: true });
   mocks.orgForAccount.mockResolvedValue(null);
   mocks.buildRequestOrigin.mockReturnValue('http://localhost');
@@ -100,10 +104,12 @@ describe('整课生成 job 账户归属', () => {
     expect(mocks.createClassroomGenerationJob).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(Object),
-      { ownerAccountId: owner, corpus: corpus ?? 'ai' },
+      { ownerAccountId: owner, ownerOrgId: account ? 'org-a' : null, corpus: corpus ?? 'ai' },
     );
     expect(mocks.createClassroomGenerationJob.mock.calls[0][1]).toEqual(
-      account ? expect.objectContaining({ ownerOrgId: 'org-a' }) : expect.not.objectContaining({ ownerOrgId: expect.anything() }),
+      account
+        ? expect.objectContaining({ ownerOrgId: 'org-a' })
+        : expect.not.objectContaining({ ownerOrgId: expect.anything() }),
     );
   });
 
@@ -152,6 +158,20 @@ describe('整课生成 job 账户归属', () => {
     });
 
     expect(response.status).toBe(200);
+    expect(mocks.accountForSession).not.toHaveBeenCalled();
+  });
+
+  it('机构 job 在浏览器分支一律返回 404，即使会话账户与 ownerAccountId 相同', async () => {
+    mocks.accountForSession.mockResolvedValue({ id: 'account-a' });
+    mocks.readClassroomGenerationJob.mockResolvedValue(storedJob('account-a', 'org-a'));
+    const { GET } = await import('@/app/api/generate-classroom/[jobId]/route');
+
+    const response = await GET(new NextRequest('http://localhost/api/generate-classroom/job_123'), {
+      params: Promise.resolve({ jobId: 'job_123' }),
+    });
+
+    expect(response.status).toBe(404);
+    expect((await response.json()).error).toBe('Classroom generation job not found');
     expect(mocks.accountForSession).not.toHaveBeenCalled();
   });
 });

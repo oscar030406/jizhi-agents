@@ -38,6 +38,7 @@ import type {
   PBLRole,
   PBLScenarioConfig,
 } from '../types';
+import { pblProductionGaps } from '../types';
 
 const log = createLogger('PBL v2 Planner');
 
@@ -1029,20 +1030,7 @@ export function plannerCompletionGaps(
   project: PBLProjectV2,
   opts?: { scenarioRoleplay?: boolean },
 ): string[] {
-  const errors: string[] = [];
-  if (!project.title) errors.push('title is empty');
-  if (!project.description) errors.push('description is empty');
-  if (!project.roles.some((r) => r.type === 'instructor')) {
-    errors.push('no Instructor role');
-  }
-  if (project.milestones.length === 0) {
-    errors.push('no milestones');
-  }
-  for (const m of project.milestones) {
-    if (m.microtasks.length === 0) {
-      errors.push(`milestone "${m.title}" has no microtasks`);
-    }
-  }
+  const errors = pblProductionGaps(project);
   if (!opts?.scenarioRoleplay) {
     errors.push(...ordinaryPBLTextOnlyGaps(project));
   }

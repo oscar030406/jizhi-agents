@@ -111,6 +111,26 @@ class AblationResult(BaseModel):
     metrics: AblationMetrics
 
 
+def _domain_contract_only(diagnosis: DiagnosisResult) -> DiagnosisResult:
+    """消融关闭学习者适配，但保留域裁决合同；下游代理禁止无蓝图运行。"""
+    blueprint = diagnosis.personalization_blueprint
+    if not blueprint or blueprint.goal_mapping_status != "mapped":
+        raise RuntimeError("消融样例的学习目标未映射到当前领域概念词表")
+    contract = blueprint.model_copy(
+        update={
+            "skill_gaps": [],
+            "learner_type": "domain_contract_only",
+            "content_strategy": [],
+            "practice_strategy": [],
+            "assessment_strategy": [],
+            "resource_mix": None,
+        }
+    )
+    return diagnosis.model_copy(
+        update={"weak_concepts": [], "personalization_blueprint": contract}
+    )
+
+
 def run_ablation_case(case: E2ECase, mode: AblationMode) -> AblationResult:
     if mode not in ABLATION_MODES:
         raise ValueError(f"unsupported ablation mode: {mode}")
@@ -132,9 +152,7 @@ def run_ablation_case(case: E2ECase, mode: AblationMode) -> AblationResult:
             diagnosis_agent = LearnerDiagnosisAgent()
             pretest = estimate_pretest_from_profile(profile, load_pretest_questions())
             diagnosis = diagnosis_agent.run(profile, pretest, learning_goal=case.learning_goal)
-            generic_diagnosis = DiagnosisResult.model_validate(
-                diagnosis.model_dump(mode="python") | {"personalization_blueprint": None}
-            )
+            generic_diagnosis = _domain_contract_only(diagnosis)
             retrieval = KnowledgeRetrievalAgent().run(case.learning_goal, generic_diagnosis)
             audit = ContentAuditAgent().run(resources, generic_diagnosis, retrieval)
             executed_agents = [generation_agent.name]
@@ -159,9 +177,7 @@ def run_ablation_case(case: E2ECase, mode: AblationMode) -> AblationResult:
         retrieval = run.retrieval
         difficulty = run.diagnosis.recommended_difficulty
         # 统一测量口径：与其他档一致，指标来自对最终资源的独立测量审核
-        measure_diag = DiagnosisResult.model_validate(
-            run.diagnosis.model_dump(mode="python") | {"personalization_blueprint": None}
-        )
+        measure_diag = run.diagnosis
         audit = ContentAuditAgent().run(resources, measure_diag, retrieval)
         executed_agents = [step.agent for step in run.trace]
         stages = ["diagnosis", "retrieval", "generation", "audit_loop", "learning_path"]
@@ -176,9 +192,7 @@ def run_ablation_case(case: E2ECase, mode: AblationMode) -> AblationResult:
         audit_agent = ContentAuditAgent()
         pretest = estimate_pretest_from_profile(profile, load_pretest_questions())
         diagnosis = diagnosis_agent.run(profile, pretest, learning_goal=case.learning_goal)
-        generic_diagnosis = DiagnosisResult.model_validate(
-            diagnosis.model_dump(mode="python") | {"personalization_blueprint": None}
-        )
+        generic_diagnosis = _domain_contract_only(diagnosis)
         retrieval = retrieval_agent.run(case.learning_goal, generic_diagnosis)
         difficulty = generic_diagnosis.recommended_difficulty
         executed_agents = [diagnosis_agent.name, retrieval_agent.name, generation_agent.name]
@@ -382,7 +396,7 @@ def summarize_ablation(results: list[AblationResult]) -> dict[str, dict[str, flo
 
 
 def _direct_resources(case: E2ECase) -> LearningResources:
-    concepts = goal_concepts(case.learning_goal)
+    concepts = goal_concepts(case.learning_goal, "ai")
     return LearningResources(
         lecture=LectureResource(
             title=f"直接生成：{case.learning_goal}",

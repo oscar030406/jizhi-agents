@@ -194,11 +194,11 @@ export function needsSafetyLayer(corpus?: string, _registryVersion?: number): bo
  * 前端再判一层是**双保险**——上一次它漏进学习者下拉，正是因为唯一一道闸
  * 换了判据。两处口径必须一起改，改一处漏一处就是那次事故重演。
  */
-const SCRATCH_PATTERNS = [/-probe$/, /-test$/, /-tmp$/, /-scratch$/, /^probe-/, /^test-/, /^tmp-/, /^scratch-/];
+const SCRATCH_PATTERN = /(?:^fullprobe|(?:^|[-_])(?:probe|test|tmp|scratch)(?:[-_]|$))/;
 
 export function isScratchCorpus(corpus: string): boolean {
   const name = corpus.trim().toLowerCase();
-  return SCRATCH_PATTERNS.some((p) => p.test(name));
+  return SCRATCH_PATTERN.test(name);
 }
 
 /**

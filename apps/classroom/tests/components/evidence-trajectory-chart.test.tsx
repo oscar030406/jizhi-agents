@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
+
+const testState = vi.hoisted(() => ({ ledgerFails: false, ledgerReads: 0 }));
 
 /**
  * 证据轨迹图：得分不许只靠颜色读。
@@ -37,10 +39,14 @@ const TRAJ = [
 ];
 
 vi.mock('@/lib/evidence', () => ({
-  readLedger: async () => ({ evidence: [], signals: [], invalidations: [], giveUps: [] }),
+  readLedger: async () => {
+    testState.ledgerReads += 1;
+    if (testState.ledgerFails) throw new Error('ledger unavailable');
+    return { evidence: [], signals: [], invalidations: [], giveUps: [] };
+  },
   history: () => [],
   invalidatedIds: () => new Set(),
-  fold: () => ({ all: [] }),
+  fold: () => ({ general: [], byDomain: { ai: [] }, all: [] }),
 }));
 vi.mock('@/lib/evidence/trajectory', () => ({
   trajectories: () => TRAJ,
@@ -57,11 +63,16 @@ vi.mock('@/lib/evidence/trajectory', () => ({
 
 const { EvidenceTrajectoryChart } = await import('@/components/report/evidence-trajectory-chart');
 
-async function render(): Promise<HTMLElement> {
+beforeEach(() => {
+  testState.ledgerFails = false;
+  testState.ledgerReads = 0;
+});
+
+async function render(domain: string | undefined = 'ai'): Promise<HTMLElement> {
   const host = document.createElement('div');
   document.body.appendChild(host);
   await act(async () => {
-    createRoot(host).render(<EvidenceTrajectoryChart />);
+    createRoot(host).render(<EvidenceTrajectoryChart domain={domain} />);
   });
   await act(async () => {
     await Promise.resolve();
@@ -75,9 +86,7 @@ describe('证据轨迹图', () => {
     const host = await render();
     const svg = host.querySelector('svg[aria-label="学情证据时间轨迹图"]')!;
     // 一行三条刻度：1.0 / 0.5 / 0。y 值互不相同才说明真的分了三档。
-    const ys = new Set(
-      [...svg.querySelectorAll('line')].map((l) => l.getAttribute('y1')),
-    );
+    const ys = new Set([...svg.querySelectorAll('line')].map((l) => l.getAttribute('y1')));
     expect(ys.size).toBeGreaterThanOrEqual(3);
     expect(svg.textContent).toContain('1.0');
     expect(svg.textContent).toContain('0.0');
@@ -98,5 +107,19 @@ describe('证据轨迹图', () => {
     const svg = host.querySelector('svg[aria-label="学情证据时间轨迹图"]')!;
     const label = [...svg.querySelectorAll('text')].find((t) => t.textContent?.endsWith('…'))!;
     expect(label.textContent).toBe('检索增强生成里的重排…');
+  });
+
+  it('缺少有效领域时显式未覆盖，不读取全域账本', async () => {
+    const host = await render('');
+    expect(host.textContent).toContain('当前有效领域尚未确认');
+    expect(host.querySelector('svg')).toBeNull();
+    expect(testState.ledgerReads).toBe(0);
+  });
+
+  it('账本读取失败时显式未覆盖，不伪装成空履历', async () => {
+    testState.ledgerFails = true;
+    const host = await render();
+    expect(host.textContent).toContain('证据账本暂时无法读取');
+    expect(host.textContent).toContain('没有回退到全域履历');
   });
 });

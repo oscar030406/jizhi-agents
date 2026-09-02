@@ -8,20 +8,16 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   isValidCorpusName,
+  readCorpusOwnerMarkers,
+  releaseCorpusOwnerMarker,
   readCorpora,
   readCorpus,
-  snapshotDrift,
-  type CorpusOverview,
 } from '@/lib/server/knowledge-center';
-
-/** 只喂 snapshotDrift 用到的两个字段。 */
-function live(corpus: string, available: boolean, chunks: number | null): CorpusOverview {
-  return { corpus, available, chunks } as CorpusOverview;
-}
+import { readDomainRegistry } from '@/lib/server/domain-registry';
 
 function engineDataDir(): string {
   return process.env.ENGINE_DATA_DIR || path.join(process.cwd(), '..', 'agent-engine', 'data');
@@ -50,9 +46,7 @@ describe('知识库中心', () => {
       console.warn('跳过：本机没有引擎数据目录');
       return;
     }
-    const declared: string[] = JSON.parse(
-      await fs.readFile(path.join(process.cwd(), 'public', 'skill-map.json'), 'utf-8'),
-    ).corpora.map((c: { corpus: string }) => c.corpus);
+    const declared = Object.keys((await readDomainRegistry()).entries);
     expect(declared.length).toBeGreaterThan(0);
     const names = (await readCorpora()).map((c) => c.corpus);
     for (const d of declared) expect(names).toContain(d);
@@ -120,41 +114,66 @@ describe('知识库中心', () => {
     expect(row?.stations.every((s) => !s.built)).toBe(true);
   });
 
-  it('快照与磁盘一致时不出提示；新增/重建/消失各出一条', () => {
-    const snapshot = [
-      { corpus: 'ai', available: true, chunk_count: 1704 },
-      { corpus: 'odoo', available: true, chunk_count: 307 },
-      { corpus: 'gone', available: true, chunk_count: 9 },
-      { corpus: 'manufacturing', available: false, chunk_count: 0 },
-    ];
-    expect(
-      snapshotDrift(
-        [live('ai', true, 1704), live('odoo', true, 307), live('gone', true, 9)],
-        snapshot,
-      ),
-    ).toEqual([]);
-    // 未建成的库两边都是灰的，不算不一致
-    expect(
-      snapshotDrift(
-        [live('ai', true, 1704), live('odoo', true, 307), live('gone', true, 9), live('manufacturing', false, null)],
-        snapshot,
-      ),
-    ).toEqual([]);
-    const notes = snapshotDrift(
-      [live('ai', true, 1704), live('odoo', true, 512), live('demo-corpus', true, 2)],
-      snapshot,
-    );
-    expect(notes).toEqual([
-      '「企业管理系统 Odoo」证据块 307 → 512',
-      '新增「demo-corpus」（2 个证据块）',
-      '「gone」已不在磁盘上',
-    ]);
-    // 没有快照文件可比时不瞎报
-    expect(snapshotDrift([live('demo-corpus', true, 2)], null)).toEqual([]);
-  });
-
   it('语料名不合法时直接返回 null，不去碰磁盘', async () => {
     expect(await readCorpus('../../etc/passwd')).toBeNull();
+  });
+
+  it('归属读取与释放只走带内部令牌的引擎边界', async () => {
+    const previousUrl = process.env.GROUNDING_URL;
+    const previousToken = process.env.GROUNDING_TOKEN;
+    process.env.GROUNDING_URL = 'http://engine.test';
+    process.env.GROUNDING_TOKEN = 'secret-token';
+    const engineFetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ownership: { 'new-domain': 'org-a' } }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 403 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ released: true }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ownership: {} }), { status: 200 }));
+    vi.stubGlobal('fetch', engineFetch);
+    try {
+      expect(Object.fromEntries(await readCorpusOwnerMarkers())).toEqual({ 'new-domain': 'org-a' });
+      expect(await releaseCorpusOwnerMarker('new-domain', 'org-b')).toBe(false);
+      expect(await releaseCorpusOwnerMarker('new-domain', 'org-a')).toBe(true);
+      expect((await readCorpusOwnerMarkers()).has('new-domain')).toBe(false);
+      expect(engineFetch.mock.calls.map(([url]) => url)).toEqual([
+        'http://engine.test/api/domain-intake/corpus-owners',
+        'http://engine.test/api/domain-intake/corpus-owners/new-domain',
+        'http://engine.test/api/domain-intake/corpus-owners/new-domain',
+        'http://engine.test/api/domain-intake/corpus-owners',
+      ]);
+      expect((engineFetch.mock.calls[0][1] as RequestInit).headers).toEqual({
+        'x-internal-token': 'secret-token',
+      });
+      expect((engineFetch.mock.calls[2][1] as RequestInit).headers).toEqual({
+        'x-internal-token': 'secret-token',
+        'x-jizhi-owner-org': 'org-a',
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      if (previousUrl === undefined) delete process.env.GROUNDING_URL;
+      else process.env.GROUNDING_URL = previousUrl;
+      if (previousToken === undefined) delete process.env.GROUNDING_TOKEN;
+      else process.env.GROUNDING_TOKEN = previousToken;
+    }
+  });
+
+  it('引擎归属接口不可达时失败关闭，不把私有库回退成公共库', async () => {
+    const previousUrl = process.env.GROUNDING_URL;
+    const previousToken = process.env.GROUNDING_TOKEN;
+    process.env.GROUNDING_URL = 'http://engine.test';
+    process.env.GROUNDING_TOKEN = 'secret-token';
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('engine unavailable')));
+    try {
+      await expect(readCorpusOwnerMarkers()).rejects.toThrow('engine unavailable');
+    } finally {
+      vi.unstubAllGlobals();
+      if (previousUrl === undefined) delete process.env.GROUNDING_URL;
+      else process.env.GROUNDING_URL = previousUrl;
+      if (previousToken === undefined) delete process.env.GROUNDING_TOKEN;
+      else process.env.GROUNDING_TOKEN = previousToken;
+    }
   });
 
   /**

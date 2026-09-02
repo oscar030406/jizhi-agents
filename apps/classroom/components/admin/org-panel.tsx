@@ -13,6 +13,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Building2, Copy, Loader2, RefreshCw, UserMinus } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { redactCaliber } from '@/lib/metrics/redact-caliber';
 
 interface OrgInfo {
   id: string;
@@ -179,7 +180,7 @@ export function OrgPanel() {
             {busy ? <Loader2 className="size-3.5 animate-spin" /> : '创建'}
           </Button>
         </div>
-        {error && <p className="mt-3 text-xs text-red-600">{error}</p>}
+        {error && <p className="mt-3 text-xs text-red-600">{redactCaliber(error)}</p>}
       </section>
     );
   }
@@ -240,7 +241,7 @@ export function OrgPanel() {
         )}
       </section>
 
-      {error && <p className="text-xs text-red-600">{error}</p>}
+      {error && <p className="text-xs text-red-600">{redactCaliber(error)}</p>}
       {notice && <p className="text-xs text-muted-foreground">{notice}</p>}
 
       {/* ── 成员名册 ── */}
@@ -462,7 +463,7 @@ export function OrgPanel() {
         <section className="rounded-2xl border border-border bg-card p-6 shadow-card">
           <h2 className="text-sm font-medium">知识库归属</h2>
           <p className="mt-1 text-[11px] text-muted-foreground">
-            归属到本机构 = 只有本机构学员可见；公共 = 所有学习者可见。他机构的库不可操作。
+            新库在入库成功后自动归属创建机构；公共系统库对所有学习者开放，不能手工认领。
           </p>
           <ul className="mt-4 space-y-2">
             {corpora.map((c) => {
@@ -502,27 +503,6 @@ export function OrgPanel() {
                         }
                       >
                         释放为公共
-                      </Button>
-                    )}
-                    {state === 'public' && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="text-xs"
-                        disabled={busy}
-                        onClick={() =>
-                          act(
-                            () =>
-                              fetch('/api/org/corpora', {
-                                method: 'POST',
-                                headers: { 'content-type': 'application/json' },
-                                body: JSON.stringify({ corpus: c.corpus, action: 'claim' }),
-                              }),
-                            `「${c.label}」已归属本机构`,
-                          )
-                        }
-                      >
-                        归属本机构
                       </Button>
                     )}
                     {state === 'other' && (

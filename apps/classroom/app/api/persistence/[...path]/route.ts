@@ -226,14 +226,6 @@ export async function handlePersistenceRequest(
   if (!connectionString) {
     return jsonError(404, 'PERSISTENCE_NOT_CONFIGURED', 'server persistence not configured');
   }
-  if (!process.env.PERSISTENCE_DEV_TOKEN) {
-    return jsonError(
-      503,
-      'PERSISTENCE_DEV_TOKEN_MISSING',
-      'server persistence requires PERSISTENCE_DEV_TOKEN (development auth only)',
-    );
-  }
-
   try {
     const poolFactory = deps.poolFactory ?? ((value) => new Pool({ connectionString: value }));
     const resources = await getPersistenceResources(connectionString, poolFactory);

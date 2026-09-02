@@ -66,7 +66,9 @@ describe('全新注册的账号学情为空', () => {
     const profile = loadLearnerProfile();
     expect(profile.conceptMastery).toBeUndefined();
 
-    const html = renderToStaticMarkup(createElement(MasterySummaryCard, { profile }));
+    const html = renderToStaticMarkup(
+      createElement(MasterySummaryCard, { profile, effectiveDomain: 'ai' }),
+    );
     expect(html).toContain('还没有测验记录');
     expect(html).not.toContain('llm_basics');
     expect(html).not.toContain('0.40');
@@ -89,7 +91,10 @@ describe('内部概念代号不上屏', () => {
   it('学情卡把 llm_basics 换成中文名，认不出的键（场景标题）原样显示', () => {
     const html = renderToStaticMarkup(
       createElement(MasterySummaryCard, {
-        profile: { conceptMastery: { llm_basics: 0.4, 知识巩固测试: 0.4 } },
+        effectiveDomain: 'ai',
+        profile: {
+          conceptMasteryByDomain: { ai: { llm_basics: 0.4, 知识巩固测试: 0.4 } },
+        },
       }),
     );
     expect(html).toContain('大模型基础');

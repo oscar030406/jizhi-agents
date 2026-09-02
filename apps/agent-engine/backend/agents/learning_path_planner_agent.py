@@ -28,22 +28,24 @@ class LearningPathPlannerAgent:
         resources: LearningResources,
         audit: AuditResult,
     ) -> LearningPath:
+        blueprint = diagnosis.personalization_blueprint
+        if not blueprint or blueprint.goal_mapping_status != "mapped":
+            raise RuntimeError("学习路径生成失败：缺少已映射的领域个性化蓝图。")
         graph = load_graph()
         # 独立建出来的库按自己的前置图排（`isolated_corpus` 只对有 <corpus>_intake 的库
         # 返回域名）。此前这里拿的是全域并集：接入流水线给智能制造造了 51 条边，
         # 却和 AI、具身的边拍在一张平表里，学习者学智能制造时闭包里能长出 AI 概念。
         # 主库（ai/空）仍走并集——它的索引本来就含具身子域，硬过滤反而劈开了该在一起的两半。
-        domain = isolated_corpus(getattr(profile, "corpus", ""))
+        domain = isolated_corpus(blueprint.corpus)
         # 学习者本次需要的概念 = 技能缺口 + 薄弱概念 + 目标概念；扩展到前置闭包。
-        blueprint = diagnosis.personalization_blueprint
         gap_concepts = [
             gap.concept
-            for gap in (blueprint.skill_gaps if blueprint else [])
+            for gap in blueprint.skill_gaps
             if gap.gap > 0
         ]
         gap_priority = {
             gap.concept: gap.priority
-            for gap in (blueprint.skill_gaps if blueprint else [])
+            for gap in blueprint.skill_gaps
         }
         needed = list(dict.fromkeys(gap_concepts + diagnosis.weak_concepts + resources.target_concepts))
         closure = prerequisite_closure(needed, domain) if graph else needed
@@ -54,23 +56,26 @@ class LearningPathPlannerAgent:
         base_hours = max(2, min(8, profile.time_budget_hours // 4))
 
         # 核心阶段：难度不超过推荐难度的概念，按难度分档成阶段
-        core = [c for c in ordered if _rank(_concept_level(c, graph)) <= rec_rank]
-        advanced = [c for c in ordered if _rank(_concept_level(c, graph)) > rec_rank]
+        core = [c for c in ordered if _rank(_concept_level(c, graph, domain)) <= rec_rank]
+        advanced = [c for c in ordered if _rank(_concept_level(c, graph, domain)) > rec_rank]
         if not core:
             core = ordered[:1] or needed[:1]
 
         stages: list[LearningPathStage] = []
         stage_no = 0
         for level in _LEVELS:
-            level_concepts = [c for c in core if _concept_level(c, graph) == level]
+            level_concepts = [c for c in core if _concept_level(c, graph, domain) == level]
             level_concepts.sort(key=lambda concept: gap_priority.get(concept, 10_000))
             if not level_concepts:
                 continue
             stage_no += 1
             gap_here = [c for c in level_concepts if c in weak_set]
-            focus = gap_here or level_concepts
-            titles = "、".join(_concept_title(c, graph) for c in level_concepts)
-            misconceptions = [m for c in level_concepts for m in concept_meta(c).get("misconceptions", [])][:2]
+            titles = "、".join(_concept_title(c, graph, domain) for c in level_concepts)
+            misconceptions = [
+                misconception
+                for concept in level_concepts
+                for misconception in concept_meta(concept, domain).get("misconceptions", [])
+            ][:2]
             practice = (
                 resources.practice_task.title
                 if resources.practice_task.difficulty == level
@@ -78,7 +83,10 @@ class LearningPathPlannerAgent:
             )
             goals = [f"掌握：{titles}"]
             if gap_here:
-                goals.append(f"重点补齐薄弱点：{'、'.join(_concept_title(c, graph) for c in gap_here)}")
+                goals.append(
+                    f"重点补齐薄弱点："
+                    f"{'、'.join(_concept_title(c, graph, domain) for c in gap_here)}"
+                )
             if misconceptions:
                 goals.append(f"规避常见误区：{'；'.join(misconceptions)}")
             stages.append(
@@ -112,12 +120,12 @@ class LearningPathPlannerAgent:
 
         # 进阶展望（超出当前推荐难度的概念）
         if advanced:
-            titles = "、".join(_concept_title(c, graph) for c in advanced)
+            titles = "、".join(_concept_title(c, graph, domain) for c in advanced)
             stages.append(
                 LearningPathStage(
                     stage_id="stage-advanced",
                     title=f"进阶展望·{titles}",
-                    difficulty=_concept_level(advanced[-1], graph),
+                    difficulty=_concept_level(advanced[-1], graph, domain),
                     goals=[f"达成当前阶段后再挑战：{titles}"],
                     concepts=advanced,
                     practice_task=f"完成核心阶段后，选做 {titles} 的开放任务。",
@@ -127,14 +135,14 @@ class LearningPathPlannerAgent:
             )
 
         prereq_titles = [
-            _concept_title(c, graph)
+            _concept_title(c, graph, domain)
             for c in ordered
             if c not in weak_set and c not in resources.target_concepts
         ]
         return LearningPath(
             learning_path=stages,
             stage_goals=[stage.title for stage in stages],
-            prerequisites=prereq_titles[:4] or ["Python 基础", "LLM 提示词基础"],
+            prerequisites=prereq_titles[:4],
             estimated_time=sum(stage.estimated_hours for stage in stages),
             assessment_plan=[stage.assessment for stage in stages],
         )
@@ -144,9 +152,11 @@ def _rank(level: str) -> int:
     return _LEVELS.index(level) + 1 if level in _LEVELS else 2
 
 
-def _concept_level(concept: str, graph: dict) -> str:
-    return graph.get(concept, {}).get("difficulty", "L2")
+def _concept_level(concept: str, graph: dict, domain: str | None) -> str:
+    meta = concept_meta(concept, domain)
+    return str(meta.get("difficulty") or "L2")
 
 
-def _concept_title(concept: str, graph: dict) -> str:
-    return graph.get(concept, {}).get("title", concept.replace("_", " "))
+def _concept_title(concept: str, graph: dict, domain: str | None) -> str:
+    meta = concept_meta(concept, domain)
+    return str(meta.get("title") or concept.replace("_", " "))

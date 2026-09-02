@@ -11,10 +11,7 @@ import { Building2 } from 'lucide-react';
 
 export function OrgBadge() {
   const [state, setState] = useState<
-    | { kind: 'loading' }
-    | { kind: 'none' }
-    | { kind: 'member'; name: string }
-    | { kind: 'anon' }
+    { kind: 'loading' } | { kind: 'none' } | { kind: 'member'; name: string } | { kind: 'anon' }
   >({ kind: 'loading' });
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
@@ -102,18 +99,30 @@ export function OrgBadge() {
 
 /** 机构指派卡：管理员派的课直接可点进课堂。空清单不渲染，不占版面。 */
 function OrgAssignments() {
-  const [items, setItems] = useState<Array<{ id: string; courseId: string; title: string }>>([]);
+  type AssignmentView = {
+    id: string;
+    courseId: string;
+    title: string;
+    availability?: 'ready' | 'unavailable';
+    unavailableReason?: string;
+  };
+  const [state, setState] = useState<
+    { kind: 'loading' } | { kind: 'ready'; items: AssignmentView[] } | { kind: 'error' }
+  >({ kind: 'loading' });
 
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
         const resp = await fetch('/api/org/assignments', { cache: 'no-store' });
-        if (!resp.ok) return;
+        if (!resp.ok) {
+          if (alive) setState({ kind: 'error' });
+          return;
+        }
         const body = await resp.json();
-        if (alive) setItems(body?.assignments ?? []);
+        if (alive) setState({ kind: 'ready', items: body?.assignments ?? [] });
       } catch {
-        /* 引擎/接口异常按无指派处理 */
+        if (alive) setState({ kind: 'error' });
       }
     })();
     return () => {
@@ -121,19 +130,36 @@ function OrgAssignments() {
     };
   }, []);
 
-  if (items.length === 0) return null;
+  if (state.kind === 'loading') return null;
+  if (state.kind === 'error') {
+    return (
+      <p className="mt-2 text-[11px] text-amber-700 dark:text-amber-300">
+        机构课程指派暂时无法读取，请稍后刷新。
+      </p>
+    );
+  }
+  if (state.items.length === 0) return null;
   return (
     <div className="mt-2 rounded-lg border border-border bg-muted/30 px-2.5 py-2">
       <p className="text-[10px] font-medium text-muted-foreground">机构指派课程</p>
       <ul className="mt-1 space-y-0.5">
-        {items.map((a) => (
+        {state.items.map((a) => (
           <li key={a.id}>
-            <a
-              href={`/classroom/${a.courseId}`}
-              className="text-[11px] text-blue-deep underline underline-offset-2 hover:no-underline"
-            >
-              {a.title}
-            </a>
+            {a.availability === 'unavailable' ? (
+              <div className="text-[11px] leading-relaxed">
+                <p className="font-medium text-foreground">{a.title}</p>
+                <p className="text-amber-700 dark:text-amber-300">
+                  {a.unavailableReason ?? '机构课程暂不可用，请联系管理者检查课程状态。'}
+                </p>
+              </div>
+            ) : (
+              <a
+                href={`/classroom/${a.courseId}`}
+                className="text-[11px] text-blue-deep underline underline-offset-2 hover:no-underline"
+              >
+                {a.title}
+              </a>
+            )}
           </li>
         ))}
       </ul>

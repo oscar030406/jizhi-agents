@@ -9,6 +9,16 @@
 export interface DomainContextProfile {
   domain?: string;
   corpus?: string;
+  conceptMastery?: Record<string, number>;
+  conceptConfidence?: Record<string, number>;
+  conceptRecall?: Record<string, number>;
+  conceptMasteryByDomain?: Record<string, Record<string, number>>;
+  conceptConfidenceByDomain?: Record<string, Record<string, number>>;
+  conceptRecallByDomain?: Record<string, Record<string, number>>;
+  currentDifficulty?: string;
+  currentDifficultyByDomain?: Record<string, string>;
+  eloRating?: number;
+  eloRatingByDomain?: Record<string, number>;
 }
 
 export interface DomainContextAssignment {
@@ -16,6 +26,8 @@ export interface DomainContextAssignment {
   courseId: string;
   title?: string;
   createdAt?: string;
+  availability?: 'ready' | 'unavailable';
+  unavailableReason?: string;
 }
 
 export interface DomainContextCourse {
@@ -36,7 +48,12 @@ export type EffectiveDomainSource =
   | 'profile-domain'
   | 'none';
 
-export type EffectiveDomainStatus = 'ready' | 'unregistered' | 'missing-course-domain' | 'none';
+export type EffectiveDomainStatus =
+  | 'ready'
+  | 'unregistered'
+  | 'assignment-unavailable'
+  | 'missing-course-domain'
+  | 'none';
 
 export interface EffectiveDomainContext {
   domain: string | null;
@@ -47,6 +64,9 @@ export interface EffectiveDomainContext {
   registered: boolean;
   eligible?: boolean;
   assignment?: DomainContextAssignment;
+  /** 最新指派只负责定域；这里保留该领域内当前可进入的全部指派。 */
+  assignments?: readonly DomainContextAssignment[];
+  courseIds?: readonly string[];
   reason?: string;
 }
 
@@ -70,6 +90,7 @@ function fromDomain(
   source: Exclude<EffectiveDomainSource, 'none'>,
   registry: Readonly<Record<string, DomainContextRegistryEntry>>,
   assignment?: DomainContextAssignment,
+  assignments: readonly DomainContextAssignment[] = [],
 ): EffectiveDomainContext {
   const entry = registry[domain];
   const rawLabel = clean(entry?.label);
@@ -87,6 +108,12 @@ function fromDomain(
     registered,
     ...(typeof entry?.eligible === 'boolean' ? { eligible: entry.eligible } : {}),
     ...(assignment ? { assignment } : {}),
+    ...(assignment
+      ? {
+          assignments,
+          courseIds: [...new Set(assignments.map((item) => item.courseId))],
+        }
+      : {}),
     ...(status === 'unregistered'
       ? { reason: `引擎域注册清单尚未登记课程所属领域「${domain}」，系统不会改用 AI 内容代替。` }
       : {}),
@@ -113,9 +140,31 @@ export function resolveEffectiveDomainContext({
 
   const assignment = orderedAssignments[0];
   if (assignment) {
+    if (assignment.availability === 'unavailable') {
+      return {
+        domain: null,
+        source: 'course-assignment',
+        status: 'assignment-unavailable',
+        isAi: false,
+        registered: false,
+        assignment,
+        assignments: [],
+        courseIds: [],
+        reason:
+          clean(assignment.unavailableReason) ||
+          '机构课程暂不可用；系统不会改用旧课程或画像里的 AI 领域代替。',
+      };
+    }
     const course = courseDomains[assignment.courseId];
     const domain = usableDomain(course?.domain ?? course?.corpus);
-    if (domain) return fromDomain(domain, 'course-assignment', registry, assignment);
+    if (domain) {
+      const sameDomainAssignments = orderedAssignments.filter((candidate) => {
+        if (candidate.availability === 'unavailable') return false;
+        const candidateCourse = courseDomains[candidate.courseId];
+        return usableDomain(candidateCourse?.domain ?? candidateCourse?.corpus) === domain;
+      });
+      return fromDomain(domain, 'course-assignment', registry, assignment, sameDomainAssignments);
+    }
 
     return {
       domain: null,
@@ -124,8 +173,9 @@ export function resolveEffectiveDomainContext({
       isAi: false,
       registered: false,
       assignment,
-      reason:
-        '最新机构指派课程尚无引擎领域归属；系统不会改用旧课程或画像里的 AI 领域代替。',
+      assignments: [],
+      courseIds: [],
+      reason: '最新机构指派课程尚无引擎领域归属；系统不会改用旧课程或画像里的 AI 领域代替。',
     };
   }
 
@@ -145,13 +195,45 @@ export function resolveEffectiveDomainContext({
   };
 }
 
-/** 把裁决后的领域写进送往引擎的画像副本；不改 localStorage 原画像。 */
+/**
+ * 把画像投影到一个领域。分域桶不存在时给空测量，不读取旧扁平值；
+ * “没有本域证据”不能继承成“另一个领域的能力”。
+ */
+export function projectProfileToDomain<T extends DomainContextProfile>(
+  profile: T,
+  domain: string,
+): T {
+  const next = { ...profile } as DomainContextProfile;
+  next.domain = domain;
+  next.corpus = domain;
+
+  if (profile.conceptMastery || profile.conceptMasteryByDomain) {
+    next.conceptMastery = { ...(profile.conceptMasteryByDomain?.[domain] ?? {}) };
+  }
+  if (profile.conceptConfidence || profile.conceptConfidenceByDomain) {
+    next.conceptConfidence = { ...(profile.conceptConfidenceByDomain?.[domain] ?? {}) };
+  }
+  if (profile.conceptRecall || profile.conceptRecallByDomain) {
+    next.conceptRecall = { ...(profile.conceptRecallByDomain?.[domain] ?? {}) };
+  }
+
+  const difficulty = profile.currentDifficultyByDomain?.[domain];
+  if (difficulty) next.currentDifficulty = difficulty;
+  else delete next.currentDifficulty;
+  const elo = profile.eloRatingByDomain?.[domain];
+  if (typeof elo === 'number') next.eloRating = elo;
+  else delete next.eloRating;
+
+  return next as T;
+}
+
+/** 把裁决后的领域画像写进送往引擎的副本；不改 localStorage 原画像。 */
 export function applyEffectiveDomain<T extends DomainContextProfile>(
   profile: T,
   context: EffectiveDomainContext,
 ): T {
   if (!context.domain) return { ...profile };
-  return { ...profile, domain: context.domain, corpus: context.domain };
+  return projectProfileToDomain(profile, context.domain);
 }
 
 export function isEffectiveDomainContext(value: unknown): value is EffectiveDomainContext {

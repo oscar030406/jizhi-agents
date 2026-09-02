@@ -185,6 +185,9 @@ def blueprint(payload: dict[str, Any], x_trace_id: str | None = Header(default=N
     """学情诊断：画像 → 掌握度/薄弱概念/推荐难度/资源配比计划（确定性，毫秒级）。"""
     from backend.integration.personalize_service import learner_blueprint_api
 
+    if "concept_mastery" in payload and not isinstance(payload["concept_mastery"], dict):
+        raise HTTPException(status_code=422, detail="concept_mastery 必须是概念 ID 到 0–1 分数的对象")
+
     allowed = {
         "learning_goal", "background", "programming_level", "python_level",
         "agent_level", "rag_level", "engineering_level",
@@ -192,6 +195,7 @@ def blueprint(payload: dict[str, Any], x_trace_id: str | None = Header(default=N
         # corpus 决定用哪个域的概念集。漏在白名单外时调用方传了也被静默丢掉，
         # 诊断永远走主域——AI 概念补进制造课（#6）。
         "corpus",
+        "concept_mastery",
     }
     kwargs = {k: v for k, v in payload.items() if k in allowed}
     kwargs.setdefault("learning_goal", "")
@@ -320,9 +324,8 @@ def domain_path(
     return ApiResponse(
         data=build_domain_path(
             corpus,
-            profile=payload.get("profile"),
-            concept_mastery=payload.get("conceptMastery"),
-            curated_path=payload.get("curatedPath"),
+            mastery_vector=payload.get("masteryVector"),
+            mastery_corpus=payload.get("masteryCorpus"),
         ),
         traceId=_trace_id(x_trace_id),
     )

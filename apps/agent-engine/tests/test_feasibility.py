@@ -66,7 +66,7 @@ def test_diagnosis_carries_feasibility_and_risk_flag():
     profile = LearnerProfile(
         id="p_feasibility", name="测试者", background="转岗", programming_level=2,
         python_level=2, agent_level=0, rag_level=0, engineering_level=1,
-        learning_goal="掌握 RAG 检索增强生成", time_budget_hours=1,
+        learning_goal="从零构建带 RAG、护栏、评测和部署的完整系统", time_budget_hours=1,
         learning_preference="示例")
     diagnosis = LearnerDiagnosisAgent().run(
         profile, PretestResult(learner_profile_id=profile.id), learning_goal=profile.learning_goal)

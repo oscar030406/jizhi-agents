@@ -40,12 +40,21 @@ vi.mock('@/lib/accounts/store', () => ({
 
 const orgMocks = vi.hoisted(() => ({
   orgForAccount: vi.fn(),
+  corpusOwnership: vi.fn(),
   setCorpusOrg: vi.fn(),
 }));
 
 vi.mock('@/lib/accounts/org-store', () => ({
   orgForAccount: orgMocks.orgForAccount,
+  corpusOwnership: orgMocks.corpusOwnership,
   setCorpusOrg: orgMocks.setCorpusOrg,
+}));
+
+const knowledgeMocks = vi.hoisted(() => ({ readCorpus: vi.fn() }));
+
+vi.mock('@/lib/server/knowledge-center', () => ({
+  isValidCorpusName: (name: string) => /^[a-z0-9][a-z0-9_-]{0,31}$/.test(name),
+  readCorpus: knowledgeMocks.readCorpus,
 }));
 
 const engineFetch = vi.fn();
@@ -73,9 +82,13 @@ describe('POST /api/knowledge/intake-runs', () => {
     process.env.GROUNDING_TOKEN = 'probe-token';
     engineFetch.mockReset();
     orgMocks.orgForAccount.mockReset();
+    orgMocks.corpusOwnership.mockReset();
     orgMocks.setCorpusOrg.mockReset();
     orgMocks.orgForAccount.mockResolvedValue({ id: 'org-a', memberRole: 'owner' });
+    orgMocks.corpusOwnership.mockResolvedValue(new Map());
     orgMocks.setCorpusOrg.mockResolvedValue({ ok: true });
+    knowledgeMocks.readCorpus.mockReset();
+    knowledgeMocks.readCorpus.mockResolvedValue({ corpus: 'probe', available: false });
     engineFetch.mockResolvedValue(
       new Response(JSON.stringify({ run_id: '20260816T101010-abcdef' }), { status: 200 }),
     );
@@ -99,7 +112,7 @@ describe('POST /api/knowledge/intake-runs', () => {
     const resp = await post(req);
     expect(resp.status).toBe(200);
     expect(await resp.json()).toMatchObject({ run: { run_id: '20260816T101010-abcdef' } });
-    expect(orgMocks.setCorpusOrg).toHaveBeenCalledTimes(1);
+    expect(orgMocks.setCorpusOrg).not.toHaveBeenCalled();
 
     const [url, init] = engineFetch.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('http://engine.local/api/domain-intake/runs');
@@ -126,30 +139,36 @@ describe('POST /api/knowledge/intake-runs', () => {
     expect(init.duplex).toBe('half');
   });
 
-  it('引擎 4xx 不自动释放认领，避免并发请求释放成功任务的归属', async () => {
+  it('引擎 4xx 不留下知识库归属', async () => {
     engineFetch.mockResolvedValue(
       new Response(JSON.stringify({ detail: '这份投料里没有任何可读文档' }), { status: 400 }),
     );
     const resp = await post(request({ corpus: 'probe' }));
     expect(resp.status).toBe(400);
-    expect((await resp.json()).error).toContain('手动释放');
-    expect(orgMocks.setCorpusOrg).toHaveBeenCalledTimes(1);
-    expect(orgMocks.setCorpusOrg).not.toHaveBeenCalledWith('probe', null, 'org-a');
+    expect((await resp.json()).error).toContain('没有创建知识库归属');
+    expect(orgMocks.setCorpusOrg).not.toHaveBeenCalled();
   });
 
   it('他机构已认领的库在上传前拒绝', async () => {
-    orgMocks.setCorpusOrg.mockResolvedValue({ ok: false, message: '该知识库已归属其他机构' });
+    orgMocks.corpusOwnership.mockResolvedValue(new Map([['private-b', 'org-b']]));
     const resp = await post(request({ corpus: 'private-b' }));
     expect(resp.status).toBe(403);
     expect(engineFetch).not.toHaveBeenCalled();
   });
 
-  it('超时状态不确定时保留首次认领，不误回滚', async () => {
+  it('桥超时不预写最终归属', async () => {
     engineFetch.mockRejectedValue(new DOMException('timed out', 'TimeoutError'));
     const resp = await post(request({ corpus: 'probe' }));
     expect(resp.status).toBe(502);
-    expect((await resp.json()).error).toContain('状态暂未确认');
-    expect(orgMocks.setCorpusOrg).toHaveBeenCalledTimes(1);
-    expect(orgMocks.setCorpusOrg).not.toHaveBeenCalledWith('probe', null, 'org-a');
+    expect((await resp.json()).error).toContain('没有预写知识库归属');
+    expect(orgMocks.setCorpusOrg).not.toHaveBeenCalled();
+  });
+
+  it('既有公共系统知识库不能被机构通过接入链占用', async () => {
+    knowledgeMocks.readCorpus.mockResolvedValue({ corpus: 'ai', available: true });
+    const resp = await post(request({ corpus: 'ai' }));
+    expect(resp.status).toBe(409);
+    expect((await resp.json()).error).toContain('公共系统知识库');
+    expect(engineFetch).not.toHaveBeenCalled();
   });
 });

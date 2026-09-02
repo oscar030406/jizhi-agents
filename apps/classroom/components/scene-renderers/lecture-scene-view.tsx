@@ -27,7 +27,12 @@ import {
   ExcerptBlockView,
 } from '@/components/slide-renderer/components/element/TextElement/ExcerptBlock';
 import { annotateClaimsInHtml } from '@/lib/generation/claim-annotate';
-import { PracticeCard, projectsForCourse } from '@/components/skills/practice-projects';
+import {
+  PracticeCard,
+  projectsForCourse,
+  usePublishedPractice,
+} from '@/components/skills/practice-projects';
+import { useCourseDomains } from '@/lib/knowledge/use-course-domains';
 import { useStageStore } from '@/lib/store';
 import type { AuditClaim } from '@/lib/generation/hallucination-audit';
 import type { Scene } from '@/lib/types/stage';
@@ -95,18 +100,16 @@ function textFlow(scene: Scene): PositionedBlock[] {
     .sort((a, b) => a.top - b.top || a.left - b.left);
 }
 
-const VERDICT_META: Record<
-  AuditClaim['verdict'],
-  { label: string; cls: string; barCls: string }
-> = {
-  supported: { label: '审核智能体核验过', cls: 'text-annot-zhu', barCls: 'border-annot-zhu' },
-  uncertain: {
-    label: '教材覆盖之外 · 存疑',
-    cls: 'text-annot-zhe',
-    barCls: 'border-annot-zhe',
-  },
-  incorrect: { label: '审核判定有误', cls: 'text-red-deep', barCls: 'border-red-deep' },
-};
+const VERDICT_META: Record<AuditClaim['verdict'], { label: string; cls: string; barCls: string }> =
+  {
+    supported: { label: '审核智能体核验过', cls: 'text-annot-zhu', barCls: 'border-annot-zhu' },
+    uncertain: {
+      label: '教材覆盖之外 · 存疑',
+      cls: 'text-annot-zhe',
+      barCls: 'border-annot-zhe',
+    },
+    incorrect: { label: '审核判定有误', cls: 'text-red-deep', barCls: 'border-red-deep' },
+  };
 
 interface MarginNoteState {
   index: number;
@@ -186,30 +189,47 @@ function MarginNote({
  * 取最后一张**讲义**页而不是最后一个场景：4 门课以测验收尾（评测入门/线代/
  * 训练全流程/大模型入门），挂在最后一个场景上这 4 门就没有了。
  *
- * 数据是静态 JSON（data/practice-projects.json），零引擎依赖、断网可渲染。
- * 没有策展到项目的课整块不渲染——不给空状态壳，缺口就该是空的。
+ * 项目只取本课所属 corpus 的引擎发布结果。域未解析、加载失败或没有发布结果时
+ * 不会退回 AI 示例卡，避免外域课程被另一领域内容污染。
  */
 function CoursePracticeBlock({ scene }: { readonly scene: Scene }) {
   const scenes = useStageStore((s) => s.scenes);
+  const courseDomains = useCourseDomains();
   const lastLectureId = useMemo(() => {
     for (let i = scenes.length - 1; i >= 0; i--) {
       if (scenes[i].type === 'slide') return scenes[i].id;
     }
     return null;
   }, [scenes]);
+  const isLastLecture = scene.id === lastLectureId;
+  const courseDomain = courseDomains[scene.stageId];
+  const corpus = isLastLecture ? (courseDomain?.corpus ?? courseDomain?.domain ?? null) : null;
+  const practiceState = usePublishedPractice(corpus);
   const projects = useMemo(
-    () => (scene.id === lastLectureId ? projectsForCourse(scene.stageId) : []),
-    [scene.id, scene.stageId, lastLectureId],
+    () =>
+      practiceState.kind === 'ready'
+        ? projectsForCourse(practiceState.projects, scene.stageId)
+        : [],
+    [practiceState, scene.stageId],
   );
+  if (!isLastLecture || !corpus) return null;
+
+  if (practiceState.kind !== 'ready') {
+    if (practiceState.kind === 'loading') return null;
+    return (
+      <section className="mt-10 border-t border-border pt-6" data-testid="course-practice-status">
+        <h2 className="text-lg font-semibold tracking-tight">动手做</h2>
+        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{practiceState.reason}</p>
+      </section>
+    );
+  }
   if (projects.length === 0) return null;
 
   return (
     <section className="mt-10 border-t border-border pt-6" data-testid="course-practice-block">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h2 className="text-lg font-semibold tracking-tight">动手做</h2>
-        <span className="text-xs text-muted-foreground">
-          这门课学完可以上手的项目，做完有作品
-        </span>
+        <span className="text-xs text-muted-foreground">这门课学完可以上手的项目，做完有作品</span>
       </div>
       <div className="mt-3 space-y-2">
         {projects.map((p) => (
@@ -228,6 +248,7 @@ export function LectureSceneView({ scene }: LectureSceneViewProps) {
   // 朱批只在挂载后叠加：DOMParser 是浏览器 API，且首帧必须与 SSR 输出
   // 一字不差（dangerouslySetInnerHTML 的水合比较是字符串级）。
   const [mounted, setMounted] = useState(false);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- 挂载后才可安全使用 DOMParser
   useEffect(() => setMounted(true), []);
   const annotated = useMemo(() => {
     if (!mounted || !claims?.length) return null;
@@ -256,12 +277,10 @@ export function LectureSceneView({ scene }: LectureSceneViewProps) {
     const hit = (e.target as Element).closest?.('[data-annot]');
     if (!hit || !articleRef.current) return;
     const idx = hit.getAttribute('data-annot');
-    articleRef.current
-      .querySelectorAll(`[data-annot="${idx}"]`)
-      .forEach((s) => {
-        if (on) s.setAttribute('data-annot-open', 'true');
-        else if (note?.index !== Number(idx)) s.removeAttribute('data-annot-open');
-      });
+    articleRef.current.querySelectorAll(`[data-annot="${idx}"]`).forEach((s) => {
+      if (on) s.setAttribute('data-annot-open', 'true');
+      else if (note?.index !== Number(idx)) s.removeAttribute('data-annot-open');
+    });
   };
 
   const placeNote = (index: number, hit?: Element | null) => {
@@ -290,7 +309,6 @@ export function LectureSceneView({ scene }: LectureSceneViewProps) {
       ro.disconnect();
       window.removeEventListener('resize', reposition);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [noteIndex]);
 
   const handleClick = (e: React.MouseEvent) => {
@@ -318,7 +336,6 @@ export function LectureSceneView({ scene }: LectureSceneViewProps) {
   return (
     <div className="h-full w-full overflow-y-auto bg-background" data-testid="lecture-scene">
       {/* 讲义主体靠左（2026-08-03 定稿：右侧留给对话/导学/笔记三栏），不居中 */}
-      {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events */}
       {/* 排版三处实测改动（2026-08-13）。学习者盯这一屏的时间最长，先量再改：
           - 375px 下 `pl-10 pr-8` 固定吃掉 72px，占 345px 画布的 21%，
             每行只剩 **17 个汉字**（合理区间 35–45）。窄屏换成 px-4，19.5 字/行。
@@ -336,7 +353,6 @@ export function LectureSceneView({ scene }: LectureSceneViewProps) {
         {blocks.map((b, i) => {
           if (b.imageSrc) {
             return (
-              // eslint-disable-next-line @next/next/no-img-element
               <img
                 key={i}
                 src={b.imageSrc}
@@ -374,9 +390,7 @@ export function LectureSceneView({ scene }: LectureSceneViewProps) {
             />
           );
         })}
-        {blocks.length === 0 && (
-          <p className="text-sm text-muted-foreground">本节暂无讲义内容。</p>
-        )}
+        {blocks.length === 0 && <p className="text-sm text-muted-foreground">本节暂无讲义内容。</p>}
         <CoursePracticeBlock scene={scene} />
         {note && claims?.[note.index] && (
           <div className="absolute z-20" style={{ top: note.top, left: note.left }}>

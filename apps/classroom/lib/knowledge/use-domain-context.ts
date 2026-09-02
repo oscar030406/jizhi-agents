@@ -41,12 +41,17 @@ export async function loadEffectiveDomainContext(
         return { ok: true as const, assignments: [] as DomainContextAssignment[] };
       }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const body = (await jsonOrNull(response)) as { assignments?: unknown } | null;
+      const body = (await jsonOrNull(response)) as {
+        assignments?: unknown;
+        memberRole?: unknown;
+      } | null;
       return {
         ok: true as const,
-        assignments: Array.isArray(body?.assignments)
-          ? (body.assignments as DomainContextAssignment[])
-          : [],
+        // owner 的响应是管理清单，不是 owner 本人的学习指派；预览只认 profile cookie。
+        assignments:
+          body?.memberRole === 'member' && Array.isArray(body.assignments)
+            ? (body.assignments as DomainContextAssignment[])
+            : [],
       };
     } catch (error) {
       return { ok: false as const, error };

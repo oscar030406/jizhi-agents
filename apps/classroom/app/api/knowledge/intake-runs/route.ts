@@ -19,10 +19,10 @@ import { cookies } from 'next/headers';
 import type { NextRequest } from 'next/server';
 
 import { accountForSession, accountsEnabled } from '@/lib/accounts/store';
-import { orgForAccount, setCorpusOrg } from '@/lib/accounts/org-store';
+import { corpusOwnership, orgForAccount } from '@/lib/accounts/org-store';
 import { SESSION_COOKIE } from '@/lib/accounts/session';
 import { API_ERROR_CODES, apiError, apiSuccess } from '@/lib/server/api-response';
-import { isValidCorpusName } from '@/lib/server/knowledge-center';
+import { isValidCorpusName, readCorpus } from '@/lib/server/knowledge-center';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('IntakeRuns API');
@@ -54,9 +54,16 @@ export async function POST(req: NextRequest) {
   if (!org || org.memberRole !== 'owner') {
     return apiError(API_ERROR_CODES.UNAUTHORIZED, 403, '只有所属机构管理者可以接入知识库。');
   }
-  const claimed = await setCorpusOrg(corpus, org.id, org.id);
-  if (!claimed.ok) {
-    return apiError(API_ERROR_CODES.UNAUTHORIZED, 403, claimed.message);
+  const owner = (await corpusOwnership()).get(corpus);
+  if (owner && owner !== org.id) {
+    return apiError(API_ERROR_CODES.UNAUTHORIZED, 403, '该知识库已归属其他机构。');
+  }
+  if (!owner && (await readCorpus(corpus))?.available) {
+    return apiError(
+      API_ERROR_CODES.INVALID_REQUEST,
+      409,
+      '这是公共系统知识库，机构不能认领或覆盖；请换一个新库名接入。',
+    );
   }
 
   // **不解析 body，把请求流原样转给引擎。**
@@ -105,7 +112,7 @@ export async function POST(req: NextRequest) {
       return apiError(
         API_ERROR_CODES.UPSTREAM_ERROR,
         resp.status === 400 || resp.status === 413 ? resp.status : 502,
-        `${detail}；知识库归属已保留，如不再接入请在机构设置中手动释放。`,
+        `${detail}；本次没有创建知识库归属。`,
       );
     }
     return apiSuccess({ run: body });
@@ -114,7 +121,7 @@ export async function POST(req: NextRequest) {
     return apiError(
       API_ERROR_CODES.UPSTREAM_ERROR,
       502,
-      '接入状态暂未确认；知识库归属已保留，请先查看接入记录再决定是否重试。',
+      '接入状态暂未确认；系统没有预写知识库归属，请先查看接入记录再决定是否重试。',
     );
   }
 }

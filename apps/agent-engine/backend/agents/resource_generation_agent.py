@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import json
 from typing import Any
 
 from backend.rag.evidence import evidence_by_concept
@@ -98,8 +99,15 @@ class ResourceGenerationAgent:
         prompt_style: str = "default",
     ) -> LearningResources:
         """prompt_style: default | cot（消融 cot_single 档用，生成前显式逐步推理）。"""
-        # 目标概念在前（与检索同序）：跨领域目标不被基础薄弱概念挤出 [:7] 截断
-        target_concepts = list(dict.fromkeys(goal_concepts(learning_goal) + diagnosis.weak_concepts))
+        blueprint = diagnosis.personalization_blueprint
+        if not blueprint or blueprint.goal_mapping_status == "unmapped_goal":
+            raise RuntimeError("内容生成失败：学习目标未映射到当前领域概念词表。")
+        target_concepts = list(
+            dict.fromkeys(
+                [skill.concept for skill in blueprint.required_skills]
+                + diagnosis.weak_concepts
+            )
+        )
         self.last_reject_reason = ""
         llm_result = self._run_llm(profile, learning_goal, diagnosis, retrieval, target_concepts,
                                    prompt_style=prompt_style)
@@ -161,7 +169,7 @@ class ResourceGenerationAgent:
                     options={str(k): str(v) for k, v in options.items()},
                     answer=answer,
                     explanation=str(item.get("explanation", "")),
-                    concept_tags=goal_concepts(learning_goal)[:1],
+                    concept_tags=goal_concepts(learning_goal, profile.corpus or "ai")[:1],
                     difficulty=difficulty,
                     source_ids=[],
                 ))
@@ -184,7 +192,7 @@ class ResourceGenerationAgent:
                     source_ids=[],
                 ),
                 graded_quiz=quiz,
-                target_concepts=goal_concepts(learning_goal),
+                target_concepts=goal_concepts(learning_goal, profile.corpus or "ai"),
             )
         except (KeyError, TypeError, ValueError):
             return None
@@ -229,19 +237,42 @@ class ResourceGenerationAgent:
         mix = blueprint.resource_mix if blueprint else None
         length_band = mix.section_length_band if mix else "120-200"
         mix_rules = self._mix_rules(mix)
+        from backend.rag.retriever import DEFAULT_CORPUS_ALIASES
+
+        corpus = (profile.corpus or "ai").strip().lower()
+        if corpus in DEFAULT_CORPUS_ALIASES:
+            learner_context = (
+                f"学习者画像：{profile.name}，背景：{profile.background}，"
+                f"编程 {profile.programming_level}/4，Agent {profile.agent_level}/4，"
+                f"RAG {profile.rag_level}/4，工程 {profile.engineering_level}/4；"
+                f"偏好：{profile.learning_preference}；"
+                f"约束：{'、'.join(profile.constraints) or '无'}；"
+                f"时间预算：{profile.time_budget_hours} 小时。\n"
+                f"诊断：推荐难度 {diagnosis.recommended_difficulty}，"
+                f"薄弱概念 {', '.join(diagnosis.weak_concepts)}。\n"
+            )
+            difficulty_rule = f"难度 {diagnosis.recommended_difficulty}。"
+        else:
+            learner_context = (
+                f"领域：{corpus}\n"
+                f"学习者通用背景：姓名 {profile.name}；背景 {profile.background}；"
+                f"偏好 {profile.learning_preference}；"
+                f"约束 {'、'.join(profile.constraints) or '无'}；"
+                f"时间预算 {profile.time_budget_hours} 小时。\n"
+                f"领域掌握度：{json.dumps(diagnosis.mastery_vector, ensure_ascii=False, sort_keys=True)}\n"
+                f"测量覆盖：{diagnosis.coverage.model_dump_json()}\n"
+            )
+            difficulty_rule = "难度服从个性化蓝图中各 required_skill 的 required_level。"
         user = (
-            f"学习者画像：{profile.name}，背景：{profile.background}，"
-            f"编程 {profile.programming_level}/4，Agent {profile.agent_level}/4，RAG {profile.rag_level}/4，"
-            f"工程 {profile.engineering_level}/4；偏好：{profile.learning_preference}；"
-            f"约束：{'、'.join(profile.constraints) or '无'}；时间预算：{profile.time_budget_hours} 小时。\n"
+            learner_context
+            +
             f"学习目标：{learning_goal}\n"
-            f"诊断：推荐难度 {diagnosis.recommended_difficulty}，薄弱概念 {', '.join(diagnosis.weak_concepts)}。\n"
             f"个性化蓝图：{blueprint.model_dump_json() if blueprint else '无'}\n"
             f"目标概念（只写这些，别的概念不展开）：{', '.join(focus_concepts)}\n"
             f"证据片段（只能引用这些 source_id）：\n{self._evidence_block(retrieval.retrieved_chunks)}\n"
             f"要求：讲义 {min(4, len(focus_concepts))} 节以内，每节 heading 含目标概念名、"
             f"body 用画像偏好的讲法写 {length_band} 字；实操任务 4-6 步；测试题 4-5 道，"
-            f"难度 {diagnosis.recommended_difficulty}。{mix_rules}"
+            f"{difficulty_rule}{mix_rules}"
             f"整个 JSON 必须完整闭合，宁可每节写短。"
         )
         parsed = self.gateway.structured_chat(self.name, system, user, max_tokens=6400, temperature=0.4)
@@ -405,8 +436,4 @@ class ResourceGenerationAgent:
         return "\n".join(
             f"[{chunk.source_id}] {chunk.title}（{chunk.difficulty}）：{_quote(chunk.content, 800)}" for chunk in chunks
         )
-
-    def _goal_concepts(self, learning_goal: str) -> list[str]:
-        """兼容旧调用；概念提取的唯一实现位于 services.goal_concepts。"""
-        return goal_concepts(learning_goal)
 

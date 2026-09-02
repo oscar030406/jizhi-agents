@@ -24,11 +24,13 @@ import {
 } from '@/components/ui/dialog';
 import type { RunArtifact } from './data';
 
-export function RunArtifacts({
-  artifacts,
-}: {
-  readonly artifacts: readonly RunArtifact[];
-}) {
+const ARTIFACT_LABELS: Record<string, string> = {
+  'REPORT.md': '体检报告',
+  'beginner_kc_misses.json': '入门档未覆盖知识清单',
+  'advanced_kc_misses.json': '进阶档未覆盖知识清单',
+};
+
+export function RunArtifacts({ artifacts }: { readonly artifacts: readonly RunArtifact[] }) {
   const [open, setOpen] = useState<string | null>(null);
   if (artifacts.length === 0) return null;
   const shown = artifacts.find((a) => a.name === open) ?? null;
@@ -44,7 +46,7 @@ export function RunArtifacts({
             className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 font-mono text-[10px] transition-colors hover:bg-accent"
           >
             <FileText className="size-3 shrink-0" />
-            {a.name}
+            {ARTIFACT_LABELS[a.name] ?? '体检明细'}
           </button>
         ))}
       </div>
@@ -52,8 +54,10 @@ export function RunArtifacts({
       <Dialog open={shown !== null} onOpenChange={(o) => !o && setOpen(null)}>
         <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="break-all font-mono text-sm">{shown?.name}</DialogTitle>
-            <DialogDescription>本次体检产物；可在此查看原文。</DialogDescription>
+            <DialogTitle className="text-sm">
+              {shown ? (ARTIFACT_LABELS[shown.name] ?? '体检明细') : ''}
+            </DialogTitle>
+            <DialogDescription>本次体检明细；可在此查看完整内容。</DialogDescription>
           </DialogHeader>
           <pre className="overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted/60 px-3 py-2 font-mono text-[10px] leading-relaxed">
             {shown?.text}

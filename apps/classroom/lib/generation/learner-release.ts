@@ -1,4 +1,4 @@
-import { hashCourseScenes, type SceneAudit } from './hallucination-audit';
+import { hashCourseScenes, hashLearningContractPlan, type SceneAudit } from './hallucination-audit';
 import {
   extractContentVerifiables,
   hasVerifiableContent,
@@ -121,7 +121,12 @@ export function decideCourseLearnerRelease(course: {
   if (!course.stage?.learningContract) {
     courseReasons.push('learning_contract_missing');
   } else {
-    const fulfillment = validateLearningContractFulfillment(course.stage.learningContract, scenes);
+    const fulfillment = validateLearningContractFulfillment(course.stage.learningContract, scenes, {
+      requireSemanticAlignment: contractV2,
+      alignment: courseAudit?.learningAlignment,
+      currentCourseContentHash: hashCourseScenes(scenes),
+      currentLearningContractHash: hashLearningContractPlan(course.stage.learningContract),
+    });
     contractViolations = fulfillment.violations;
     if (!fulfillment.fulfilled) courseReasons.push('learning_contract_unfulfilled');
   }

@@ -40,6 +40,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { redactCaliber } from '@/lib/metrics/redact-caliber';
 
 /**
  * 试跑体检的实测口径。区间取自磁盘上跑完 ⑥⑦ 的两次 run（都是 4 屏，
@@ -336,7 +337,7 @@ export function StartIntake() {
 
           {source === 'git' && (
             <label className="mt-2 block text-[11px] text-muted-foreground">
-              仓库地址（公开仓库，网站自己去把里面的文档取下来）
+              仓库地址（公开仓库，系统会自动读取其中的文档）
               <input
                 name="git_url"
                 type="url"
@@ -345,9 +346,8 @@ export function StartIntake() {
                 className={`${FIELD} mt-1 font-mono`}
               />
               <span className="mt-1.5 block leading-relaxed">
-                取仓库这一步走的是外网，几百个文件的仓库通常要等几分钟，网络绕远时更久；
-                也可能取不下来——地址打错、仓库要登录、体积太大都会失败。真失败了不用改别的：
-                把仓库下载成 zip，改用「上传压缩包」传同一份东西，后面的步骤完全一样。
+                公开仓库较大时可能需要数分钟；地址无效、需要登录或体积过大时，系统会明确报错。
+                如自动读取失败，可把同一仓库下载为 zip，改用「上传压缩包」继续接入。
               </span>
             </label>
           )}
@@ -364,8 +364,8 @@ export function StartIntake() {
             但**一旦填了就是全量替换**，上次声明过、这次没写的前缀会被丢掉（引擎会在
             ①站报警告点名）。所以这里明说「填就填全」。 */}
         <label className="block text-[11px] text-muted-foreground">
-          这个域明确不教什么（选填）：一行一条路径前缀，命中的文件在收料时按声明剔除，
-          且不算就绪度缺口。整个目录写目录名，单个文件写完整相对路径。
+          这个域明确不教什么（选填）：一行一条相对位置，命中的文件会在接收时按声明排除，
+          且不计入就绪度缺口。整个文件夹写文件夹名，单个文件写完整相对位置。
           留空则沿用这个库上一次接入时的声明；<strong className="font-medium">要改就写全</strong>
           ——填了任何一条，上次声明里没重复写的就不再生效。
           <textarea
@@ -387,7 +387,7 @@ export function StartIntake() {
           <strong className="font-medium">不填也能建库</strong>
           ，只是那一页会如实显示「该领域未登记岗位要求」。 格式是 JSON 数组，每项{' '}
           <code>{'{title, skills, summary?}'}</code>
-          ；写坏了发起时当场退回并指出是第几个岗位，不会悄悄少收一条。
+          ；格式有误时系统会指出对应岗位并停止发起，不会悄悄漏掉条目。
           <span className="mt-1 block">
             只在新建库时生效：勾了「追加到已有库」这次不重算注册清单，填了会被退回。
           </span>
@@ -496,7 +496,8 @@ export function StartIntake() {
             <input type="checkbox" name="extract_concepts" value="true" className="mt-0.5" />
             <span>
               <span className="font-medium text-foreground">概念词表与前置图</span>
-              ：从语料里抽概念词表、建章节前置关系图，就绪度的两道闸看它们——调 LLM，按 token 计费。
+              ：从语料里抽概念词表、建章节前置关系图，就绪度的两道闸看它们——使用模型，按 token
+              计费。
             </span>
           </label>
           {/* E31 T0：追加。此前「补几篇文档进已有的库」的唯一出路是整库重建，
@@ -520,7 +521,7 @@ export function StartIntake() {
 
         {error && (
           <p className="rounded-lg border border-rose-300/70 bg-rose-50 px-3 py-2 text-[11px] leading-relaxed text-rose-800 dark:border-rose-800/60 dark:bg-rose-950/40 dark:text-rose-200">
-            {error}
+            {redactCaliber(error)}
           </p>
         )}
 
@@ -583,7 +584,7 @@ export function StartIntake() {
                 JSON，形状判断就变成两处真源；填没填这一格已经足够决定要不要回去改。 */}
             <li className="text-muted-foreground">
               {hasJobs
-                ? '岗位/技能要求：已填。建库后学习端的岗位技能地图按这份清单列岗位；格式不对会被引擎当场退回，那时这次接入不会发起。'
+                ? '岗位/技能要求：已填。建库后学习端的岗位技能地图按这份清单列岗位；格式不对时系统会当场提示并停止本次接入。'
                 : '没填岗位/技能要求：这个库的岗位技能地图会显示「该领域未登记岗位要求」，学员照常按课程学。'}
             </li>
             {trial ? (
@@ -591,8 +592,8 @@ export function StartIntake() {
                 <span className="font-medium">试跑体检开</span>：{TRIAL_COST.minutes}{' '}
                 分钟，大半时间花在逐条审核上。已经跑完的两次分别是 {TRIAL_COST.calls} 次模型调用、
                 {TRIAL_COST.tokens} token，按价目表折算 ¥{TRIAL_COST.yuan}
-                （价目表自注以账单为准）；换库换模型会有出入，累计到 {TRIAL_COST.budget} token
-                就停机不再发新的生成。
+                （价目表自注以账单为准）；实际用量会随资料规模和内容复杂度变化，累计到{' '}
+                {TRIAL_COST.budget} token 就停机不再发新的生成。
                 {/* 联动但不圆场：试跑的档数是引擎写死的两档，与上面填几档无关。
                     这句从表单挪到这里——真要花钱的是这一步，说清楚的地方也该是这一步。 */}
                 <span className="mt-1 block">
@@ -608,12 +609,12 @@ export function StartIntake() {
             )}
             {vector && (
               <li className="text-muted-foreground">
-                向量索引开：按块数调用一次嵌入接口。这一站是旁路，失败只记录告警，不判定整次接入失败。
+                向量索引开：系统按证据块生成嵌入索引；失败时会明确记录为非阻断告警，不影响其余接入步骤。
               </li>
             )}
             {pending?.get('extract_concepts') === 'true' && (
               <li className="text-muted-foreground">
-                概念词表与前置图开：④整理知识站会调 LLM 抽词表、建前置图，按 token 计费。
+                概念词表与前置图开：④整理知识站会使用模型抽取词表并建立前置图，按 token 计费。
               </li>
             )}
           </ul>
@@ -626,7 +627,7 @@ export function StartIntake() {
           {error && (
             <div className="rounded-lg border border-rose-300/70 bg-rose-50 px-3 py-2 dark:border-rose-800/60 dark:bg-rose-950/40">
               <p className="text-[11px] font-medium leading-relaxed text-rose-800 dark:text-rose-200">
-                这次没发起成功：{error}
+                这次没发起成功：{redactCaliber(error)}
               </p>
               <p className="mt-1 text-[11px] leading-relaxed text-rose-700/80 dark:text-rose-300/70">
                 你填的东西还在，直接重试即可，不用重新选文件。

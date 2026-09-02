@@ -32,12 +32,7 @@ export default async function IntakeRunPage({
   const payload = await readRunEvents(runId, 0, 2000);
   if (!payload) notFound();
   const org = await orgForAccount(account.id);
-  if (
-    !org ||
-    payload.record.owner_org_id !== org.id ||
-    isScratchCorpus(payload.record.corpus) ||
-    /(?:fullprobe|fullpath[-_]?probe|(?:^|[-_])probe(?:[-_]|$))/i.test(payload.record.corpus)
-  )
+  if (!org || payload.record.owner_org_id !== org.id || isScratchCorpus(payload.record.corpus))
     notFound();
 
   return (

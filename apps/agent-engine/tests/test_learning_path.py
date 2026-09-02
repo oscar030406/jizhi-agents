@@ -33,7 +33,9 @@ def test_stage_difficulty_non_decreasing_within_core():
     assert ranks == sorted(ranks)  # 核心阶段难度不降
 
 
-def test_path_not_empty_and_has_prereqs():
+def test_path_not_empty_and_does_not_invent_static_prereqs():
     run = workflow.run(get_learner_profile("python_no_agent"))
     assert run.learning_path.learning_path
-    assert run.learning_path.prerequisites
+    assert run.learning_path.prerequisites == []
+    assert "Python 基础" not in run.learning_path.prerequisites
+    assert "LLM 提示词基础" not in run.learning_path.prerequisites

@@ -22,7 +22,7 @@ import { NextRequest } from 'next/server';
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { requireCorpusVisible } from '@/lib/server/corpus-access';
-import { fetchEvidence } from '@/lib/generation/evidence-grounding';
+import { fetchEvidence, requireEvidenceWhenConfigured } from '@/lib/generation/evidence-grounding';
 import type { LearnerBlueprint } from '@/lib/generation/learner-profile';
 import { corpusOf, fetchLearnerBlueprint } from '@/lib/generation/learner-profile';
 import {
@@ -212,8 +212,8 @@ export async function POST(req: NextRequest) {
     const access = await requireCorpusVisible(corpus);
     if (!access.ok) return access.response;
 
-    // Both bridges degrade to null; neither is required to produce an outline.
-    const [evidence, blueprint] = await Promise.all([
+    // 本地未配置证据桥可选；生产一旦配置，零命中或不可用即停止补救课生成。
+    const [evidenceResult, blueprint] = await Promise.all([
       // 补救场景与正课同一本书：这里原来一个语料参数都不传，补救内容永远接地在
       // 默认（ai）语料上，与刚讲完的那门课可能不是同一个知识库。
       fetchEvidence(`${courseTitle} ${sceneTitle} ${missedPoints.join(' ')}`.trim(), corpus),
@@ -221,6 +221,7 @@ export async function POST(req: NextRequest) {
         ? fetchLearnerBlueprint(courseTitle || sceneTitle, body.learnerProfile)
         : Promise.resolve(null),
     ]);
+    const evidence = requireEvidenceWhenConfigured(evidenceResult);
     // The blueprint's weak concepts are *profile-wide* skill gaps, not this
     // scene's topic — they stay as background context in the description and
     // never become the remediation's subject. The subject is what the learner

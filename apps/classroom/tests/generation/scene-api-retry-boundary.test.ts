@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   buildCompleteScene: vi.fn(),
   buildVisionUserContent: vi.fn(),
   resolveVocationalActive: vi.fn(),
+  fetchEvidence: vi.fn(),
 }));
 
 vi.mock('@/lib/ai/llm', () => ({
@@ -34,6 +35,11 @@ vi.mock('@/lib/generation/generation-pipeline', () => ({
   generateSceneActions: mocks.generateSceneActions,
   buildCompleteScene: mocks.buildCompleteScene,
   buildVisionUserContent: mocks.buildVisionUserContent,
+}));
+
+vi.mock('@/lib/generation/evidence-grounding', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/generation/evidence-grounding')>()),
+  fetchEvidence: mocks.fetchEvidence,
 }));
 
 vi.mock('@/lib/logger', () => ({
@@ -68,6 +74,11 @@ describe('scene API retry boundary', () => {
     mocks.applyOutlineFallbacks.mockImplementation((value) => value);
     mocks.callLLM.mockResolvedValue({ text: 'ok' });
     mocks.resolveVocationalActive.mockReturnValue(false);
+    mocks.fetchEvidence.mockResolvedValue({
+      status: 'unavailable',
+      configured: false,
+      reason: 'test runtime has no evidence bridge',
+    });
   });
 
   it('disables AI SDK retries for scene-content model calls', async () => {

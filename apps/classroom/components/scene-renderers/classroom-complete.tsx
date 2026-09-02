@@ -324,9 +324,11 @@ export function ClassroomCompletePage({ scenes, title, stageId }: ClassroomCompl
   // 2.6s 自动收场，期间可跳过；重访/刷新一律直接静态成果页。
   const [celebrating, setCelebrating] = useState(false);
   useEffect(() => {
-    if (stageId && claimCourseCelebration(stageId) === 'play') {
-      setCelebrating(true);
-    }
+    if (!stageId) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (claimCourseCelebration(stageId) === 'play') setCelebrating(true);
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [stageId]);
   useEffect(() => {
     if (!celebrating) return;
@@ -606,7 +608,10 @@ function AuditBillCard({ scenes }: { readonly scenes: Scene[] }) {
     >
       <div className="flex items-center gap-4">
         <div className="w-12 h-12 shrink-0 rounded-full bg-emerald-50 dark:bg-emerald-900/30 flex items-center justify-center">
-          <ShieldCheck className="w-6 h-6 text-emerald-600 dark:text-emerald-400" strokeWidth={1.8} />
+          <ShieldCheck
+            className="w-6 h-6 text-emerald-600 dark:text-emerald-400"
+            strokeWidth={1.8}
+          />
         </div>
         <div className="flex-1 min-w-0">
           <div className="text-base font-bold text-emerald-700 dark:text-emerald-300">

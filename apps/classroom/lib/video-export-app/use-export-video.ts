@@ -17,6 +17,7 @@ import { saveAs } from 'file-saver';
 import { toast } from 'sonner';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { createLogger } from '@/lib/logger';
+import { ensureFullMediaExportReady } from '@/lib/export/use-export-script';
 import {
   buildExportZip,
   NoScenesError,
@@ -44,6 +45,7 @@ export function useExportVideo() {
   const exportVideo = useCallback(
     async (resolution: VideoResolution = '1080p') => {
       if (exportInFlight) return;
+      if (!ensureFullMediaExportReady(t('share.notReady'))) return;
 
       exportInFlight = true;
       setExporting(true);

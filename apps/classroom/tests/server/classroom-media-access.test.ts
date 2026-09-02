@@ -5,6 +5,7 @@ import { NextRequest } from 'next/server';
 const mocks = vi.hoisted(() => ({
   accountForSession: vi.fn(),
   orgForAccount: vi.fn(),
+  assignmentsOf: vi.fn(),
   corpusOwnership: vi.fn(),
   readClassroom: vi.fn(),
   isCourseLearnerReleased: vi.fn(),
@@ -22,6 +23,7 @@ vi.mock('@/lib/accounts/store', () => ({ accountForSession: mocks.accountForSess
 vi.mock('@/lib/accounts/session', () => ({ SESSION_COOKIE: 'session' }));
 vi.mock('@/lib/accounts/org-store', () => ({
   orgForAccount: mocks.orgForAccount,
+  assignmentsOf: mocks.assignmentsOf,
   corpusOwnership: mocks.corpusOwnership,
 }));
 vi.mock('@/lib/server/classroom-storage', () => ({
@@ -51,6 +53,7 @@ describe('GET /api/classroom-media course ACL', () => {
     vi.clearAllMocks();
     mocks.accountForSession.mockResolvedValue(null);
     mocks.orgForAccount.mockResolvedValue(null);
+    mocks.assignmentsOf.mockResolvedValue([]);
     mocks.corpusOwnership.mockResolvedValue(new Map());
     mocks.readClassroom.mockResolvedValue({ stage: { name: '公共课程' }, scenes: [] });
     mocks.isCourseLearnerReleased.mockReturnValue(true);
@@ -105,9 +108,25 @@ describe('GET /api/classroom-media course ACL', () => {
     expect(mocks.realpath).not.toHaveBeenCalled();
   });
 
-  it('同机构成员可读取私有媒体，但响应禁止缓存', async () => {
+  it('同机构未指派 member 不能读取私有媒体', async () => {
     mocks.accountForSession.mockResolvedValue({ id: 'member-a' });
-    mocks.orgForAccount.mockResolvedValue({ id: 'org-a' });
+    mocks.orgForAccount.mockResolvedValue({ id: 'org-a', memberRole: 'member' });
+    mocks.readClassroom.mockResolvedValue({
+      stage: { name: '私有课程', origin: { corpus: 'private-a' } },
+      scenes: [],
+    });
+    mocks.corpusOwnership.mockResolvedValue(new Map([['private-a', 'org-a']]));
+
+    const response = await getMedia();
+
+    expect(response.status).toBe(404);
+    expect(mocks.createReadStream).not.toHaveBeenCalled();
+  });
+
+  it('同机构 member 指派后可读取私有媒体，但响应禁止缓存', async () => {
+    mocks.accountForSession.mockResolvedValue({ id: 'member-a' });
+    mocks.orgForAccount.mockResolvedValue({ id: 'org-a', memberRole: 'member' });
+    mocks.assignmentsOf.mockResolvedValue([{ courseId: 'course-a' }]);
     mocks.readClassroom.mockResolvedValue({
       stage: { name: '私有课程', origin: { corpus: 'private-a' } },
       scenes: [],
@@ -119,6 +138,19 @@ describe('GET /api/classroom-media course ACL', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('cache-control')).toBe('private, no-store');
     expect(mocks.createReadStream).toHaveBeenCalledOnce();
+  });
+
+  it('机构 owner 无需指派即可读取本机构私有媒体', async () => {
+    mocks.accountForSession.mockResolvedValue({ id: 'owner-a' });
+    mocks.orgForAccount.mockResolvedValue({ id: 'org-a', memberRole: 'owner' });
+    mocks.readClassroom.mockResolvedValue({
+      stage: { name: '私有课程', origin: { corpus: 'private-a' } },
+      scenes: [],
+    });
+    mocks.corpusOwnership.mockResolvedValue(new Map([['private-a', 'org-a']]));
+
+    expect((await getMedia()).status).toBe(200);
+    expect(mocks.assignmentsOf).not.toHaveBeenCalled();
   });
 
   it('公共课程媒体保持公开缓存', async () => {

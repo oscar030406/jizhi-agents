@@ -1,5 +1,8 @@
 import type { DomainRegistryEntry } from '@/lib/knowledge/domain-registry';
+import { pblProductionGaps } from '@/lib/pbl/v2/types';
 import type { SceneOutline, UserRequirements } from '@/lib/types/generation';
+import { extractContentVerifiables } from './content-verify';
+import { validateTemplateParams } from './widget-templates';
 
 export type OutlineEngine = 'standard' | 'interactive' | 'task-engine';
 
@@ -78,10 +81,12 @@ export interface LearningContractPlan {
   version: 2;
   teachingStrategy: TeachingStrategy;
   strategyEvidence?: TeachingStrategyEvidence;
+  objectives: LearningObjectiveContract[];
   plannedScenes: Array<{
     sceneId: string;
     type: SceneOutline['type'];
     widgetType?: SceneOutline['widgetType'];
+    objectiveIds: string[];
   }>;
   required: Record<LearningContractPhase, string[]> & { assessment: string[] };
 }
@@ -90,10 +95,19 @@ export interface LearningContractActualScene {
   outlineId?: string;
   type?: string;
   content?: unknown;
+  actions?: unknown;
 }
 
 export interface LearningContractFulfillment {
   fulfilled: boolean;
+  violations: string[];
+}
+
+export interface LearningContractAlignmentProof {
+  courseContentHash: string;
+  learningContractHash: string;
+  complete: boolean;
+  aligned: boolean;
   violations: string[];
 }
 
@@ -320,19 +334,75 @@ function isActivityScene(outline: SceneOutline | undefined): boolean {
   );
 }
 
+function objectiveIdsForOutline(
+  outline: Pick<SceneOutline, 'objectiveIds' | 'teachingObjective'>,
+  validObjectiveIds: ReadonlySet<string>,
+  assessmentIds: readonly string[] = [],
+): string[] {
+  return [
+    ...new Set([
+      ...normalizedStrings(outline.objectiveIds),
+      normalizedString(outline.teachingObjective),
+      ...assessmentIds,
+    ]),
+  ].filter((id) => validObjectiveIds.has(id));
+}
+
+/** Attach only validator-approved objective contracts to the outlines used for scene generation. */
+export function bindLearningObjectivesToOutlines(
+  contract: LearningContract,
+  outlines: readonly SceneOutline[],
+): SceneOutline[] {
+  const objectiveById = new Map(contract.objectives.map((objective) => [objective.id, objective]));
+  const assessmentByScene = new Map<string, string[]>();
+  for (const mapping of contract.assessmentMap) {
+    assessmentByScene.set(mapping.sceneId, [
+      ...new Set([...(assessmentByScene.get(mapping.sceneId) ?? []), ...mapping.objectiveIds]),
+    ]);
+  }
+  const validIds = new Set(objectiveById.keys());
+
+  return outlines.map((outline) => {
+    const objectiveIds = objectiveIdsForOutline(
+      outline,
+      validIds,
+      assessmentByScene.get(outline.id),
+    );
+    return {
+      ...outline,
+      objectiveIds,
+      ...(objectiveIds[0] ? { teachingObjective: objectiveIds[0] } : {}),
+      learningObjectives: objectiveIds.map((id) => objectiveById.get(id)!),
+    };
+  });
+}
+
 /** Persist only the facts needed to compare the generated course with its approved outline. */
 export function buildLearningContractPlan(
   contract: LearningContract,
   outlines: readonly SceneOutline[],
 ): LearningContractPlan {
+  const objectiveIds = new Set(contract.objectives.map((objective) => objective.id));
+  const assessmentByScene = new Map<string, string[]>();
+  for (const mapping of contract.assessmentMap) {
+    assessmentByScene.set(mapping.sceneId, [
+      ...new Set([...(assessmentByScene.get(mapping.sceneId) ?? []), ...mapping.objectiveIds]),
+    ]);
+  }
   return {
     version: 2,
     teachingStrategy: contract.teachingStrategy,
     ...(contract.strategyEvidence ? { strategyEvidence: contract.strategyEvidence } : {}),
+    objectives: contract.objectives.map((objective) => ({ ...objective })),
     plannedScenes: outlines.map((outline) => ({
       sceneId: outline.id,
       type: outline.type,
       ...(outline.widgetType ? { widgetType: outline.widgetType } : {}),
+      objectiveIds: objectiveIdsForOutline(
+        outline,
+        objectiveIds,
+        assessmentByScene.get(outline.id),
+      ),
     })),
     required: {
       prerequisiteActivation: [...contract.prerequisiteActivation],
@@ -349,32 +419,88 @@ function actualWidgetType(scene: LearningContractActualScene): string {
   return isRecord(scene.content) ? normalizedString(scene.content.widgetType) : '';
 }
 
-function actualActivityContentIsNonEmpty(scene: LearningContractActualScene): boolean {
-  if (!isRecord(scene.content)) return false;
+const MIN_SUBSTANTIVE_TEXT_CHARS = 12;
+
+function normalizedTeachingText(scene: LearningContractActualScene): string {
+  return extractContentVerifiables({ content: scene.content, actions: scene.actions })
+    .texts.join(' ')
+    .toLocaleLowerCase()
+    .replace(/\p{N}+(?:[.,]\p{N}+)?/gu, '#')
+    .replace(/[^\p{L}\p{N}#]+/gu, '');
+}
+
+function textBigrams(text: string): Set<string> {
+  const pairs = new Set<string>();
+  for (let index = 0; index < text.length - 1; index++) pairs.add(text.slice(index, index + 2));
+  return pairs;
+}
+
+function isNearDuplicateText(left: string, right: string): boolean {
+  if (left === right) return true;
+  if (Math.min(left.length, right.length) < MIN_SUBSTANTIVE_TEXT_CHARS) return false;
+  const leftPairs = textBigrams(left);
+  const rightPairs = textBigrams(right);
+  let shared = 0;
+  for (const pair of leftPairs) if (rightPairs.has(pair)) shared++;
+  return shared / Math.min(leftPairs.size, rightPairs.size) >= 0.86;
+}
+
+const LEARNER_INPUT_EVENT =
+  /(?:\bon(?:click|input|change|submit|mousedown|mouseup|pointerdown|pointerup|keydown|keyup|touchstart)\s*=|\.on(?:click|input|change|submit|mousedown|mouseup|pointerdown|pointerup|keydown|keyup|touchstart)\s*=|addEventListener\s*\(\s*['"](?:click|input|change|submit|mousedown|mouseup|pointerdown|pointerup|keydown|keyup|touchstart)['"])/iu;
+const LEARNER_INPUT_CONTROL =
+  /(?:<(?:button|input|select|textarea)\b|\bcontenteditable(?:\s*=|\b)|\brole\s*=\s*['"]?(?:button|slider|checkbox|radio|tab|switch)\b)/iu;
+const VISIBLE_FEEDBACK_SURFACE =
+  /(?:<(?:output|canvas|svg)\b|\baria-live\b|\b(?:id|class)\s*=\s*['"][^'"]*(?:feedback|result|status|output|score|progress|message|hint|error|success|反馈|结果|状态|输出|得分|进度|提示|错误|成功)[^'"]*['"])/iu;
+const VISIBLE_FEEDBACK_UPDATE =
+  /(?:\.(?:textContent|innerText|innerHTML|value)\s*=|\.classList\.(?:add|remove|toggle|replace)\s*\(|\.setAttribute\s*\(|\.style\.[a-z-]+\s*=|\b(?:fillText|strokeText|fillRect|strokeRect|drawImage|requestAnimationFrame)\s*\()/iu;
+
+function templateWidgetIsProductionReady(value: unknown): boolean {
+  if (!isRecord(value) || value.type !== 'template') return false;
+  const templateId = normalizedString(value.templateId);
+  const name = normalizedString(value.name);
+  const guide = normalizedString(value.guide);
+  return validateTemplateParams(templateId, value.params, {
+    ...(name ? { name } : {}),
+    ...(guide ? { guide } : {}),
+  }).ok;
+}
+
+function interactiveHasInputAndFeedback(content: Record<string, unknown>): boolean {
+  if (templateWidgetIsProductionReady(content.widgetConfig)) return true;
+  const html = normalizedString(content.html);
+  if (!html) return false;
+  return (
+    (LEARNER_INPUT_CONTROL.test(html) || LEARNER_INPUT_EVENT.test(html)) &&
+    LEARNER_INPUT_EVENT.test(html) &&
+    VISIBLE_FEEDBACK_SURFACE.test(html) &&
+    VISIBLE_FEEDBACK_UPDATE.test(html)
+  );
+}
+
+function actualActivityContentViolation(
+  sceneId: string,
+  scene: LearningContractActualScene,
+): string | null {
+  if (!isRecord(scene.content)) {
+    return `${scene.type} scene has no content: ${sceneId}`;
+  }
   if (scene.type === 'quiz') {
-    return Array.isArray(scene.content.questions) && scene.content.questions.length > 0;
+    return Array.isArray(scene.content.questions) && scene.content.questions.length > 0
+      ? null
+      : `quiz scene has no questions: ${sceneId}`;
   }
   if (scene.type === 'interactive') {
-    return (
-      Boolean(normalizedString(scene.content.html)) ||
-      (isRecord(scene.content.widgetConfig) && Object.keys(scene.content.widgetConfig).length > 0)
-    );
+    return interactiveHasInputAndFeedback(scene.content)
+      ? null
+      : `interactive scene is not learner-operable with visible feedback: ${sceneId}`;
   }
   if (scene.type === 'pbl') {
-    const projectConfig = isRecord(scene.content.projectConfig) ? scene.content.projectConfig : {};
-    const projectInfo = isRecord(projectConfig.projectInfo) ? projectConfig.projectInfo : {};
-    const issueboard = isRecord(projectConfig.issueboard) ? projectConfig.issueboard : {};
-    const projectV2 = isRecord(scene.content.projectV2) ? scene.content.projectV2 : {};
-    return Boolean(
-      normalizedString(projectInfo.title) ||
-      normalizedString(projectInfo.description) ||
-      (Array.isArray(issueboard.issues) && issueboard.issues.length > 0) ||
-      normalizedString(projectV2.title) ||
-      normalizedString(projectV2.description) ||
-      (Array.isArray(projectV2.milestones) && projectV2.milestones.length > 0),
-    );
+    const gaps = pblProductionGaps(scene.content.projectV2);
+    return gaps.length === 0
+      ? null
+      : `pbl scene is not production-ready: ${sceneId} (${gaps.join('; ')})`;
   }
-  return true;
+  return null;
 }
 
 function actualSceneMatchesPhase(
@@ -396,7 +522,13 @@ function actualSceneMatchesPhase(
 export function validateLearningContractFulfillment(
   input: unknown,
   scenes: readonly LearningContractActualScene[],
-  options: { actualContentReady?: boolean } = {},
+  options: {
+    actualContentReady?: boolean;
+    requireSemanticAlignment?: boolean;
+    alignment?: LearningContractAlignmentProof;
+    currentCourseContentHash?: string;
+    currentLearningContractHash?: string;
+  } = {},
 ): LearningContractFulfillment {
   if (
     !isRecord(input) ||
@@ -424,9 +556,42 @@ export function validateLearningContractFulfillment(
         : 'teachingStrategy is missing from learning contract v2',
     );
   }
+  const objectiveById = new Map<string, LearningObjectiveContract>();
+  if (!legacyV1) {
+    const rawObjectives = Array.isArray(input.objectives) ? input.objectives : [];
+    for (const candidate of rawObjectives) {
+      if (!isRecord(candidate)) {
+        violations.push('learning contract plan contains an invalid objective');
+        continue;
+      }
+      const objective: LearningObjectiveContract = {
+        id: normalizedString(candidate.id),
+        action: normalizedString(candidate.action),
+        condition: normalizedString(candidate.condition),
+        successCriterion: normalizedString(candidate.successCriterion),
+      };
+      if (
+        !objective.id ||
+        !objective.action ||
+        !objective.condition ||
+        !objective.successCriterion ||
+        objectiveById.has(objective.id)
+      ) {
+        violations.push('learning contract plan contains an invalid objective');
+        continue;
+      }
+      objectiveById.set(objective.id, objective);
+    }
+    if (objectiveById.size === 0) violations.push('learning contract plan has no objectives');
+  }
   const planned = new Map<
     string,
-    { sceneId: string; type: SceneOutline['type']; widgetType?: SceneOutline['widgetType'] }
+    {
+      sceneId: string;
+      type: SceneOutline['type'];
+      widgetType?: SceneOutline['widgetType'];
+      objectiveIds: string[];
+    }
   >();
   for (const candidate of input.plannedScenes) {
     if (!isRecord(candidate)) {
@@ -444,10 +609,19 @@ export function validateLearningContractFulfillment(
       continue;
     }
     const widgetType = normalizedString(candidate.widgetType);
+    const objectiveIds = legacyV1 ? [] : normalizedStrings(candidate.objectiveIds);
+    if (
+      !legacyV1 &&
+      (objectiveIds.length === 0 ||
+        objectiveIds.some((objectiveId) => !objectiveById.has(objectiveId)))
+    ) {
+      violations.push(`planned scene has invalid objectiveIds: ${sceneId}`);
+    }
     planned.set(sceneId, {
       sceneId,
       type: type as SceneOutline['type'],
       ...(widgetType ? { widgetType: widgetType as SceneOutline['widgetType'] } : {}),
+      objectiveIds,
     });
   }
   if (planned.size === 0) violations.push('learning contract has no planned scenes');
@@ -479,21 +653,13 @@ export function validateLearningContractFulfillment(
         `planned scene widget changed: ${sceneId} expected ${expected.widgetType} got ${actualWidgetType(scene) || 'missing'}`,
       );
     }
-    if (
+    const contentViolation =
       !legacyV1 &&
       options.actualContentReady !== false &&
       scene.type === expected.type &&
       ['quiz', 'interactive', 'pbl'].includes(expected.type) &&
-      !actualActivityContentIsNonEmpty(scene)
-    ) {
-      const missing =
-        expected.type === 'quiz'
-          ? 'questions'
-          : expected.type === 'interactive'
-            ? 'html or widgetConfig'
-            : 'task content';
-      violations.push(`${expected.type} scene has no ${missing}: ${sceneId}`);
-    }
+      actualActivityContentViolation(sceneId, scene);
+    if (contentViolation) violations.push(contentViolation);
   }
 
   const strategyEvidence = legacyV1
@@ -520,6 +686,7 @@ export function validateLearningContractFulfillment(
       violations.push(`learning contract phase is missing or invalid: ${phase}`);
       continue;
     }
+    const phaseObjectiveIds = new Set<string>();
     for (const sceneId of refs) {
       if (!planned.has(sceneId)) {
         violations.push(`${phase} references an unplanned scene: ${sceneId}`);
@@ -530,6 +697,73 @@ export function validateLearningContractFulfillment(
         violations.push(`${phase} scene is missing: ${sceneId}`);
       } else if (!actualSceneMatchesPhase(phase, scene)) {
         violations.push(`${phase} scene has the wrong teaching category: ${sceneId}`);
+      }
+      for (const objectiveId of planned.get(sceneId)?.objectiveIds ?? []) {
+        phaseObjectiveIds.add(objectiveId);
+      }
+    }
+    if (!legacyV1) {
+      for (const objectiveId of objectiveById.keys()) {
+        if (!phaseObjectiveIds.has(objectiveId)) {
+          violations.push(`${phase} has no scene mapped to objective ${objectiveId}`);
+        }
+      }
+    }
+  }
+
+  if (!legacyV1 && options.actualContentReady !== false) {
+    const textByScene = new Map(
+      [...actual].map(([sceneId, scene]) => [sceneId, normalizedTeachingText(scene)] as const),
+    );
+    for (const phase of ['prerequisiteActivation', 'demonstration'] as const) {
+      for (const sceneId of normalizedStrings(input.required[phase])) {
+        const text = textByScene.get(sceneId);
+        if (text !== undefined && text.length < MIN_SUBSTANTIVE_TEXT_CHARS) {
+          violations.push(`${phase} scene lacks substantive teaching evidence: ${sceneId}`);
+        }
+      }
+    }
+
+    const transferSources = [
+      ...normalizedStrings(input.required.demonstration),
+      ...normalizedStrings(input.required.learnerPractice),
+    ]
+      .map((sceneId) => textByScene.get(sceneId))
+      .filter((text): text is string => Boolean(text));
+    for (const sceneId of normalizedStrings(input.required.transferApplication)) {
+      const transferText = textByScene.get(sceneId);
+      if (
+        transferText !== undefined &&
+        (transferText.length < MIN_SUBSTANTIVE_TEXT_CHARS ||
+          transferSources.some((sourceText) => isNearDuplicateText(transferText, sourceText)))
+      ) {
+        violations.push(`transferApplication scene does not establish a new context: ${sceneId}`);
+      }
+    }
+  }
+
+  if (!legacyV1 && options.actualContentReady !== false && options.requireSemanticAlignment) {
+    const alignment = options.alignment;
+    if (!alignment) {
+      violations.push('learning contract semantic alignment audit is missing');
+    } else {
+      if (!alignment.complete) {
+        violations.push('learning contract semantic alignment panel is incomplete');
+      }
+      if (!alignment.aligned) {
+        violations.push(...alignment.violations.map((reason) => `semantic alignment: ${reason}`));
+      }
+      if (
+        !options.currentCourseContentHash ||
+        alignment.courseContentHash !== options.currentCourseContentHash
+      ) {
+        violations.push('learning contract semantic alignment does not match current course content');
+      }
+      if (
+        !options.currentLearningContractHash ||
+        alignment.learningContractHash !== options.currentLearningContractHash
+      ) {
+        violations.push('learning contract semantic alignment does not match current objectives');
       }
     }
   }
@@ -682,46 +916,60 @@ export function validateAndRepairLearningContract(
   }
 
   const positions = new Map(outlines.map((outline, index) => [outline.id, index]));
-  const objectiveForScene = (scene: SceneOutline | undefined): string => {
-    const explicit = scene?.teachingObjective?.trim() || '';
-    if (seenObjectiveIds.has(explicit)) return explicit;
-    return objectives.length === 1 ? objectives[0]!.id : '';
-  };
+  const objectivesForScene = (scene: SceneOutline | undefined): string[] =>
+    scene ? objectiveIdsForOutline(scene, seenObjectiveIds) : [];
+  for (const [phase, refs] of [
+    ['prerequisiteActivation', prerequisite.refs],
+    ['demonstration', demonstration.refs],
+    ['learnerPractice', practice.refs],
+    ['feedbackRetry', feedback.refs],
+    ['transferApplication', transfer.refs],
+  ] as const) {
+    const covered = new Set<string>();
+    for (const sceneId of refs) {
+      const objectiveIds = objectivesForScene(sceneById.get(sceneId));
+      if (objectiveIds.length === 0) {
+        violations.push(`${phase} scene ${sceneId} must name objectiveIds from the contract`);
+      }
+      for (const objectiveId of objectiveIds) covered.add(objectiveId);
+    }
+    for (const objective of objectives) {
+      if (!covered.has(objective.id)) {
+        violations.push(`${phase} has no scene mapped to objective ${objective.id}`);
+      }
+    }
+  }
   for (const practiceId of practice.refs) {
     const practiceScene = sceneById.get(practiceId);
-    if (practiceScene?.type !== 'interactive') continue;
-    const objectiveId = objectiveForScene(practiceScene);
-    if (!objectiveId) {
-      violations.push(
-        `learnerPractice interactive ${practiceId} must name one objective id in teachingObjective`,
+    if (practiceScene?.type !== 'interactive' && practiceScene?.type !== 'pbl') continue;
+    const practiceType = practiceScene.type;
+    for (const objectiveId of objectivesForScene(practiceScene)) {
+      const laterFeedback = feedback.refs.filter((sceneId) => {
+        const scene = sceneById.get(sceneId);
+        return (
+          positions.get(sceneId)! > positions.get(practiceId)! &&
+          objectivesForScene(scene).includes(objectiveId)
+        );
+      });
+      if (laterFeedback.length === 0) {
+        violations.push(
+          `learnerPractice ${practiceType} ${practiceId} needs a later same-objective feedbackRetry scene`,
+        );
+        continue;
+      }
+      const closesLoop = laterFeedback.some((feedbackId) =>
+        assessmentMap.some(
+          (mapping) =>
+            mapping.objectiveIds.includes(objectiveId) &&
+            isAssessmentScene(sceneById.get(mapping.sceneId)) &&
+            positions.get(mapping.sceneId)! > positions.get(feedbackId)!,
+        ),
       );
-      continue;
-    }
-    const laterFeedback = feedback.refs.filter((sceneId) => {
-      const scene = sceneById.get(sceneId);
-      return (
-        positions.get(sceneId)! > positions.get(practiceId)! &&
-        objectiveForScene(scene) === objectiveId
-      );
-    });
-    if (laterFeedback.length === 0) {
-      violations.push(
-        `learnerPractice interactive ${practiceId} needs a later same-objective feedbackRetry scene`,
-      );
-      continue;
-    }
-    const closesLoop = laterFeedback.some((feedbackId) =>
-      assessmentMap.some(
-        (mapping) =>
-          mapping.objectiveIds.includes(objectiveId) &&
-          isAssessmentScene(sceneById.get(mapping.sceneId)) &&
-          positions.get(mapping.sceneId)! > positions.get(feedbackId)!,
-      ),
-    );
-    if (!closesLoop) {
-      violations.push(
-        `learnerPractice interactive ${practiceId} needs a later same-objective quiz or pbl assessment after feedbackRetry`,
-      );
+      if (!closesLoop) {
+        violations.push(
+          `learnerPractice ${practiceType} ${practiceId} needs a later same-objective quiz or pbl assessment after feedbackRetry`,
+        );
+      }
     }
   }
 

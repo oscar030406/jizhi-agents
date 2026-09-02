@@ -16,18 +16,14 @@ function request(headers: IncomingMessage['headers']): IncomingMessage {
   return { headers } as IncomingMessage;
 }
 
-describe('embedded persistence development authentication', () => {
+describe('embedded persistence account authentication', () => {
   beforeEach(() => {
     vi.unstubAllEnvs();
-    vi.stubEnv('PERSISTENCE_DEV_TOKEN', 'shared-secret');
     mockedAccountForSession.mockResolvedValue(null);
   });
 
-  it('keeps anonymous subjects in a namespace that cannot impersonate account ids', async () => {
-    for (const [header, learnerKey] of [
-      ['anon:learner-1', 'anon:learner-1'],
-      ['acct_victim', 'anon:acct_victim'],
-    ]) {
+  it('rejects anonymous requests even when they forge the old public token and learner header', async () => {
+    for (const header of ['anon:learner-1', 'acct_victim']) {
       await expect(
         authenticatePersistenceRequest(
           request({
@@ -35,7 +31,7 @@ describe('embedded persistence development authentication', () => {
             'x-learner-key': header,
           }),
         ),
-      ).resolves.toEqual({ learnerKey });
+      ).resolves.toBeUndefined();
     }
   });
 
@@ -60,7 +56,7 @@ describe('embedded persistence development authentication', () => {
     }
   });
 
-  it('rejects missing and incorrect bearer tokens', async () => {
+  it('rejects requests without an authenticated account', async () => {
     await expect(authenticatePersistenceRequest(request({}))).resolves.toBeUndefined();
     await expect(
       authenticatePersistenceRequest(request({ authorization: 'Bearer shared-secreu' })),

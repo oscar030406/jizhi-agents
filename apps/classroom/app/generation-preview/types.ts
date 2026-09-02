@@ -54,7 +54,7 @@ export interface GenerationSessionState {
   courseTitle?: string;
   // Server-effective vocational mode from the outline generation done event.
   taskEngineMode?: boolean;
-  // Minimal approved outline/phase plan. Raw objectives and source text stay out of sessionStorage.
+  // Approved objectives + scene/phase mapping; required again by the final semantic audit.
   learningContractPlan?: LearningContractPlan;
 }
 
@@ -63,10 +63,15 @@ export const LEARNING_CONTRACT_REQUIRED_MESSAGE =
 
 type LegacyLearningContractPlan = Omit<
   LearningContractPlan,
-  'version' | 'teachingStrategy' | 'strategyEvidence'
+  'version' | 'teachingStrategy' | 'strategyEvidence' | 'objectives' | 'plannedScenes'
 > & {
   version: 1;
   teachingStrategy?: unknown;
+  plannedScenes: Array<
+    Omit<LearningContractPlan['plannedScenes'][number], 'objectiveIds'> & {
+      objectiveIds?: unknown;
+    }
+  >;
 };
 
 /** Keep the approved phase references, but make planned scenes match the user's current outline. */
@@ -74,16 +79,29 @@ export function rebuildLearningContractPlan(
   plan: LearningContractPlan | LegacyLearningContractPlan,
   outlines: readonly SceneOutline[],
 ): LearningContractPlan {
+  const approvedObjectiveIds =
+    plan.version === 2
+      ? new Map(
+          plan.plannedScenes.map(
+            (scene) => [scene.sceneId, [...scene.objectiveIds]] as const,
+          ),
+        )
+      : new Map<string, string[]>();
   return {
     version: 2,
     teachingStrategy: plan.version === 1 ? 'standard' : plan.teachingStrategy,
     ...(plan.version === 2 && plan.strategyEvidence
       ? { strategyEvidence: plan.strategyEvidence }
       : {}),
+    objectives: plan.version === 2 ? plan.objectives.map((objective) => ({ ...objective })) : [],
     plannedScenes: outlines.map((outline) => ({
       sceneId: outline.id,
       type: outline.type,
       ...(outline.widgetType ? { widgetType: outline.widgetType } : {}),
+      objectiveIds:
+        plan.version === 2
+          ? [...(approvedObjectiveIds.get(outline.id) ?? outline.objectiveIds ?? [])]
+          : [],
     })),
     required: plan.required,
   };

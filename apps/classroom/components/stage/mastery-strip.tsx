@@ -29,7 +29,10 @@ export function MasteryStrip({
   const [snapshots, setSnapshots] = useState<Record<string, MasterySnapshot> | null>(null);
   useEffect(() => {
     // 画像在 localStorage，仅客户端可读；交卷后重挂载会拿到新值。
-    setSnapshots(snapshotsFromProfile(loadLearnerProfile()));
+    const frame = window.requestAnimationFrame(() =>
+      setSnapshots(snapshotsFromProfile(loadLearnerProfile())),
+    );
+    return () => window.cancelAnimationFrame(frame);
   }, [scenes.length]);
 
   if (!snapshots || Object.keys(snapshots).length === 0) return null;

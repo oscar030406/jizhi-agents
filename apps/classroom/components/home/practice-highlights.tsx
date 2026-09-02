@@ -2,13 +2,8 @@
  * 首页「动手实操」区。落地设计冻结在 `.claude/workorders/WO-N1-practice-visibility.md`
  * 的「半张 A 落地设计」节。
  *
- * 为什么要有这一区：13 张实操卡此前只有两个露出口——/skills 的岗位地图里（要先点开
- * 对口岗位才看得见）和课堂里的「动手做」区块（要先进课）。首页从头到尾讲的都是「学」，
- * 「做」这一半在首页上根本看不出来。这一区摆在课程墙之后、指标之前，让两半并排。
- *
- * 数据与 /skills 同源（`data/practice-projects.json` 静态 import），这里只挑不改：
- * 每档按数据文件里的策展顺序取前 N（`featuredProjects()`）。卡面比 /skills 的折叠卡
- * 收敛——项目名 + 出品方 + 时长 + 验收标准 + 对口课程，其余字段留给 /skills。
+ * 数据与 /skills 同源：只展示引擎生成并经管理者审核发布的项目。首页卡面直接展开
+ * 3–6 个操作步骤和验收标准，访客不必先进入岗位页才能判断项目能不能真正动手。
  */
 
 import Link from 'next/link';
@@ -17,8 +12,8 @@ import { Hammer } from 'lucide-react';
 import { CARD_RECIPE } from '@/components/home/course-card';
 import { SectionAnchor } from '@/components/home/section-anchor';
 import {
-  PRACTICE_PROJECT_TOTAL,
   featuredProjects,
+  type PracticeLoadState,
   type PracticeProject,
 } from '@/components/skills/practice-projects';
 import { cn } from '@/lib/utils';
@@ -66,6 +61,14 @@ function HighlightCard({
         <span className="font-medium">做到什么算完成：</span>
         {project.acceptance}
       </p>
+      <div className="text-xs leading-relaxed">
+        <p className="font-medium">操作步骤：</p>
+        <ol className="mt-1 list-decimal space-y-1 pl-5">
+          {project.steps.map((step, index) => (
+            <li key={`${index}-${step}`}>{step}</li>
+          ))}
+        </ol>
+      </div>
       {related.length > 0 && (
         <p className="mt-auto flex flex-wrap items-center gap-x-3 gap-y-1 pt-1 text-xs">
           <span className="text-muted-foreground">对口课程</span>
@@ -81,12 +84,14 @@ function HighlightCard({
 }
 
 export function PracticeHighlights({
+  state,
   courseTitles,
 }: {
+  readonly state: PracticeLoadState;
   readonly courseTitles?: Record<string, string>;
 }) {
-  const projects = featuredProjects();
-  if (projects.length === 0) return null;
+  const readyProjects = state.kind === 'ready' ? state.projects : [];
+  const projects = featuredProjects(readyProjects);
   return (
     <>
       <div className="flex items-baseline justify-between gap-3">
@@ -94,29 +99,45 @@ export function PracticeHighlights({
           <SectionAnchor icon={Hammer} />
           动手实操
         </h2>
-        <Link href="/skills" className={`${LINK} shrink-0 text-sm`}>
-          全部 {PRACTICE_PROJECT_TOTAL} 个实操项目 →
-        </Link>
+        {state.kind === 'ready' && (
+          <Link href="/skills" className={`${LINK} shrink-0 text-sm`}>
+            全部 {readyProjects.length} 个实操项目 →
+          </Link>
+        )}
       </div>
-      <div className="mt-2 flex items-start justify-between gap-6">
-        <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
-          课听完了还得自己写一遍。下面是外部的开源项目和公开比赛，每条都写清了做到什么程度算完成、
-          做完能往简历上写什么，以及本站哪几门课学完能上手。
+      {state.kind === 'ready' ? (
+        <>
+          <div className="mt-2 flex items-start justify-between gap-6">
+            <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
+              这些项目由引擎从真实开源仓库中检索生成，并经管理者逐条审核发布。每项都写清操作步骤、
+              验收标准和对口课程。
+            </p>
+            <img
+              src="/illustrations/ill-path.png"
+              alt=""
+              aria-hidden
+              loading="lazy"
+              className="hidden h-20 w-auto shrink-0 object-contain sm:block"
+            />
+          </div>
+          <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {projects.map((p) => (
+              <HighlightCard key={p.id} project={p} courseTitles={courseTitles} />
+            ))}
+          </div>
+        </>
+      ) : (
+        <p
+          className="mt-4 rounded-xl border border-border bg-card px-5 py-4 text-sm leading-relaxed text-muted-foreground"
+          data-testid="practice-highlights-status"
+        >
+          {state.kind === 'missing'
+            ? state.reason
+            : state.kind === 'unavailable'
+              ? state.reason
+              : '正在读取已审核发布的实操项目…'}
         </p>
-        {/* eslint-disable-next-line @next/next/no-img-element -- 静态定稿插图 */}
-        <img
-          src="/illustrations/ill-path.png"
-          alt=""
-          aria-hidden
-          loading="lazy"
-          className="hidden h-20 w-auto shrink-0 object-contain sm:block"
-        />
-      </div>
-      <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {projects.map((p) => (
-          <HighlightCard key={p.id} project={p} courseTitles={courseTitles} />
-        ))}
-      </div>
+      )}
     </>
   );
 }

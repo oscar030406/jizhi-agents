@@ -27,7 +27,7 @@ vi.mock('@/lib/evidence', () => ({
 }));
 vi.mock('@/lib/evidence/from-tutor', () => ({ tutorEvidenceDraft: () => null }));
 vi.mock('@/lib/evidence/profile-bridge', () => ({
-  learnerDomain: () => 'ai',
+  courseDomain: vi.fn(async () => 'ai'),
   refreshDerivedProfile: vi.fn(async () => {}),
 }));
 vi.mock('@/lib/runtime/learner-key', () => ({ getLearnerKey: async () => 'anon:test' }));
@@ -42,7 +42,14 @@ const SCENE = {
   title: 'Q/K/V 核心概念',
   content: {
     canvas: {
-      elements: [{ type: 'text', content: '注意力机制有三个核心变量：Query、Key 和 Value。', top: 0, left: 0 }],
+      elements: [
+        {
+          type: 'text',
+          content: '注意力机制有三个核心变量：Query、Key 和 Value。',
+          top: 0,
+          left: 0,
+        },
+      ],
     },
   },
 };
@@ -130,6 +137,41 @@ const clickText = async (text: string) => {
 };
 
 describe('导学连问两轮', () => {
+  it('只把当前课程领域的难度和掌握度送给导学引擎', async () => {
+    localStorage.setItem(
+      'learnerProfile',
+      JSON.stringify({
+        domain: 'ai',
+        corpus: 'ai',
+        currentDifficulty: 'L4',
+        conceptMastery: { [SCENE.title]: 0.99 },
+        currentDifficultyByDomain: { ai: 'L4', 'smart-manufacturing': 'L1' },
+        conceptMasteryByDomain: {
+          ai: { [SCENE.title]: 0.99 },
+          'smart-manufacturing': { [SCENE.title]: 0.2 },
+        },
+      }),
+    );
+    useStageStore.setState({
+      stage: {
+        id: 'stage-1',
+        name: '智能制造课程',
+        origin: { corpus: 'smart-manufacturing', domain: 'smart-manufacturing' },
+      },
+    } as never);
+
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    await act(async () => {
+      root = createRoot(host!);
+      root.render(<TutorPanel currentSceneId="scene-1" />);
+    });
+    await clickText('让导师考考我');
+
+    expect(tutorBodies[0].recommendedDifficulty).toBe('L1');
+    expect(tutorBodies[0].priorMastery).toBe(0.2);
+  });
+
   it('第二问的请求必须带上第一轮的判定', async () => {
     host = document.createElement('div');
     document.body.appendChild(host);
@@ -145,10 +187,7 @@ describe('导学连问两轮', () => {
     const textarea = host!.querySelector('textarea');
     expect(textarea, '第一问出来后应该有作答框').not.toBeNull();
     await act(async () => {
-      const setter = Object.getOwnPropertyDescriptor(
-        HTMLTextAreaElement.prototype,
-        'value',
-      )!.set!;
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!;
       setter.call(textarea!, '不知道');
       textarea!.dispatchEvent(new Event('input', { bubbles: true }));
     });

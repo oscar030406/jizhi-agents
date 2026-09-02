@@ -13,7 +13,6 @@ import type { SessionType } from '@/lib/types/chat';
 import type { DiscussionRequest } from '@/components/roundtable';
 import type { Action, DiscussionAction } from '@/lib/types/action';
 import { cn } from '@/lib/utils';
-import { useI18n } from '@/lib/hooks/use-i18n';
 import { useStageStore } from '@/lib/store';
 import { buildLectureNotes } from '@/lib/chat/lecture-notes';
 import { PanelRightClose, MessageSquare, GraduationCap, Send } from 'lucide-react';
@@ -131,7 +130,6 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
     },
     ref,
   ) => {
-    const { t } = useI18n();
     const scenes = useStageStore((s) => s.scenes);
     const {
       sessions,

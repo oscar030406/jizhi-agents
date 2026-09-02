@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Dict, List, Optional
+from typing import Annotated, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -80,6 +80,8 @@ class ResourceMix(BaseModel):
 
 
 class PersonalizationBlueprint(BaseModel):
+    corpus: str
+    goal_mapping_status: Literal["mapped", "unmapped_goal"]
     refined_goal: str
     required_skills: List[SkillRequirement] = Field(default_factory=list)
     skill_gaps: List[SkillGap] = Field(default_factory=list)
@@ -106,9 +108,19 @@ class Feasibility(BaseModel):
     basis: str  # 判据出处：量了哪些课、速率从哪来
 
 
+class DiagnosisCoverage(BaseModel):
+    corpus: str
+    total_concepts: int = Field(ge=0)
+    measured_concepts: int = Field(ge=0)
+    ratio: float = Field(ge=0.0, le=1.0)
+    out_of_domain_concepts: List[str] = Field(default_factory=list)
+
+
 class DiagnosisResult(BaseModel):
     mastery_vector: Dict[str, float]
     weak_concepts: List[str]
+    unmeasured_concepts: List[str]
+    coverage: DiagnosisCoverage
     recommended_difficulty: str
     learning_risks: List[str]
     diagnosis_summary: str

@@ -10,14 +10,13 @@
  * `?domain=`（或 `?corpus=`）透传给引擎：图谱是分域的，没登记岗位数据的领域拿回
  * `jobs: []` 加一句 `reason`，这条路把它原样带出去，不改成主域数据也不当失败吞掉。
  *
- * Degrades to 204 when the engine is unreachable. `/skills` doesn't wait on this
- * route at all: it renders `public/skill-map.json` (the pre-computed snapshot)
- * first and only swaps in this route's answer when it arrives, so an offline
- * engine costs freshness, never the page.
+ * Degrades to 204 when the engine is unreachable. Learner pages treat that as
+ * an explicit unavailable state and never substitute a public static snapshot.
  */
 
 import { createLogger } from '@/lib/logger';
-import { apiSuccess } from '@/lib/server/api-response';
+import { isScratchCorpus } from '@/lib/knowledge/domain-registry';
+import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { requireCorpusVisible } from '@/lib/server/corpus-access';
 
 const log = createLogger('Skill Map');
@@ -81,7 +80,7 @@ function filterCorpora(
   return {
     ...data,
     corpora: data.corpora
-      .filter((c) => visible(c.corpus))
+      .filter((c) => visible(c.corpus) && !isScratchCorpus(c.corpus))
       .map(({ index_path: _internalPath, ...corpus }) => corpus),
   };
 }
@@ -91,6 +90,9 @@ export async function GET(request: Request) {
   // 在浏览器里"假装"外域为空——诚实必须由数据源给出，不能由页面事后遮。
   const params = new URL(request.url).searchParams;
   const domain = (params.get('domain') ?? params.get('corpus') ?? '').trim();
+  if (domain && isScratchCorpus(domain)) {
+    return apiError('INVALID_REQUEST', 404, '测试语料不对学习端开放。');
+  }
   const access = await requireCorpusVisible(domain || 'ai');
   if (!access.ok) return access.response;
   const base = process.env.GROUNDING_URL;

@@ -62,26 +62,23 @@ def test_prereq_edges_are_domain_scoped():
     assert set(sm) <= set(everything) and set(ai) <= set(everything)
 
 
-def test_thin_vocabulary_falls_back_to_index_tags_and_says_so():
-    """概念表薄的库改用索引标注，但必须在 source/caliber 里说清换了口径。
-
-    iotdb 是这条路径的真实来源：2716 个证据块、概念表只有 2 条（语料无章节序）。
-    退回索引标注是为了让这个库也有路径，代价是排序含义从「前置顺序」变成
-    「教材着墨多少」——这个代价不许藏。
-    """
-    from backend.services.domain_path import TAG_CALIBER, build_domain_path
+def test_thin_external_vocabulary_stays_on_readiness_concept_ids():
+    """词表再薄也只能用 readiness 概念；索引标签不能另造学习者概念空间。"""
+    from backend.services.goal_concepts import domain_concepts
 
     path = build_domain_path("iotdb")
-    assert path["source"] == "index-tags"
-    assert path["concept_count"] > 2, "索引标注应该比概念表厚，否则这条兜底没意义"
-    assert path["edge_count"] == 0, "标注之间没有前置边，不许伪造"
-    assert path["caliber"] == TAG_CALIBER
-    assert "不是前置顺序" in path["caliber"]
+    ids = {
+        concept["id"]
+        for stage in path["stages"]
+        for concept in stage["concepts"]
+    }
+    readiness_ids = set(domain_concepts("iotdb"))
+
+    assert path["source"] == "intake"
+    assert ids == readiness_ids
+    assert path["concept_count"] == len(readiness_ids) == 2
+    assert path["edge_count"] == 0
     assert path["thin_vocabulary"]["concepts_in_report"] == 2
-    # 每个概念的 because 要说得出自己是怎么来的
-    first = path["stages"][0]["concepts"][0]
-    assert "证据块" in first["because"]
-    assert first["prereq"] == []
 
 
 def test_独立库的闭包不长出别域概念_主库仍走并集():
@@ -105,35 +102,115 @@ def test_独立库的闭包不长出别域概念_主库仍走并集():
     assert sm <= known_concepts(), "域内概念必须是全域并集的子集"
 
 
-def test_curated_ai_path_only_moves_profile_cursor_without_inventing_concepts():
-    """AI 仍用既有策展拓扑；画像只标状态，不改节点、不另排一条路。"""
-    curated = {
-        "version": "test",
-        "tracks": [
-            {
-                "id": "main",
-                "title": "既有模块",
-                "nodeIds": ["base", "advanced", "project"],
-            }
-        ],
-        "nodes": [
-            {"id": "base", "title": "基础概念", "prereq": []},
-            {"id": "advanced", "title": "进阶概念", "prereq": ["base"]},
-            {"id": "project", "title": "应用项目", "prereq": ["advanced"]},
-        ],
+def test_ai_path_comes_from_root_engine_artifacts_and_covers_deep_learning():
+    """AI 与外域走同一引擎合同；手工 learning-path.json 不再参与。"""
+    path = build_domain_path("ai")
+    ids = {
+        concept["id"]
+        for stage in path["stages"]
+        for concept in stage["concepts"]
     }
 
+    assert path["source"] == "index-graph"
+    assert path["artifact_id"].startswith("sha256:")
+    assert path["generated_at"]
+    assert path["edge_count"] > 0
+    assert "deep_learning" in ids
+    assert path["personalization"]["matched_mastery"] == 0
+
+
+def test_main_domain_aliases_share_the_ai_path():
+    for alias in ("", "default", "AI"):
+        path = build_domain_path(alias)
+        assert path["corpus"] == "ai"
+        assert path["source"] == "index-graph"
+
+
+def test_partial_mastery_keeps_unscored_concepts_unmeasured():
+    path = build_domain_path(
+        CORPUS,
+        mastery_vector={"S7 连接配置": 0.95},
+        mastery_corpus=CORPUS,
+    )
+    statuses = {
+        concept["id"]: concept["status"]
+        for stage in path["stages"]
+        for concept in stage["concepts"]
+    }
+
+    assert statuses["S7 连接配置"] == "mastered"
+    assert all(
+        status == "unmeasured"
+        for concept_id, status in statuses.items()
+        if concept_id != "S7 连接配置"
+    )
+    assert path["personalization"]["counts"]["unmeasured"] == len(statuses) - 1
+
+
+def test_mastery_vector_is_corpus_partitioned_even_when_concept_ids_are_identical():
+    """异域同名/同 ID 也不能串：分区先于概念匹配。"""
     path = build_domain_path(
         "ai",
-        profile={"education": "本科", "conceptMastery": {"基础": 0.9}},
-        concept_mastery={"基础": 0.9},
-        curated_path=curated,
+        mastery_vector={"llm_basics": 0.95},
+        mastery_corpus="smart-manufacturing",
     )
-    concepts = [concept for stage in path["stages"] for concept in stage["concepts"]]
+    concept = next(
+        concept
+        for stage in path["stages"]
+        for concept in stage["concepts"]
+        if concept["id"] == "llm_basics"
+    )
 
-    assert path["source"] == "curated"
-    assert [concept["name"] for concept in concepts] == ["基础概念", "进阶概念", "应用项目"]
-    assert [concept["status"] for concept in concepts] == ["mastered", "current", "future"]
+    assert concept["status"] == "unmeasured"
+    assert "mastery" not in concept
+    assert path["personalization"]["matched_mastery"] == 0
+    assert path["personalization"]["corpus_match"] is False
+    assert path["personalization"]["match_mode"] == "exact-concept-id"
+    assert "尚无" in path["personalization"]["reason"]
+
+
+def test_mastery_vector_matches_exact_concept_id_not_title_or_substring():
+    """同域也只认概念 ID；场景标题或子串再像都不能猜。"""
+    path = build_domain_path(
+        "ai",
+        mastery_vector={"大语言模型原理": 0.95, "llm": 0.95},
+        mastery_corpus="ai",
+    )
+    concept = next(
+        concept
+        for stage in path["stages"]
+        for concept in stage["concepts"]
+        if concept["id"] == "llm_basics"
+    )
+
+    assert concept["status"] == "unmeasured"
+    assert path["personalization"]["matched_mastery"] == 0
+    assert path["personalization"]["match_mode"] == "exact-concept-id"
+
+
+def test_production_app_domain_path_is_post_and_consumes_mastery():
+    """线上启动的是 app.main；不能只让 backend.main 的同名路由正确。"""
+    from fastapi.testclient import TestClient
+
+    from app.config.settings import settings
+    from app.main import app
+
+    client = TestClient(app)
+    url = "/internal/v1/personalize/domain-path/ai"
+    headers = {"x-internal-token": settings.ai_service_token}
+    assert client.get(url, headers=headers).status_code == 405
+    response = client.post(
+        url,
+        headers=headers,
+        json={"masteryCorpus": "ai", "masteryVector": {"llm_basics": 0.9}},
+    )
+    assert response.status_code == 200
+    path = response.json()["data"]
+    concept = next(
+        concept
+        for stage in path["stages"]
+        for concept in stage["concepts"]
+        if concept["id"] == "llm_basics"
+    )
+    assert concept["status"] == "mastered"
     assert path["personalization"]["matched_mastery"] == 1
-    assert path["personalization"]["counts"] == {"mastered": 1, "current": 1, "future": 1}
-    assert path["personalization"]["current"] == ["进阶概念"]

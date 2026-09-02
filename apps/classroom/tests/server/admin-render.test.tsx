@@ -24,11 +24,7 @@ import {
   readHeadlineMetrics,
   rollup,
 } from '@/lib/server/admin-overview';
-import {
-  readCoverageRuns,
-  readDifficultySupply,
-  readDomainMaps,
-} from '@/lib/server/knowledge-map';
+import { readCoverageRuns, readDifficultySupply, readDomainMaps } from '@/lib/server/knowledge-map';
 
 /**
  * 课程表的两列（覆盖率、生成时长）——设计稿 §2 区 B 点名要、之前一直缺。
@@ -41,9 +37,7 @@ describe('课程表补的两列', () => {
   it('覆盖率只对 run 里记的那门课出数，其余「—」', async () => {
     const [courses, coverage] = await Promise.all([readAllCourseAudits(), readCoverageRuns()]);
     if (courses.length === 0) return;
-    const html = renderToStaticMarkup(
-      <AdminCourseTable courses={courses} coverage={coverage} />,
-    );
+    const html = renderToStaticMarkup(<AdminCourseTable courses={courses} coverage={coverage} />);
     expect(html).toContain('覆盖率');
     // 没有金标的课必须落到「—」，不补 0 也不补估计值
     const withCov = courses.filter((c) => coverage.some((r) => r.courseId === c.id));
@@ -55,10 +49,19 @@ describe('课程表补的两列', () => {
       <AdminCourseTable
         courses={[
           {
-            id: 'x', title: 'x', sceneCount: 1, createdAt: '', claims: 1, incorrect: 0,
-            uncertain: 0, grounded: 1, sources: 1, sourceIds: ['s'],
+            id: 'x',
+            title: 'x',
+            sceneCount: 1,
+            createdAt: '',
+            claims: 1,
+            incorrect: 0,
+            uncertain: 0,
+            grounded: 1,
+            sources: 1,
+            sourceIds: ['s'],
             verdicts: { pass: 1, caveat: 0, revised: 0, flagged: 0 },
-            auditedScenes: 1, durationMs: 0,
+            auditedScenes: 1,
+            durationMs: 0,
           },
         ]}
       />,
@@ -71,18 +74,28 @@ describe('课程表补的两列', () => {
       <AdminCourseTable
         courses={[
           {
-            id: 'x', title: 'x', sceneCount: 1, createdAt: '', claims: 1, incorrect: 0,
-            uncertain: 0, grounded: 1, sources: 1, sourceIds: ['s'],
+            id: 'x',
+            title: 'x',
+            sceneCount: 1,
+            createdAt: '',
+            claims: 1,
+            incorrect: 0,
+            uncertain: 0,
+            grounded: 1,
+            sources: 1,
+            sourceIds: ['s'],
             verdicts: { pass: 1, caveat: 0, revised: 0, flagged: 0 },
-            auditedScenes: 1, durationMs: 0,
-            generatedMs: 76 * 60_000, concurrentJobs: 4,
+            auditedScenes: 1,
+            durationMs: 0,
+            generatedMs: 76 * 60_000,
+            concurrentJobs: 4,
           },
         ]}
       />,
     );
     expect(html).toContain('76 分');
     expect(html).toContain('×5并发');
-    expect(html).toContain('不能当单课成本读');
+    expect(html).toContain('不能当作单门课程独占耗时');
   });
 
   it('独占运行时不挂并发标记', () => {
@@ -90,18 +103,28 @@ describe('课程表补的两列', () => {
       <AdminCourseTable
         courses={[
           {
-            id: 'x', title: 'x', sceneCount: 1, createdAt: '', claims: 1, incorrect: 0,
-            uncertain: 0, grounded: 1, sources: 1, sourceIds: ['s'],
+            id: 'x',
+            title: 'x',
+            sceneCount: 1,
+            createdAt: '',
+            claims: 1,
+            incorrect: 0,
+            uncertain: 0,
+            grounded: 1,
+            sources: 1,
+            sourceIds: ['s'],
             verdicts: { pass: 1, caveat: 0, revised: 0, flagged: 0 },
-            auditedScenes: 1, durationMs: 0,
-            generatedMs: 30 * 60_000, concurrentJobs: 0,
+            auditedScenes: 1,
+            durationMs: 0,
+            generatedMs: 30 * 60_000,
+            concurrentJobs: 0,
           },
         ]}
       />,
     );
     expect(html).toContain('30 分');
     expect(html).not.toContain('并发');
-    expect(html).toContain('独占运行');
+    expect(html).toContain('本次没有其他生成任务重叠');
   });
 });
 
@@ -122,8 +145,15 @@ describe('管理端展示件渲染', () => {
       <MetricBand
         metrics={[]}
         totals={{
-          courses: 0, scenes: 0, audited: 0, claims: 0, incorrect: 0, uncertain: 0,
-          incorrectRate: null, groundedRate: null, distinctSources: 0,
+          courses: 0,
+          scenes: 0,
+          audited: 0,
+          claims: 0,
+          incorrect: 0,
+          uncertain: 0,
+          incorrectRate: null,
+          groundedRate: null,
+          distinctSources: 0,
         }}
       />,
     );
@@ -164,10 +194,15 @@ describe('管理端展示件渲染', () => {
    * 卡面上只剩一个裸百分数——正是 08-13 定的规矩要挡的那种展示。
    */
   it('指标卡拆句：主数字与样本量都留在卡面', async () => {
-    const a = splitValue('85.2%（95% CI 77.8–92.6%，n=108，下界未达 85%）——rubric v4 三判官全量多数决');
+    const a = splitValue(
+      '85.2%（95% CI 77.8–92.6%，n=108，下界未达 85%）——rubric v4 三判官全量多数决',
+    );
     expect(a.head).toBe('85.2%（95% CI 77.8–92.6%，n=108，下界未达 85%）');
     expect(a.detail).toContain('rubric v4');
-    expect(splitFigure(a.head)).toMatchObject({ figure: '85.2%', post: '（95% CI 77.8–92.6%，n=108，下界未达 85%）' });
+    expect(splitFigure(a.head)).toMatchObject({
+      figure: '85.2%',
+      post: '（95% CI 77.8–92.6%，n=108，下界未达 85%）',
+    });
 
     const b = splitValue('汇总 48/50 = 96.0%（6 门金标课）；逐门：RAG 9/9');
     expect(splitFigure(b.head)).toMatchObject({ pre: '汇总 48/50 =', figure: '96.0%' });
@@ -185,8 +220,15 @@ describe('管理端展示件渲染', () => {
         <MetricBand
           metrics={[adaptation]}
           totals={{
-            courses: 0, scenes: 0, audited: 0, claims: 0, incorrect: 0, uncertain: 0,
-            incorrectRate: null, groundedRate: null, distinctSources: 0,
+            courses: 0,
+            scenes: 0,
+            audited: 0,
+            claims: 0,
+            incorrect: 0,
+            uncertain: 0,
+            incorrectRate: null,
+            groundedRate: null,
+            distinctSources: 0,
           }}
         />,
       );
@@ -212,7 +254,9 @@ describe('管理端展示件渲染', () => {
         expect(html).toMatch(new RegExp(`>${tierLabel(tier)} · 前置`));
         expect(html).not.toMatch(new RegExp(`>${tier} · 前置`));
       }
-      expect(html).toContain(`${m.edges.filter((e) => e.reviewed).length}/${m.edges.length} 条经人工签字`);
+      expect(html).toContain(
+        `${m.edges.filter((e) => e.reviewed).length}/${m.edges.length} 条经人工签字`,
+      );
     }
   });
 

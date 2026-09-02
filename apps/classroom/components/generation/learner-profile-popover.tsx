@@ -50,7 +50,13 @@ export const DEFAULT_LEARNER_PROFILE: LearnerProfileFields = {
 };
 
 /** Presets that make the adaptation visible in one click during a demo. */
-const PRESETS: Array<{ id: string; label: string; hint: string; fact: string; patch: LearnerProfileFields }> = [
+const PRESETS: Array<{
+  id: string;
+  label: string;
+  hint: string;
+  fact: string;
+  patch: LearnerProfileFields;
+}> = [
   {
     id: 'zero',
     label: '零基础转行',
@@ -105,68 +111,69 @@ const PRESETS: Array<{ id: string; label: string; hint: string; fact: string; pa
  * Behavioral-fact questions. Mapping rule: option index === stored 0–4 level.
  * Do not reorder options — the index is the value the engine consumes.
  */
-const DIMENSIONS: Array<{ key: keyof LearnerProfileFields; question: string; options: string[] }> = [
-  {
-    key: 'programming_level',
-    question: '编程 · 你写程序的经历最接近哪种？',
-    options: [
-      '没写过程序',
-      '上过课，写过作业',
-      '独立写过小工具',
-      '工作或项目里日常写',
-      '多语言且做过架构设计',
-    ],
-  },
-  {
-    key: 'python_level',
-    question: 'Python · 你用 Python 做过什么？',
-    options: [
-      '没用过',
-      '写过脚本',
-      '用过第三方库写过模块',
-      '写过带测试的完整项目',
-      '做过性能调优或发过包',
-    ],
-  },
-  {
-    key: 'agent_level',
-    question: 'Agent · 你和大模型打过什么交道？',
-    options: [
-      '只听说过',
-      '用过 ChatGPT 类产品',
-      '调过 LLM API',
-      '写过带工具调用的完整 Agent',
-      '设计过多 Agent 系统',
-    ],
-  },
-  {
-    key: 'rag_level',
-    question: 'RAG · 你接触检索增强生成到哪一步？',
-    options: [
-      '不知道是什么',
-      '知道概念',
-      '用别人的库搭过 demo',
-      '自己搭过检索+生成链路',
-      '调优过检索质量',
-    ],
-  },
-  {
-    key: 'engineering_level',
-    question: '工程 · 你部署过什么？',
-    options: [
-      '没部署过任何东西',
-      '本地跑通过 demo',
-      '部署过单服务',
-      '有生产环境经验',
-      '有高并发或可观测性实践',
-    ],
-  },
-  {
-    key: 'expected_performance',
-    question: '预期 · 你预期自己学这门课的表现如何？',
-    options: ['可能很吃力', '有点吃力', '一般', '比较顺利', '很有把握'],
-  },
-];
+const DIMENSIONS: Array<{ key: keyof LearnerProfileFields; question: string; options: string[] }> =
+  [
+    {
+      key: 'programming_level',
+      question: '编程 · 你写程序的经历最接近哪种？',
+      options: [
+        '没写过程序',
+        '上过课，写过作业',
+        '独立写过小工具',
+        '工作或项目里日常写',
+        '多语言且做过架构设计',
+      ],
+    },
+    {
+      key: 'python_level',
+      question: 'Python · 你用 Python 做过什么？',
+      options: [
+        '没用过',
+        '写过脚本',
+        '用过第三方库写过模块',
+        '写过带测试的完整项目',
+        '做过性能调优或发过包',
+      ],
+    },
+    {
+      key: 'agent_level',
+      question: 'Agent · 你和大模型打过什么交道？',
+      options: [
+        '只听说过',
+        '用过 ChatGPT 类产品',
+        '调过 LLM API',
+        '写过带工具调用的完整 Agent',
+        '设计过多 Agent 系统',
+      ],
+    },
+    {
+      key: 'rag_level',
+      question: 'RAG · 你接触检索增强生成到哪一步？',
+      options: [
+        '不知道是什么',
+        '知道概念',
+        '用别人的库搭过 demo',
+        '自己搭过检索+生成链路',
+        '调优过检索质量',
+      ],
+    },
+    {
+      key: 'engineering_level',
+      question: '工程 · 你部署过什么？',
+      options: [
+        '没部署过任何东西',
+        '本地跑通过 demo',
+        '部署过单服务',
+        '有生产环境经验',
+        '有高并发或可观测性实践',
+      ],
+    },
+    {
+      key: 'expected_performance',
+      question: '预期 · 你预期自己学这门课的表现如何？',
+      options: ['可能很吃力', '有点吃力', '一般', '比较顺利', '很有把握'],
+    },
+  ];
 
 // 名单真源在 `lib/knowledge/domain-labels.ts`；这里转出，老调用点的 import 路径不动。
 export const DOMAINS = TRAINING_DOMAINS;
@@ -174,9 +181,8 @@ export const DOMAINS = TRAINING_DOMAINS;
 /**
  * 已建好索引的知识库。
  *
- * 先问运行时接口 `/api/skills`（引擎 `_corpus_status()` 的公开代理，与 /skills 页同一路），
- * 拿不到再退到部署时快照 `public/skill-map.json`。顺序不能反：新建好的库要在**不重新部署**
- * 的前提下出现在这个下拉里，快照做不到这件事（它是构建期产物）。
+ * 只问运行时接口 `/api/skills`（引擎 `_corpus_status()` 的会话过滤代理，与 /skills 页同一路）。
+ * 新建知识库无需重新部署即可出现；接口不可用时明确报错，不回退公开快照。
  * 管理端那条 `/api/knowledge/corpora` 也实时，但只对管理者开放（语料路径、许可状态是
  * 机构内部信息），生成入口是学习者在用，走不了。
  * 这里只取名字与块数，不取路径与许可。「能不能生成」仍由服务端实时读盘判，不信这份名单。
@@ -186,39 +192,29 @@ interface BuiltCorpus {
   chunks: number;
 }
 
-/** 运行时优先、快照兜底。两路返回体同形（route.ts 的 apiSuccess 是扁平的）。 */
 async function loadBuiltCorpora(): Promise<BuiltCorpus[]> {
-  for (const url of ['/api/skills', '/skill-map.json']) {
-    try {
-      const resp = await fetch(url, { cache: 'no-store' });
-      // 引擎离线时 /api/skills 是 204（ok 但没 body），直接退下一路。
-      if (!resp.ok || resp.status === 204) continue;
-      const payload = (await resp.json()) as {
-        corpora?: Array<{
-          corpus?: string;
-          available?: boolean;
-          eligible?: boolean;
-          chunk_count?: number;
-        }>;
-      };
-      const built = (payload.corpora ?? [])
-        // `eligible` 是引擎那侧「够不够格对外露面」的完整判词（四条取与：可检索、
-        // 块数够、词表闸、试跑不降级）。原先只看 `available`（索引加载得出来），
-        // 当前数据下恰好等价，但一个正常命名、能检索、没过质量闸的库会漏进来——
-        // 学习者选中它，生成的课要么资料不足要么质量没兜底。
-        // 老接口没有这个字段时退回 `available`，不因为字段缺失把下拉清空。
-        .filter((c) => (c.eligible ?? c.available) && typeof c.corpus === 'string')
-        // 一次性验证库（*-probe/-test/-tmp/-scratch）不给学习者看——双保险：
-        // 引擎侧 eligible 已判，这里按命名约定再拦一道。上次 fullpath-probe
-        // 漏进这个下拉，就是因为唯一那道闸换了判据（跳过被当失败的镜像事故）。
-        .filter((c) => !isScratchCorpus(c.corpus as string))
-        .map((c) => ({ corpus: c.corpus as string, chunks: Number(c.chunk_count ?? 0) }));
-      if (built.length) return built;
-    } catch {
-      /* 这一路取不到就试下一路 */
-    }
-  }
-  return [];
+  const resp = await fetch('/api/skills', { cache: 'no-store' });
+  if (!resp.ok || resp.status === 204) throw new Error('知识库列表暂时不可用');
+  const payload = (await resp.json()) as {
+    corpora?: Array<{
+      corpus?: string;
+      eligible?: boolean;
+      chunk_count?: number;
+    }>;
+  };
+  return (
+    (payload.corpora ?? [])
+      // `eligible` 是引擎那侧「够不够格对外露面」的完整判词（四条取与：可检索、
+      // 块数够、词表闸、试跑不降级）。原先只看 `available`（索引加载得出来），
+      // 当前数据下恰好等价，但一个正常命名、能检索、没过质量闸的库会漏进来——
+      // 学习者选中它，生成的课要么资料不足要么质量没兜底。
+      .filter((c) => c.eligible === true && typeof c.corpus === 'string')
+      // 一次性验证库（*-probe/-test/-tmp/-scratch）不给学习者看——双保险：
+      // 引擎侧 eligible 已判，这里按命名约定再拦一道。上次 fullpath-probe
+      // 漏进这个下拉，就是因为唯一那道闸换了判据（跳过被当失败的镜像事故）。
+      .filter((c) => !isScratchCorpus(c.corpus as string))
+      .map((c) => ({ corpus: c.corpus as string, chunks: Number(c.chunk_count ?? 0) }))
+  );
 }
 
 const EDUCATIONS = [
@@ -250,16 +246,21 @@ export function LearnerProfilePopover({
   const [open, setOpen] = useState(false);
   // 前测校准状态机：idle → loading → active（就地答题）→ submitting → idle；
   // 引擎不可达（204）→ unavailable（按钮禁用），不影响画像其余功能。
-  const [calibState, setCalibState] = useState<'idle' | 'loading' | 'active' | 'submitting' | 'unavailable'>('idle');
+  const [calibState, setCalibState] = useState<
+    'idle' | 'loading' | 'active' | 'submitting' | 'unavailable'
+  >('idle');
   const [calibQuestions, setCalibQuestions] = useState<PretestQuestion[]>([]);
   const [calibAnswers, setCalibAnswers] = useState<Record<string, string>>({});
   // 可选的知识库名单。只列已建好索引的库——没建索引的选了也是无据可依，
   // 生成入口那道闸会直接拦下（lib/server/knowledge-center.ts corpusUnavailableReason）。
   const [corpora, setCorpora] = useState<BuiltCorpus[]>([]);
+  const [corporaUnavailable, setCorporaUnavailable] = useState(false);
   useEffect(() => {
-    if (!open || corpora.length > 0) return;
-    void loadBuiltCorpora().then(setCorpora);
-  }, [open, corpora.length]);
+    if (!open || corpora.length > 0 || corporaUnavailable) return;
+    void loadBuiltCorpora()
+      .then(setCorpora)
+      .catch(() => setCorporaUnavailable(true));
+  }, [open, corpora.length, corporaUnavailable]);
 
   // 本地先落盘（未登录也要能用），登录时再上行到账户——画像随账户走，
   // 换设备登录即恢复。防抖 800ms：滑块/下拉连改不该刷一串请求。
@@ -304,9 +305,12 @@ export function LearnerProfilePopover({
       void saveProfileToAccount(merged);
     }, 800);
   };
-  useEffect(() => () => {
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+    },
+    [],
+  );
 
   const startCalibration = async () => {
     setCalibState('loading');
@@ -436,6 +440,11 @@ export function LearnerProfilePopover({
                 </option>
               ))}
             </select>
+            {corporaUnavailable && (
+              <span role="alert" className="block text-[10px] text-destructive">
+                知识库列表暂时不可用
+              </span>
+            )}
           </label>
           {/* 知识库与培训领域分成两个字段：培训领域进蓝图提示词、证据账本分桶和类比取材，
               知识库只决定检索读哪份索引。合成一个字段就得跟学习者说「你的培训领域是 odoo」。 */}
@@ -484,32 +493,36 @@ export function LearnerProfilePopover({
         </label>
 
         <div className="space-y-2">
-          <p className="text-[11px] font-medium text-muted-foreground">经历自陈（选最符合的一项）</p>
+          <p className="text-[11px] font-medium text-muted-foreground">
+            经历自陈（选最符合的一项）
+          </p>
           {DIMENSIONS.map((d) => {
             const calibDim = PRETEST_DIMS.find((p) => p.field === d.key)?.dim;
             const evidence = calibDim ? profile.pretestCalibrated?.[calibDim] : undefined;
             return (
-            <label key={d.key} className="block text-[11px] space-y-1">
-              <span className="text-muted-foreground">
-                {d.question}
-                {evidence ? (
-                  <span className="ml-1.5 rounded bg-green-soft px-1 py-0.5 text-[10px] text-green-deep">
-                    已校准（{evidence}）
-                  </span>
-                ) : null}
-              </span>
-              <select
-                value={(profile[d.key] as number | undefined) ?? 0}
-                onChange={(e) => patch({ [d.key]: Number(e.target.value) } as Partial<LearnerProfileFields>)}
-                className="w-full rounded-md border bg-background text-foreground px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2"
-              >
-                {d.options.map((opt, i) => (
-                  <option key={i} value={i} className="bg-background text-foreground">
-                    {opt}
-                  </option>
-                ))}
-              </select>
-            </label>
+              <label key={d.key} className="block text-[11px] space-y-1">
+                <span className="text-muted-foreground">
+                  {d.question}
+                  {evidence ? (
+                    <span className="ml-1.5 rounded bg-green-soft px-1 py-0.5 text-[10px] text-green-deep">
+                      已校准（{evidence}）
+                    </span>
+                  ) : null}
+                </span>
+                <select
+                  value={(profile[d.key] as number | undefined) ?? 0}
+                  onChange={(e) =>
+                    patch({ [d.key]: Number(e.target.value) } as Partial<LearnerProfileFields>)
+                  }
+                  className="w-full rounded-md border bg-background text-foreground px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2"
+                >
+                  {d.options.map((opt, i) => (
+                    <option key={i} value={i} className="bg-background text-foreground">
+                      {opt}
+                    </option>
+                  ))}
+                </select>
+              </label>
             );
           })}
         </div>
@@ -553,7 +566,9 @@ export function LearnerProfilePopover({
                   </span>
                   <select
                     value={calibAnswers[q.id] ?? ''}
-                    onChange={(e) => setCalibAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))}
+                    onChange={(e) =>
+                      setCalibAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))
+                    }
                     className="w-full rounded-md border bg-background text-foreground px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 focus-visible:ring-offset-2"
                   >
                     <option value="" disabled className="bg-background text-muted-foreground">
@@ -573,8 +588,7 @@ export function LearnerProfilePopover({
                   size="sm"
                   className="flex-1 text-[11px]"
                   disabled={
-                    calibState === 'submitting' ||
-                    calibQuestions.some((q) => !calibAnswers[q.id])
+                    calibState === 'submitting' || calibQuestions.some((q) => !calibAnswers[q.id])
                   }
                   onClick={submitCalibration}
                 >

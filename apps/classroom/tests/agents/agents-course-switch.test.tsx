@@ -157,4 +157,16 @@ describe('/agents 课程切换器', () => {
     expect(host.textContent).toContain(`${blocked} 个裁决为拦截转人工`);
     expect(host.textContent).not.toContain('全部通过审核门禁');
   });
+
+  it('职责卡给核验线索，不暴露代码路径、配置键或内部字段名', async () => {
+    await act(async () => {
+      root.render(<AgentsPage />);
+    });
+    await flush();
+
+    expect(host.textContent).toContain('核验：');
+    expect(host.textContent).not.toMatch(
+      /source_id|schema|MODEL_ROUTES|AUDIT_MODEL|ARBITER_MODEL|unavailable|app\/api\/|lib\/generation|服务端批量生成/i,
+    );
+  });
 });

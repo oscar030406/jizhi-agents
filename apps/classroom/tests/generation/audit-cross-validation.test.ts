@@ -5,6 +5,7 @@ import {
   crossValidate,
   type AuditClaim,
 } from '@/lib/generation/hallucination-audit';
+import { EvidenceGateError } from '@/lib/generation/evidence-grounding';
 
 const c = (claim: string, verdict: AuditClaim['verdict'], reason = 'r'): AuditClaim => ({
   claim,
@@ -124,6 +125,20 @@ describe('auditSceneContent debate', () => {
     expect(audit.debate?.[0].arbiterVerdict).toBe('unresolved');
     expect(audit.claims[0].decidedBy).toBeUndefined();
     expect(audit.claims[0].verdict).toBe('uncertain');
+  });
+
+  it('does not swallow a configured evidence-gate failure during claim rescue', async () => {
+    await expect(
+      auditSceneContent({
+        sceneTitle: 't',
+        content,
+        judgeCall: async () => JSON.stringify({ claims: [c('该标准于 1998 年发布', 'uncertain')] }),
+        judgeModel: 'j1',
+        retrieveForClaim: async () => {
+          throw new EvidenceGateError('证据检索桥不可达');
+        },
+      }),
+    ).rejects.toThrow('证据检索桥不可达');
   });
 
   it('binds abbreviated citations to the real evidence pool and drops unknown ones', async () => {

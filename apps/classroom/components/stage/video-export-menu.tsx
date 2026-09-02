@@ -84,7 +84,13 @@ function OptionRow<T extends string | number>({
   );
 }
 
-export function VideoExportMenu({ onClose }: { onClose: () => void }) {
+export function VideoExportMenu({
+  fullMediaReady,
+  onClose,
+}: {
+  fullMediaReady: boolean;
+  onClose: () => void;
+}) {
   const { t } = useI18n();
   const { exporting: isExportingVideo, exportVideo } = useExportVideo();
   const { rendering, percent, etaMs, options, setOptions, renderVideo } = useRenderVideo();
@@ -108,6 +114,7 @@ export function VideoExportMenu({ onClose }: { onClose: () => void }) {
   }, []);
 
   const busy = isExportingVideo || rendering;
+  const unavailable = !fullMediaReady;
 
   return (
     <>
@@ -128,7 +135,7 @@ export function VideoExportMenu({ onClose }: { onClose: () => void }) {
         value={resolution}
         onChange={(resolution) => setOptions({ resolution })}
         format={(r) => (r === '4k' ? '4K' : r)}
-        disabled={busy}
+        disabled={busy || unavailable}
       />
 
       {/* fps + quality only matter for MP4 rendering. */}
@@ -139,7 +146,7 @@ export function VideoExportMenu({ onClose }: { onClose: () => void }) {
             options={VIDEO_FPS}
             value={fps}
             onChange={(fps) => setOptions({ fps })}
-            disabled={busy}
+            disabled={busy || unavailable}
           />
           <OptionRow
             label={t('export.videoQuality')}
@@ -147,7 +154,7 @@ export function VideoExportMenu({ onClose }: { onClose: () => void }) {
             value={quality}
             onChange={(quality) => setOptions({ quality })}
             format={(q) => t(`export.videoQuality_${q}`)}
-            disabled={busy}
+            disabled={busy || unavailable}
           />
         </>
       )}
@@ -170,7 +177,8 @@ export function VideoExportMenu({ onClose }: { onClose: () => void }) {
         {serviceEnabled && (
           <button
             onClick={() => renderVideo()}
-            disabled={busy}
+            disabled={busy || unavailable}
+            title={unavailable ? t('share.notReady') : undefined}
             className="w-full px-2 py-1.5 text-xs rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center justify-center gap-1.5"
           >
             {rendering && <Loader2 className="w-3 h-3 animate-spin" />}
@@ -182,12 +190,16 @@ export function VideoExportMenu({ onClose }: { onClose: () => void }) {
             exportVideo(resolution);
             onClose();
           }}
-          disabled={busy}
+          disabled={busy || unavailable}
+          title={unavailable ? t('share.notReady') : undefined}
           className="w-full px-2 py-1.5 text-xs rounded-md border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5"
         >
           {isExportingVideo && <Loader2 className="w-3 h-3 animate-spin" />}
           {t('export.videoDownloadZip')}
         </button>
+        {unavailable && (
+          <div className="text-[11px] text-gray-500 dark:text-gray-400">{t('share.notReady')}</div>
+        )}
         {serviceEnabled === false && (
           <div className="text-[11px] text-gray-500 dark:text-gray-400">
             {t('export.videoServiceHint')}

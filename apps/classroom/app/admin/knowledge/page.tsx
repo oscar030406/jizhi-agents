@@ -29,8 +29,7 @@ import { CorpusCard } from '@/components/admin/knowledge-center';
 import { SectionAnchor } from '@/components/home/section-anchor';
 import { corpusVisibilityFor } from '@/lib/accounts/org-store';
 import { isScratchCorpus } from '@/lib/knowledge/domain-registry';
-import { redactCaliber } from '@/lib/metrics/redact-caliber';
-import { readCorporaWithDrift } from '@/lib/server/knowledge-center';
+import { readCorpora } from '@/lib/server/knowledge-center';
 import { cn } from '@/lib/utils';
 
 import { Denied, managerAccount } from './guard';
@@ -46,16 +45,8 @@ export default async function KnowledgeCenterPage() {
   const account = await managerAccount();
   if (!account) return <Denied />;
   const visible = await corpusVisibilityFor(account.id);
-  const { corpora: allCorpora, drift: allDrift } = await readCorporaWithDrift(visible);
-  const corpora = allCorpora.filter(
-    (corpus) =>
-      !isScratchCorpus(corpus.corpus) &&
-      !/(?:fullprobe|fullpath[-_]?probe|(?:^|[-_])probe(?:[-_]|$))/i.test(corpus.corpus),
-  );
-  const drift = allDrift.filter(
-    (note) =>
-      !/(?:fullprobe|fullpath[-_]?probe|(?:^|[-_\s])probe(?:[-_\s]|$))/i.test(note),
-  );
+  const allCorpora = (await readCorpora()).filter((corpus) => visible(corpus.corpus));
+  const corpora = allCorpora.filter((corpus) => !isScratchCorpus(corpus.corpus));
   const withIndex = corpora.filter((c) => c.available);
 
   return (
@@ -67,7 +58,6 @@ export default async function KnowledgeCenterPage() {
             <h1 className="text-[36px] font-medium leading-[1.1] tracking-[-0.02em] sm:text-[44px]">
               知识库
             </h1>
-
           </div>
         </header>
 
@@ -136,27 +126,6 @@ export default async function KnowledgeCenterPage() {
                 证据块数、就绪度与许可均来自系统最近一次处理结果；页面显示最近处理时间，无法确认的字段不展示。
               </p>
             </Caliber>
-
-            {/* 公开页 /skills 的静态快照与当前磁盘对不上时说一声。不一致本身要可见：
-                引擎在线时那一页会自动换成实时数据，引擎离线时访客看到的就是这份快照。 */}
-            {drift.length > 0 ? (
-              <section className="mt-6 rounded-xl border border-amber-500/40 bg-amber-500/5 px-4 py-3">
-                <p className="text-xs font-medium">公开页数据待更新</p>
-                <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-[11px] leading-relaxed text-muted-foreground">
-                  {drift.map((note) => (
-                    <li key={note}>{redactCaliber(note)}</li>
-                  ))}
-                </ul>
-                <Caliber summary="展开：为什么会落后、什么时候更新">
-                  <p>
-                    岗位技能地图页会优先显示已发布数据，服务可用时再读取最新结果；暂时不可用时仍保留已发布内容。
-                  </p>
-                  <p>
-                    已发布数据会随平台更新刷新；如需提前处理，请联系平台维护人员。
-                  </p>
-                </Caliber>
-              </section>
-            ) : null}
 
             <p className="mt-8 text-[11px] text-muted-foreground">
               课程审核与全局指标在{' '}

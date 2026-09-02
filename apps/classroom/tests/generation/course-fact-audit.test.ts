@@ -3,10 +3,13 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   auditCourseContent,
   hashCourseScenes,
+  hashLearningContractPlan,
   type AuditClaim,
   type CourseAuditScene,
   type SceneAudit,
 } from '@/lib/generation/hallucination-audit';
+import { buildLearningContractPlan, type LearningContract } from '@/lib/generation/learning-contract';
+import type { SceneOutline } from '@/lib/types/generation';
 
 const issue = (claim: string, verdict: AuditClaim['verdict'], reason: string): AuditClaim => ({
   claim,
@@ -42,6 +45,134 @@ const scene = (title: string, body: string, narration = ''): CourseAuditScene =>
 
 const reply = (claims: AuditClaim[]) => async () => JSON.stringify({ claims });
 
+const alignmentOutlines: SceneOutline[] = [
+  ['prior', 'slide', '先备判断'],
+  ['demo', 'slide', '教师示范'],
+  ['practice', 'interactive', '学习者练习'],
+  ['feedback', 'interactive', '反馈后重试'],
+  ['transfer', 'quiz', '陌生记录迁移'],
+].map(([id, type, title], index) => ({
+  id: String(id),
+  type: type as SceneOutline['type'],
+  title: String(title),
+  description: String(title),
+  keyPoints: [String(title)],
+  order: index + 1,
+  objectiveIds: ['O1'],
+  teachingObjective: 'O1',
+  ...(type === 'interactive'
+    ? {
+        widgetType: 'game' as const,
+        widgetOutline: { gameType: 'strategy', challenge: '判断并重试' },
+      }
+    : {}),
+  ...(type === 'quiz'
+    ? {
+        quizConfig: {
+          questionCount: 1,
+          difficulty: 'medium' as const,
+          questionTypes: ['text' as const],
+        },
+      }
+    : {}),
+}));
+
+const alignmentContract: LearningContract = {
+  teachingStrategy: 'standard',
+  objectives: [
+    {
+      id: 'O1',
+      action: '判断设备是否可以放行',
+      condition: '给定一份陌生巡检记录',
+      successCriterion: '列出异常证据并给出与证据一致的结论',
+    },
+  ],
+  prerequisiteActivation: ['prior'],
+  demonstration: ['demo'],
+  learnerPractice: ['practice'],
+  feedbackRetry: ['feedback'],
+  transferApplication: ['transfer'],
+  assessmentMap: [{ sceneId: 'transfer', objectiveIds: ['O1'] }],
+  grounding: { sourceRefs: ['corpus:ai'], claimPolicy: 'cite-or-mark-uncertain' },
+};
+const alignmentPlan = buildLearningContractPlan(alignmentContract, alignmentOutlines);
+
+function alignmentScenes(demoText = '教师逐项读取巡检记录，标出异常证据，再依据证据示范放行判断。') {
+  const texts: Record<string, string> = {
+    prior: '学习者先回忆温度、振动和联锁状态分别怎样影响设备放行。',
+    demo: demoText,
+    practice: '给出一份巡检记录，请学习者标出异常证据并提交是否放行的判断。',
+    feedback: '系统按异常证据和结论一致性指出错误，学习者修改判断后再次提交。',
+    transfer: '面对未见过的夜班交接记录，判断设备能否放行并列出支持结论的异常证据。',
+  };
+  return alignmentOutlines.map((outline) => ({
+    ...scene(outline.title, texts[outline.id]!),
+    id: `scene-${outline.id}`,
+    outlineId: outline.id,
+    type: outline.type,
+    ...(outline.type === 'interactive'
+      ? { content: { text: texts[outline.id]!, widgetType: outline.widgetType } }
+      : {}),
+  }));
+}
+
+function alignmentItems(demoText: string, misalignedDemo = false) {
+  return [
+    {
+      objectiveId: 'O1',
+      phase: 'prerequisiteActivation',
+      sceneId: 'prior',
+      verdict: 'aligned',
+      evidenceQuote: '学习者先回忆温度、振动和联锁状态分别怎样影响设备放行。',
+      reason: '激活了目标判断所需的先备指标。',
+    },
+    {
+      objectiveId: 'O1',
+      phase: 'demonstration',
+      sceneId: 'demo',
+      verdict: misalignedDemo ? 'misaligned' : 'aligned',
+      evidenceQuote: demoText,
+      reason: misalignedDemo ? '内容与设备放行判断无关。' : '完整示范了目标动作与达标依据。',
+    },
+    {
+      objectiveId: 'O1',
+      phase: 'learnerPractice',
+      sceneId: 'practice',
+      verdict: 'aligned',
+      evidenceQuote: '给出一份巡检记录，请学习者标出异常证据并提交是否放行的判断。',
+      reason: '学习者实际执行目标动作。',
+    },
+    {
+      objectiveId: 'O1',
+      phase: 'feedbackRetry',
+      sceneId: 'feedback',
+      verdict: 'aligned',
+      evidenceQuote: '系统按异常证据和结论一致性指出错误，学习者修改判断后再次提交。',
+      reason: '反馈绑定成功标准并允许重试。',
+    },
+    {
+      objectiveId: 'O1',
+      phase: 'transferApplication',
+      sceneId: 'transfer',
+      verdict: 'aligned',
+      evidenceQuote: '面对未见过的夜班交接记录，判断设备能否放行并列出支持结论的异常证据。',
+      reason: '保持同一判断目标并换到陌生交接记录。',
+      newContext: true,
+    },
+  ];
+}
+
+function courseJudge(demoText: string, misalignedDemo = false) {
+  return async (system: string) =>
+    system.includes('教学履约终审员')
+      ? JSON.stringify({
+          verdict: misalignedDemo ? 'misaligned' : 'aligned',
+          rationale: misalignedDemo ? '示范环节与目标无关。' : '五阶段均有目标对齐证据。',
+          items: alignmentItems(demoText, misalignedDemo),
+        })
+      : JSON.stringify({ claims: [] });
+}
+
 describe('全课程事实终审', () => {
   it('规范化哈希忽略对象键序，但覆盖最终场景五个发布字段', () => {
     const base = {
@@ -63,6 +194,54 @@ describe('全课程事实终审', () => {
     expect(hashCourseScenes([{ ...base, actions: [{ type: 'speech', text: '新旁白' }] }])).not.toBe(
       original,
     );
+  });
+
+  it('双判官逐目标逐阶段确认真实语义证据后才允许发布', async () => {
+    const demoText = '教师逐项读取巡检记录，标出异常证据，再依据证据示范放行判断。';
+    const scenes = alignmentScenes(demoText);
+    const judge = courseJudge(demoText);
+    const audit = await auditCourseContent({
+      courseTitle: '设备放行判断',
+      scenes,
+      learningContract: alignmentPlan,
+      judgeCalls: [judge, judge],
+      judgeModel: 'judge-a',
+      judgeModels: ['judge-a', 'judge-b'],
+    });
+
+    expect(audit).toMatchObject({
+      verdict: 'pass',
+      decision: 'publish',
+      panelComplete: true,
+      learningAlignment: {
+        complete: true,
+        aligned: true,
+        courseContentHash: hashCourseScenes(scenes),
+        learningContractHash: hashLearningContractPlan(alignmentPlan),
+      },
+    });
+    expect(audit.learningAlignment?.judges).toHaveLength(2);
+  });
+
+  it('内容有出处但与目标无关时，事实终审全绿也必须 fail-closed', async () => {
+    const unrelated = '本页介绍蒸汽机从十八世纪到工业革命时期的发展历史。';
+    const scenes = alignmentScenes(unrelated);
+    const judge = courseJudge(unrelated, true);
+    const audit = await auditCourseContent({
+      courseTitle: '设备放行判断',
+      scenes,
+      learningContract: alignmentPlan,
+      judgeCalls: [judge, judge],
+      judgeModel: 'judge-a',
+      judgeModels: ['judge-a', 'judge-b'],
+      evidence: '[S1] 蒸汽机发展史材料。',
+      evidenceCount: 1,
+    });
+
+    expect(audit.claims).toEqual([]);
+    expect(audit.learningAlignment).toMatchObject({ complete: true, aligned: false });
+    expect(audit).toMatchObject({ verdict: 'flagged', decision: 'block_pending_review' });
+    expect(audit.rationale).toContain('目标与前置、示范、练习、反馈或迁移内容未对齐');
   });
 
   it('拦截同一阈值在不同场景出现互不相容的数字，并聚合逐屏断言与旁白', async () => {

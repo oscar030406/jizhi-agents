@@ -29,6 +29,10 @@ async function readJson<T>(file: string): Promise<T | null> {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 export interface ConceptNode {
   id: string;
   title: string;
@@ -156,9 +160,7 @@ export async function readDomainMaps(): Promise<DomainMap[]> {
 }
 
 /** 概念难度的分布。**这不是匹配曲线**，是资源供给侧的分布，页面上要写清楚。 */
-export async function readDifficultySupply(): Promise<
-  { tier: string; concepts: string[] }[]
-> {
+export async function readDifficultySupply(): Promise<{ tier: string; concepts: string[] }[]> {
   const concepts = await readJson<Record<string, { title?: string; difficulty?: string }>>(
     path.join(engineDataDir(), 'knowledge_base', 'concept_graph.json'),
   );
@@ -223,17 +225,21 @@ export async function readCoverageRuns(): Promise<CoverageRow[]> {
 
   const latest = new Map<string, CoverageRow>();
   for (const d of dirs) {
-    const s = await readJson<Record<string, any>>(path.join(runsDir, d, 'summary.json'));
-    if (!s?.gold_topic) continue;
+    const s = await readJson<unknown>(path.join(runsDir, d, 'summary.json'));
+    if (!isRecord(s) || !s.gold_topic) continue;
     // run 里记的是相对路径（../classroom/data/classrooms/xxx.json），取文件名当 id
-    const courseId = (String(s.course ?? '').split(/[\\/]/).pop() ?? '').replace(/\.json$/, '');
+    const courseId = (
+      String(s.course ?? '')
+        .split(/[\\/]/)
+        .pop() ?? ''
+    ).replace(/\.json$/, '');
     // 同主题多次重跑：后面的覆盖前面的（目录已按时间排序）
     latest.set(String(s.gold_topic), {
       topic: String(s.gold_topic),
       courseName: String(s.course_name ?? ''),
       total: Number(s.total ?? 0),
       coverage: Number(s.coverage ?? 0),
-      missing: (s.missing_kcs ?? []).map(String),
+      missing: Array.isArray(s.missing_kcs) ? s.missing_kcs.map(String) : [],
       status: String(s.gold_status ?? ''),
       courseId,
       // onWall 为空 = 读不到目录，这时一律当「还在」，不误标

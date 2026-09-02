@@ -255,6 +255,8 @@ def post_blueprint(
     供外部课堂系统（OpenMAIC 接地改造）在生成前调用。
     """
     trace_id = _resolve_trace_id(x_trace_id)
+    if "concept_mastery" in payload and not isinstance(payload["concept_mastery"], dict):
+        raise HTTPException(status_code=422, detail="concept_mastery 必须是概念 ID 到 0–1 分数的对象")
     allowed = {
         "learning_goal", "background", "programming_level", "python_level",
         "agent_level", "rag_level", "engineering_level",
@@ -266,6 +268,7 @@ def post_blueprint(
         # 生产入口是 app.main:app 走的是这里。两处必须同改，
         # tests/test_diagnosis_domain_concepts.py 有一条测试钉住它们一致。
         "corpus",
+        "concept_mastery",
     }
     kwargs = {k: v for k, v in payload.items() if k in allowed}
     kwargs.setdefault("learning_goal", "")
@@ -503,13 +506,14 @@ def _resolve_trace_id(trace_id: str | None) -> str:
     return uuid.uuid4().hex
 
 
-@router.get(
+@router.post(
     "/domain-path/{corpus}",
     response_model=ApiResponse[dict[str, Any]],
     dependencies=[Depends(verify_internal_token)],
 )
-def get_domain_path(
+def post_domain_path(
     corpus: str,
+    payload: dict[str, Any],
     x_trace_id: str | None = Header(default=None),
 ) -> ApiResponse[dict[str, Any]]:
     """域级学习路径：该库的概念按前置图拓扑深度分阶。
@@ -521,5 +525,13 @@ def get_domain_path(
     from backend.services.domain_path import build_domain_path
 
     trace_id = _resolve_trace_id(x_trace_id)
-    data = _call_engine("域级学习路径", trace_id, lambda: build_domain_path(corpus))
+    data = _call_engine(
+        "域级学习路径",
+        trace_id,
+        lambda: build_domain_path(
+            corpus,
+            mastery_vector=payload.get("masteryVector"),
+            mastery_corpus=payload.get("masteryCorpus"),
+        ),
+    )
     return ApiResponse(data=data, traceId=trace_id)

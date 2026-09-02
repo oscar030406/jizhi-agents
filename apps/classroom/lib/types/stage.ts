@@ -60,9 +60,9 @@ export interface CourseOrigin {
 export type AppStage = DslStage & {
   /** 这门课出自哪个域/库。生成时写入，落盘时随课带走。 */
   origin?: CourseOrigin;
-  /** 大纲阶段批准的最小教学契约；发布前用它核对实际生成场景。 */
+  /** 大纲阶段批准的目标、场景/阶段映射；发布前由双判官核对最终内容。 */
   learningContract?: import('@/lib/generation/learning-contract').LearningContractPlan;
-  /** 全课程断言账本与可见动作语义的跨页事实终审；含最终场景载荷哈希。 */
+  /** 全课程事实终审与教学履约终审；均绑定最终场景载荷哈希。 */
   courseAudit?: import('@/lib/generation/hallucination-audit').SceneAudit;
 };
 

@@ -38,14 +38,23 @@ const TONE_AGENT: Partial<Record<WorkshopTone, AgentKey>> = {
 
 /** 主事角色的三帧循环。造课要等好几分钟，静止一张图会显得卡住了。 */
 function useActFrame(agent: AgentKey | null) {
-  const [i, setI] = useState(0);
+  const [frame, setFrame] = useState<{ agent: AgentKey | null; index: number }>({
+    agent,
+    index: 0,
+  });
   useEffect(() => {
     if (!agent) return;
-    setI(0);
-    const iv = window.setInterval(() => setI((n) => (n + 1) % 3), 900);
+    const iv = window.setInterval(
+      () =>
+        setFrame((current) => ({
+          agent,
+          index: current.agent === agent ? (current.index + 1) % 3 : 1,
+        })),
+      900,
+    );
     return () => window.clearInterval(iv);
   }, [agent]);
-  return i;
+  return frame.agent === agent ? frame.index : 0;
 }
 
 export function WorkshopFeed({ className }: { className?: string }) {
@@ -73,7 +82,6 @@ export function WorkshopFeed({ className }: { className?: string }) {
     >
       <div className="shrink-0 px-4 py-2 border-b border-border flex items-center gap-2.5">
         {lead && AGENT_ART[lead].acts ? (
-          /* eslint-disable-next-line @next/next/no-img-element */
           <img
             src={AGENT_ART[lead].acts![frameIndex]}
             alt={`${AGENT_PERSONAS[lead].name}（${AGENT_PERSONAS[lead].role}）`}
@@ -114,7 +122,6 @@ export function WorkshopFeed({ className }: { className?: string }) {
                 )}
               >
                 {agent && (
-                  /* eslint-disable-next-line @next/next/no-img-element */
                   <img
                     src={AGENT_ART[agent].bust}
                     alt={AGENT_PERSONAS[agent].name}

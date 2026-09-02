@@ -33,9 +33,14 @@ describe('persistence client bootstrap', () => {
 
   it('configures both HTTP stores and passes app validators through', async () => {
     vi.stubEnv('NEXT_PUBLIC_PERSISTENCE', '1');
-    vi.stubEnv('NEXT_PUBLIC_PERSISTENCE_TOKEN', 'test-dev-token');
     vi.stubGlobal('window', {});
     vi.stubGlobal('localStorage', memoryStorage());
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () => new Response(JSON.stringify({ account: { id: 'acct_test' } }), { status: 200 }),
+      ),
+    );
 
     const { HttpDocumentStore } = await import('@openmaic/storage');
     const { HttpRuntimeStore } = await import('@openmaic/storage/runtime/http');
@@ -64,8 +69,8 @@ describe('persistence client bootstrap', () => {
         headersHook: (context: { method: string; path: string }) => Promise<HeadersInit>;
       }
     ).headersHook({ method: 'GET', path: '/runtime/sessions/example' });
-    expect(new Headers(runtimeHeaders).get('authorization')).toBe('Bearer test-dev-token');
-    expect(new Headers(runtimeHeaders).get('x-learner-key')).toMatch(/^anon:/);
+    expect(new Headers(runtimeHeaders).get('authorization')).toBeNull();
+    expect(new Headers(runtimeHeaders).get('x-learner-key')).toBe('acct_test');
 
     runtime.resetRuntimeStorageForTests();
     documents.resetDocumentStorageForTests();
@@ -73,7 +78,7 @@ describe('persistence client bootstrap', () => {
     expect(documents.isDocumentStorageConfigured()).toBe(false);
   });
 
-  it('partitions by account id when a session exists, and by the device key when it does not', async () => {
+  it('uses the account id and refuses server persistence without a session', async () => {
     async function learnerKeyHeader(auth: unknown): Promise<string | null> {
       vi.resetModules();
       vi.stubEnv('NEXT_PUBLIC_PERSISTENCE', '1');
@@ -99,7 +104,7 @@ describe('persistence client bootstrap', () => {
     expect(await learnerKeyHeader({ enabled: true, account: { id: 'acct_abc123' } })).toBe(
       'acct_abc123',
     );
-    expect(await learnerKeyHeader({ enabled: true, account: null })).toMatch(/^anon:/);
+    await expect(learnerKeyHeader({ enabled: true, account: null })).rejects.toThrow(/请先登录/);
   });
 
   it('does not run client configuration during server module evaluation', async () => {

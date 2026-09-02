@@ -19,6 +19,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { Loader2, PlayCircle, ExternalLink } from 'lucide-react';
 import { domainLabel } from '@/lib/knowledge/domain-labels';
+import { redactCaliber } from '@/lib/metrics/redact-caliber';
 
 type Phase = 'idle' | 'starting' | 'running' | 'ready' | 'failed';
 
@@ -79,7 +80,7 @@ export function FirstCourseLauncher({ corpus, scope }: { corpus: string; scope?:
       if (j.message) {
         setNote(
           j.totalScenes
-            ? `${j.message}（已落盘 ${j.scenesGenerated ?? 0}/${j.totalScenes} 屏）`
+            ? `${j.message}（已生成 ${j.scenesGenerated ?? 0}/${j.totalScenes} 屏）`
             : j.message,
         );
       }
@@ -97,7 +98,7 @@ export function FirstCourseLauncher({ corpus, scope }: { corpus: string; scope?:
         return;
       }
     }
-    setNote('轮询超时，任务可能仍在跑——去课程墙看看这门课在不在');
+    setNote('状态查询超时，任务可能仍在进行——可前往课程墙查看最新结果');
   };
 
   return (
@@ -143,7 +144,9 @@ export function FirstCourseLauncher({ corpus, scope }: { corpus: string; scope?:
       </div>
 
       {error && (
-        <p className="mt-2 text-xs leading-relaxed text-red-600 dark:text-red-400">{error}</p>
+        <p className="mt-2 text-xs leading-relaxed text-red-600 dark:text-red-400">
+          {redactCaliber(error)}
+        </p>
       )}
     </section>
   );

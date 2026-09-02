@@ -3,8 +3,8 @@
 /**
  * 域级学习路径（学习端）。
  *
- * 画像选了非 AI 知识库时，/path 展示引擎按前置图排出来的阶段；AI 库（含未选库＝
- * 跟随培训领域）原样渲染 children——那是人工策展的 AI 路径全景，一行不改。
+ * /path 对所有知识库展示引擎按索引与前置图排出来的阶段；AI 主库不再走手工
+ * learning-path.json 旁路。
  *
  * 为什么是 client 组件：画像存在 localStorage（`loadLearnerProfile`），server component
  * 读不到。
@@ -22,11 +22,12 @@ import { AlertTriangle, ArrowRight, Sparkles } from 'lucide-react';
 
 import { loadLearnerProfile } from '@/components/generation/learner-profile-popover';
 import { DomainPathNotice } from '@/components/path/domain-path-notice';
+import { TrackPractice } from '@/components/path/track-practice';
 import { EmptyState } from '@/components/ui/empty-state';
 import { domainLabel } from '@/lib/knowledge/domain-labels';
 import { truncateLabel } from '@/lib/knowledge/domain-registry';
+import { useAccountProfile } from '@/lib/knowledge/account-profile';
 import { useEffectiveDomainContext } from '@/lib/knowledge/use-domain-context';
-import type { DomainContextProfile } from '@/lib/knowledge/domain-context';
 import { REQUIREMENT_DRAFT_KEY } from '@/lib/hooks/use-draft-cache';
 import { cn } from '@/lib/utils';
 
@@ -44,7 +45,7 @@ export interface DomainPathConcept {
   mastery?: number;
 }
 
-type PathStatus = 'mastered' | 'current' | 'future';
+type PathStatus = 'mastered' | 'current' | 'future' | 'unmeasured';
 
 export interface DomainPathStage {
   index: number;
@@ -56,8 +57,8 @@ export interface DomainPathStage {
 export interface DomainPath {
   corpus: string;
   label?: string;
-  /** intake = 前置图排的；index-tags = 概念表太薄、改按索引标注的覆盖厚度分档；none = 排不出 */
-  source: 'curated' | 'intake' | 'index-tags' | 'none';
+  /** index-graph/intake = 前置图排的；index-tags = 按索引标注覆盖厚度分档；none = 排不出 */
+  source: 'index-graph' | 'intake' | 'index-tags' | 'none';
   generated_at?: string | null;
   run_id?: string | null;
   concept_count?: number;
@@ -70,8 +71,10 @@ export interface DomainPath {
     mastery_entries?: number;
     matched_mastery?: number;
     mastery_threshold?: number;
-    counts?: Record<PathStatus, number>;
+    counts?: Partial<Record<PathStatus, number>>;
     current?: string[];
+    reason?: string | null;
+    mastery_available?: boolean;
   };
 }
 
@@ -92,19 +95,18 @@ const FOCUS_RING =
 /** 概念名与课程标题的对齐口径：大小写与空格不敏感，其余原样比。 */
 const norm = (s: string) => s.toLowerCase().replace(/\s+/g, '');
 
-export function DomainLearningPath({ children }: { children: React.ReactNode }) {
+export function DomainLearningPath({ children: _children }: { children?: React.ReactNode }) {
   // 指派解析前不能先画 AI children：残留 AI 画像 + 智能制造指派时，那会造成一次可见的错域闪屏。
-  const [profile, setProfile] = useState<DomainContextProfile | null>(null);
-  const [profileReady, setProfileReady] = useState(false);
-  /* eslint-disable react-hooks/set-state-in-effect -- 画像在 localStorage，SSR 拿不到，只能落地后读（同 lib/hooks/use-draft-cache.ts） */
-  useEffect(() => {
-    setProfile(loadLearnerProfile());
-    setProfileReady(true);
-  }, []);
-  /* eslint-enable react-hooks/set-state-in-effect */
-  const contextState = useEffectiveDomainContext(profile, profileReady);
+  const profileState = useAccountProfile(loadLearnerProfile);
+  const contextState = useEffectiveDomainContext(
+    profileState.kind === 'ready' ? profileState.profile : null,
+    profileState.kind === 'ready',
+  );
 
-  if (contextState.kind === 'loading') {
+  if (profileState.kind === 'error') {
+    return <EmptyState title="当前账户画像暂时无法读取" hint={profileState.reason} />;
+  }
+  if (profileState.kind === 'loading' || contextState.kind === 'loading') {
     return <p className="mt-8 text-sm text-muted-foreground">正在确认当前学习领域…</p>;
   }
   if (contextState.kind === 'error') {
@@ -114,29 +116,19 @@ export function DomainLearningPath({ children }: { children: React.ReactNode }) 
   if (!context.domain) {
     return (
       <EmptyState
-        title="机构指派课程的领域尚未确认"
+        title={
+          context.status === 'assignment-unavailable'
+            ? '机构课程暂不可用'
+            : '机构指派课程的领域尚未确认'
+        }
         hint={context.reason ?? '课程归属由引擎生成；归属产物补齐前不会展示其它领域的路径。'}
       />
     );
   }
-  return (
-    <DomainPathBody
-      corpus={context.domain}
-      contextLabel={context.label}
-      curatedChildren={context.isAi ? children : undefined}
-    />
-  );
+  return <DomainPathBody corpus={context.domain} contextLabel={context.label} />;
 }
 
-function DomainPathBody({
-  corpus,
-  contextLabel,
-  curatedChildren,
-}: {
-  corpus: string;
-  contextLabel?: string;
-  curatedChildren?: React.ReactNode;
-}) {
+function DomainPathBody({ corpus, contextLabel }: { corpus: string; contextLabel?: string }) {
   const router = useRouter();
   const [state, setState] = useState<State>({ kind: 'loading' });
   // 概念 → 课程的映射用运行时归属（/api/course-domains 现读磁盘），不用构建期快照：
@@ -214,32 +206,28 @@ function DomainPathBody({
     },
     [label, router],
   );
-  const isCurated = curatedChildren !== undefined;
-
   return (
     <>
-      {!isCurated && <h1 className="text-2xl font-semibold tracking-tight">{label} · 学习路径</h1>}
-      {!isCurated && state.kind === 'ok' && state.path.source === 'intake' && (
+      <h1 className="text-2xl font-semibold tracking-tight">{label} · 学习路径</h1>
+      {state.kind === 'ok' && ['index-graph', 'intake'].includes(state.path.source) && (
         <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
           这条路径不是人工排的：概念取自该库接入时抽出的概念表，先后顺序由前置关系图的
           拓扑深度分档。同一阶内的概念没有先后，学完一阶再进下一阶。
         </p>
       )}
-      {!isCurated && state.kind === 'ok' && (
+      {state.kind === 'ok' && (
         <p className="mt-2 text-xs tabular-nums text-muted-foreground">
           {state.path.concept_count ?? 0} 个概念 · {state.path.edge_count ?? 0} 条前置边
-          {state.path.run_id ? ` · 接入 run ${state.path.run_id}` : ''}
+          {state.path.run_id ? ' · 接入批次已记录' : ''}
           {state.path.generated_at
             ? ` · ${new Date(state.path.generated_at).toLocaleDateString('zh-CN')} 生成`
             : ''}
         </p>
       )}
-      {!isCurated && (
-        <DomainPathNotice
-          corpus={corpus}
-          caliber={state.kind === 'ok' ? state.path.caliber : undefined}
-        />
-      )}
+      <DomainPathNotice
+        corpus={corpus}
+        caliber={state.kind === 'ok' ? state.path.caliber : undefined}
+      />
 
       {state.kind === 'loading' && (
         <p className="mt-8 text-sm text-muted-foreground">正在取「{label}」的学习路径…</p>
@@ -281,10 +269,7 @@ function DomainPathBody({
         <PersonalRouteSummary path={state.path} />
       )}
 
-      {isCurated && state.kind === 'ok' && Boolean(state.path.stages?.length) && curatedChildren}
-
-      {!isCurated &&
-        state.kind === 'ok' &&
+      {state.kind === 'ok' &&
         (state.path.stages ?? []).map((stage) => (
           <section key={stage.index} className="mt-10">
             <div className="flex items-center gap-2">
@@ -303,6 +288,11 @@ function DomainPathBody({
             </div>
           </section>
         ))}
+
+      <TrackPractice
+        corpus={corpus}
+        courseTitles={Object.fromEntries(courses.map((course) => [course.id, course.title]))}
+      />
     </>
   );
 }
@@ -329,7 +319,10 @@ function ConceptCard({
         {course ? (
           <Link
             href={`/classroom/${course.id}`}
-            className={cn('group flex min-w-0 items-center gap-2 font-medium hover:text-primary', FOCUS_RING)}
+            className={cn(
+              'group flex min-w-0 items-center gap-2 font-medium hover:text-primary',
+              FOCUS_RING,
+            )}
           >
             <span className="min-w-0 truncate">{concept.name}</span>
             <ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
@@ -386,7 +379,7 @@ function ConceptCard({
 }
 
 function PersonalRouteSummary({ path }: { path: DomainPath }) {
-  const counts = path.personalization?.counts ?? { mastered: 0, current: 0, future: 0 };
+  const counts = path.personalization?.counts ?? {};
   return (
     <section
       aria-label="我的当前路线"
@@ -395,13 +388,14 @@ function PersonalRouteSummary({ path }: { path: DomainPath }) {
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="font-semibold">我的当前路线</p>
         <p className="text-xs tabular-nums text-muted-foreground">
-          已掌握 {counts.mastered} · 当前推荐 {counts.current} · 后续 {counts.future}
+          已掌握 {counts.mastered ?? 0} · 当前推荐 {counts.current ?? 0} · 后续 {counts.future ?? 0}{' '}
+          · 尚未测评 {counts.unmeasured ?? 0}
         </p>
       </div>
       <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
         这是当前账户自己的路线：引擎只用账户级画像与测验掌握度移动游标，不改知识库已有概念和顺序。
         {path.personalization?.matched_mastery === 0
-          ? '当前尚无与本路径概念匹配的测验记录，先从既有入口开始。'
+          ? (path.personalization.reason ?? '当前尚无与本路径概念 ID 同源的测评记录。')
           : ''}
       </p>
       <div className="mt-3 grid gap-2 sm:grid-cols-3">
@@ -420,7 +414,9 @@ function PersonalRouteSummary({ path }: { path: DomainPath }) {
                   ? `当前推荐：${current.slice(0, 3).join('、')}`
                   : stage.status === 'mastered'
                     ? '本阶段已掌握'
-                    : '完成前置内容后进入'}
+                    : stage.status === 'unmeasured'
+                      ? '本阶段尚无同源测评'
+                      : '完成前置内容后进入'}
               </p>
             </div>
           );
@@ -432,7 +428,14 @@ function PersonalRouteSummary({ path }: { path: DomainPath }) {
 
 function StatusBadge({ status }: { status?: PathStatus }) {
   if (!status) return null;
-  const label = status === 'mastered' ? '已掌握' : status === 'current' ? '当前推荐' : '后续节点';
+  const label =
+    status === 'mastered'
+      ? '已掌握'
+      : status === 'current'
+        ? '当前推荐'
+        : status === 'unmeasured'
+          ? '尚未测评'
+          : '后续节点';
   return (
     <span
       className={cn(

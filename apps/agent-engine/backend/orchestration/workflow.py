@@ -406,6 +406,22 @@ class AgentTrainingWorkflow:
             raise ValueError("profile does not match parent run")
         if feedback.learner_profile_id != profile.id:
             raise ValueError("feedback does not match learner profile")
+        from backend.rag.retriever import DEFAULT_CORPUS_ALIASES
+
+        def canonical_corpus(value: str | None) -> str:
+            name = (value or "").strip().lower()
+            return "ai" if name in DEFAULT_CORPUS_ALIASES else name
+
+        blueprint = parent_run.diagnosis.personalization_blueprint
+        if blueprint is None:
+            raise ValueError("parent run has no corpus-bound blueprint")
+        profile_corpus = canonical_corpus(profile.corpus)
+        parent_corpora = {
+            canonical_corpus(parent_run.diagnosis.coverage.corpus),
+            canonical_corpus(blueprint.corpus),
+        }
+        if parent_corpora != {profile_corpus}:
+            raise ValueError("profile corpus does not match parent run")
 
         decision = self.feedback_agent.run(
             feedback,

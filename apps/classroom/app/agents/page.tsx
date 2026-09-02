@@ -69,7 +69,7 @@ const AGENTS: AgentSpec[] = [
       '学习者画像：目标领域、学历、身份来路、五维自评（编程/Python/Agent/RAG/工程化）、学习偏好、时间预算',
     output:
       '掌握度向量、薄弱概念、推荐难度档、学习风险、资源配比（支架深度 / 组件与图示配额 / 类比领域 / 篇幅档 / 测验难度带），每项附推导依据，可回溯到画像维度',
-    source: 'lib/generation/learner-profile.ts → POST /internal/v1/personalize/blueprint',
+    source: '学习者画像、推导依据与个性化蓝图',
   },
   {
     step: '①',
@@ -79,45 +79,43 @@ const AGENTS: AgentSpec[] = [
     engine: '受控知识库检索（无生成）',
     deterministic: true,
     input: '课程标题 + 场景标题与描述',
-    output:
-      '带 source_id 的证据块、命中概念、证据摘要 —— 同一份证据同时喂给生成与审核，构成事实边界',
-    source: 'lib/generation/evidence-grounding.ts → GET /internal/v1/personalize/evidence',
+    output: '带来源编号的证据块、命中概念与证据摘要——同一份证据同时提供给生成与审核，构成事实边界',
+    source: '知识库命中记录与正文摘录块',
   },
   {
     step: '②',
     phase: '生成',
     name: '内容生成 Agent',
     persona: 'generation',
-    engine: '生成模型（MODEL_ROUTES 的 scene-content 路由决定），采样非确定',
+    engine: '平台配置的课程内容生成模型，采样非确定',
     deterministic: false,
-    input:
-      '场景大纲 + 学情蓝图指令 + 证据事实边界（均由前两个 Agent 经描述通道注入，未改动其原生 schema）',
+    input: '场景大纲 + 学情蓝图指令 + 证据事实边界（由前两个 Agent 注入，不改变原生课程结构）',
     output: '场景内容 JSON：幻灯片 / 测验 / 互动组件 / PBL',
-    source: 'app/api/generate/scene-content/route.ts',
+    source: '场景生成记录与课程正文',
   },
   {
     step: '③',
     phase: '校验',
     name: '审核 Agent',
     persona: 'judge',
-    engine: '异厂商审核模型（AUDIT_MODEL / AUDIT_MODEL_2，独立于生成模型）',
+    engine: '两个异厂商审核模型，均独立于生成模型',
     deterministic: false,
     input: '生成出的教学文本 + 与生成同源的证据',
     output:
       '逐条断言判定（supported / uncertain / incorrect）→ 场景判定 → 门禁裁决：直接放行 / 带风险标记放行 / 拦截转人工。判错触发一轮定向修订后复审。两个审核智能体（甲/乙）异厂商配置、互不通气各自独立判定，判定一致即成共识，分歧才升级仲裁',
-    source: 'app/api/generate/scene-audit/route.ts · lib/generation/hallucination-audit.ts',
+    source: '随课保存的逐条审核判词与修订记录',
   },
   {
     step: '③',
     phase: '校验',
     name: '仲裁 Agent',
     persona: 'arbiter',
-    engine: '终审仲裁模型（ARBITER_MODEL，独立于两个审核智能体与作者模型）',
+    engine: '终审仲裁模型，独立于两个审核智能体与作者模型',
     deterministic: false,
     input: '两个审核智能体的分歧断言（含各自判定与理由）+ 作者模型答辩 + 参考资料',
     output:
-      '逐条终审判定（supported / uncertain / incorrect，判错必附修正表述），只有仲裁裁定的错误才触发重写；未配置或裁决不可用时保留两个审核智能体中较严一方。门禁阈值与引擎 ArbitrationAgent 同参',
-    source: 'lib/generation/hallucination-audit.ts（答辩 → 仲裁环节）',
+      '逐条终审判定（supported / uncertain / incorrect，判错必附修正表述），只有仲裁裁定的错误才触发重写；未配置或裁决不可用时保留两个审核智能体中较严一方。门禁阈值与最终仲裁环节保持一致',
+    source: '分歧断言、作者申辩与终审记录',
   },
   {
     step: '④',
@@ -129,7 +127,7 @@ const AGENTS: AgentSpec[] = [
     input: '测验正确率 + 当前难度档 + 分概念得分',
     output:
       '四选一路由：降维解释 / 补充练习 / 进阶挑战 / 保持路线，附更新后的难度档、下一步动作与推导依据',
-    source: 'app/api/adaptive/quiz-decision/route.ts',
+    source: '测验结果与下一步学习决策记录',
   },
   {
     step: '④',
@@ -137,12 +135,11 @@ const AGENTS: AgentSpec[] = [
     name: '导学 Agent',
     persona: 'tutor',
     engine:
-      '讲义驱动路径：探问与判分由 LLM 从当前讲义节现生成（引用必须逐字锚定原文，引不出即丢弃；LLM 不可用如实标 unavailable）。题库路径：裁决走显式规则',
+      '讲义驱动路径：探问与判分由模型根据当前讲义节生成，引用必须逐字锚定原文，引不出即丢弃；服务不可用时明确标记。题库路径：裁决走显式规则',
     deterministic: false,
-    input: '当前讲义节正文 / 概念 + 全量答题历史（引擎无状态，每轮由客户端重发）+ 画像推荐难度档',
-    output:
-      `每轮：探测提问 → 判分 → 裁决（降维解释 / 推进 / 进阶挑战）附推导依据与掌握度估计。裁决绑定目标正确率带 ${Math.round(TARGET_SUCCESS_MIN * 100)}%-${Math.round(TARGET_SUCCESS_MAX * 100)}%（下界为 Math Garden 工程取值，上界为 Wilson 2019 的 85% 规则）：冲破带顶转进阶、跌破带底先降维。判分同时回传本小节的掌握度估计（带置信度），滚动修订学习者画像`,
-    source: 'app/api/tutor/route.ts → POST /internal/v1/personalize/tutor',
+    input: '当前讲义节正文 / 概念 + 本轮所需的完整答题历史 + 画像推荐难度档',
+    output: `每轮：探测提问 → 判分 → 裁决（降维解释 / 推进 / 进阶挑战）附推导依据与掌握度估计。裁决绑定目标正确率带 ${Math.round(TARGET_SUCCESS_MIN * 100)}%-${Math.round(TARGET_SUCCESS_MAX * 100)}%（下界为 Math Garden 工程取值，上界为 Wilson 2019 的 85% 规则）：冲破带顶转进阶、跌破带底先降维。判分同时回传本小节的掌握度估计（带置信度），滚动修订学习者画像`,
+    source: '导学回放、判分依据与掌握度更新记录',
   },
 ];
 
@@ -290,7 +287,7 @@ const DECISION_LABEL: Record<SceneAudit['decision'], { text: string; cls: string
  * 直接查表会拿到 undefined 再取 .cls 而整页崩溃，所以两处查表都给兜底：
  * 缺什么就如实说缺什么，不猜一个裁决出来。
  */
-const UNKNOWN_VERDICT = { text: '判定字段缺失', cls: 'text-muted-foreground' };
+const UNKNOWN_VERDICT = { text: '该记录没有门禁结论', cls: 'text-muted-foreground' };
 const UNKNOWN_DECISION = {
   text: '无门禁裁决记录',
   cls: 'border-border bg-muted text-muted-foreground',
@@ -356,8 +353,7 @@ function TraceRow({ scene, index }: { scene: Scene; index: number }) {
         <div className="px-4 pb-4">
           {!audit ? (
             <p className="rounded-xl border border-yellow-deep/20 bg-yellow-soft px-3 py-2 text-sm leading-relaxed text-yellow-deep">
-              该场景未经审核门禁，由未接入门禁的生成路径产出（旧数据或服务端批量生成），
-              因此没有审核结论。
+              该场景保存时没有审核记录，因此无法给出审核结论。
             </p>
           ) : (
             <>
@@ -399,7 +395,7 @@ function TraceRow({ scene, index }: { scene: Scene; index: number }) {
                 {/* 层次靠字重拉开，不靠 opacity：yellow-deep 压到 90% 后与 yellow-soft 只剩 3.83:1。 */}
                 <p className="mt-1 text-sm leading-relaxed">
                   {audit.rationale ??
-                    '这条审核记录早于门禁裁决字段，只有断言判定、没有放行/拦截结论。'}
+                    '这条审核记录生成于门禁裁决启用前，只保留断言判定，没有放行或拦截结论。'}
                 </p>
               </div>
             </>
@@ -617,7 +613,6 @@ function AgentsConsole() {
                 const art = AGENT_ART[k];
                 return (
                   <figure key={k} className="flex w-0 grow flex-col items-center gap-2">
-                    {/* eslint-disable-next-line @next/next/no-img-element -- 静态定稿立绘，无需优化管线 */}
                     <img
                       src={art.full ?? art.bust}
                       alt={`${p.name}（${p.role}）全身立绘`}
@@ -661,14 +656,12 @@ function AgentsConsole() {
                         56px 起用定稿立绘；手写 SVG 只留给 ≤40px 的场景。 */}
                     {a.persona === 'judge' ? (
                       <span className="flex shrink-0 -space-x-4">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
                           src={AGENT_ART.judge.bust}
                           alt="阿审甲（审核 Agent）"
                           className="size-14 rounded-full bg-muted/40 object-cover"
                           loading="lazy"
                         />
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
                           src={AGENT_ART.judge.bustB ?? AGENT_ART.judge.bust}
                           alt="阿审乙（审核 Agent）"
@@ -677,7 +670,6 @@ function AgentsConsole() {
                         />
                       </span>
                     ) : (
-                      /* eslint-disable-next-line @next/next/no-img-element */
                       <img
                         src={AGENT_ART[a.persona].bust}
                         alt={`${persona.name}（${persona.role} Agent）`}
@@ -716,9 +708,7 @@ function AgentsConsole() {
 
                   <Field label="输入">{a.input}</Field>
                   <Field label="输出">{a.output}</Field>
-                  <div className="mt-auto pt-1 font-mono text-xs text-muted-foreground break-all">
-                    {a.source}
-                  </div>
+                  <div className="mt-auto pt-1 text-xs text-muted-foreground">核验：{a.source}</div>
                 </div>
               );
             })}
@@ -728,7 +718,7 @@ function AgentsConsole() {
                 闭环怎么闭上的
               </div>
               <p className="leading-relaxed">
-                诊断与检索的产出经描述通道注入原生生成器（不改其 schema）；生成结果必须过审核 Agent
+                诊断与检索结果在不改变原生课程结构的前提下注入生成器；生成结果必须过审核 Agent
                 才进入播放队列；测验作答再由决策 Agent 折回难度档与补练路线，回到诊断。
               </p>
               <p className="text-sm text-muted-foreground">{GATE_NOTE}</p>
@@ -897,7 +887,7 @@ function AgentsConsole() {
               {audits.length === 0 && (
                 <p className="rounded-xl border border-yellow-deep/20 bg-yellow-soft px-4 py-3 text-sm leading-relaxed text-yellow-deep">
                   本课程所有场景都没有审核记录，断言 / 标记 / 拦截三项为空。
-                  这批场景未经过审核门禁（旧数据或服务端批量生成），无法据此判断质量。
+                  这批场景没有随课保存审核记录，无法据此判断质量。
                 </p>
               )}
 

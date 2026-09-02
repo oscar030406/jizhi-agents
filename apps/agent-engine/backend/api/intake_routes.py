@@ -14,8 +14,8 @@ iotdb 922 个文件、odoo 963 个，浏览器多选选不动，而少了这两�
   classroom 侧（R19 角色）——产品面的写入口由 classroom 的 manager 路由代理过来，
   代理时带上 `GROUNDING_TOKEN`，跟既有四个桥一模一样。
   token 没配 = 一律 401（fail closed），本机跑起来要 `AI_SERVICE_TOKEN=...`。
-- **查询（GET）只读、不鉴权**，与 `/api/*` 其余读端点一致。run 里没有敏感数据，
-  上传的原文也不从这里出。
+- **run 查询（GET）只读、不鉴权**，与 `/api/*` 其余读端点一致。run 里没有敏感数据，
+  上传的原文也不从这里出。归属清单与释放属于权限面，仍走内部令牌。
 
 ## 为什么不做 SSE
 
@@ -163,9 +163,13 @@ async def create_run(
     x_jizhi_owner_org: str = Header("", alias="x-jizhi-owner-org"),
 ) -> dict[str, Any]:
     # classroom 已按机构归属核过这个头；这里再与 multipart 真值对照，避免桥核 A 写 B。
-    # 头为空保留内部维护脚本兼容性；面向浏览器的桥始终会发送。
-    if x_jizhi_corpus and x_jizhi_corpus != corpus:
+    # 不带代理头的是内部公共库维护；一旦声明为 classroom 私有请求，机构归属不得缺失。
+    proxy_corpus = x_jizhi_corpus.strip()
+    owner_org_id = x_jizhi_owner_org.strip()
+    if proxy_corpus and proxy_corpus != corpus:
         raise HTTPException(status_code=400, detail="知识库归属与接入目标不一致。")
+    if proxy_corpus and not owner_org_id:
+        raise HTTPException(status_code=400, detail="私有知识库请求缺少机构归属，已拒绝创建任务。")
     given = [
         name
         for name, value in (("files", files), ("zip", archive), ("gitUrl", git_url.strip()))
@@ -203,7 +207,7 @@ async def create_run(
         "trial_run": trial_run,
         "append": append,
         # 仅内部桥发送；由 IntakeRun 首次落盘，历史授权不再随知识库归属变化。
-        "owner_org_id": x_jizhi_owner_org.strip(),
+        "owner_org_id": owner_org_id,
     }
     # **请求路径只落盘，不解压、不遍历。**
     #
@@ -300,7 +304,10 @@ async def create_run(
     if jobs is not None:
         run.record["options"]["job_requirements"] = jobs
         run.flush()
-    domain_intake.start_run(run)
+    try:
+        domain_intake.start_run(run)
+    except domain_intake.IntakeCapacityError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     return {
         "run_id": run.run_id,
         "corpus": run.corpus,
@@ -327,7 +334,10 @@ def create_checkup(
         run = domain_intake.create_checkup_run(corpus, scope=scope)
     except domain_intake.StageError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    domain_intake.start_run(run)
+    try:
+        domain_intake.start_run(run)
+    except domain_intake.IntakeCapacityError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     return {
         "run_id": run.run_id,
         "corpus": run.corpus,
@@ -340,6 +350,31 @@ def create_checkup(
 @router.get("/runs")
 def list_runs(limit: int = 30) -> dict[str, Any]:
     return {"runs": domain_intake.list_runs(limit=max(1, min(limit, 100)))}
+
+
+@router.get("/corpus-owners", dependencies=[Depends(verify_internal_token)])
+def corpus_owners() -> dict[str, Any]:
+    """归属标记属于引擎私有数据，只经内部鉴权边界提供给 classroom。"""
+    return {"ownership": domain_intake.read_corpus_owners()}
+
+
+@router.delete("/corpus-owners/{corpus}", dependencies=[Depends(verify_internal_token)])
+def release_corpus_owner(
+    corpus: str,
+    x_jizhi_owner_org: str = Header("", alias="x-jizhi-owner-org"),
+) -> dict[str, Any]:
+    actor_org_id = x_jizhi_owner_org.strip()
+    if not actor_org_id:
+        raise HTTPException(status_code=400, detail="缺少释放归属的机构标识。")
+    try:
+        result = domain_intake.release_corpus_owner(corpus, actor_org_id)
+    except domain_intake.StageError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if result == "forbidden":
+        raise HTTPException(status_code=403, detail="只能释放本机构知识库。")
+    if result == "missing":
+        raise HTTPException(status_code=404, detail="知识库没有引擎归属标记。")
+    return {"corpus": corpus, "released": True}
 
 
 @router.get("/runs/{run_id}")

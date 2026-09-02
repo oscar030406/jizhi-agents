@@ -12,7 +12,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/generation/hallucination-audit', () => ({
   auditCourseContent: mocks.auditCourseContent,
 }));
-vi.mock('@/lib/generation/evidence-grounding', () => ({
+vi.mock('@/lib/generation/evidence-grounding', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/generation/evidence-grounding')>()),
   fetchEvidence: mocks.fetchEvidence,
   evidenceForJudge: (bundle: { chunks: Array<{ source_id: string; content: string }> }) =>
     bundle.chunks.map((chunk) => `[${chunk.source_id}] ${chunk.content}`).join('\n'),
@@ -33,8 +34,9 @@ import { POST } from '@/app/api/generate/course-audit/route';
 
 const scene = {
   id: 'scene-1',
+  outlineId: 'outline-1',
   stageId: 'stage-1',
-  type: 'slide',
+  type: 'pbl',
   title: '第一屏',
   order: 1,
   content: { type: 'slide', canvas: { id: 'canvas-1', elements: [] } },
@@ -43,11 +45,33 @@ const scene = {
   updatedAt: 1,
 };
 
+const learningContract = {
+  version: 2,
+  teachingStrategy: 'standard',
+  objectives: [
+    {
+      id: 'O1',
+      action: '完成一次任务',
+      condition: '给定测试材料',
+      successCriterion: '提交可核验结果',
+    },
+  ],
+  plannedScenes: [{ sceneId: 'outline-1', type: 'pbl', objectiveIds: ['O1'] }],
+  required: {
+    prerequisiteActivation: ['outline-1'],
+    demonstration: ['outline-1'],
+    learnerPractice: ['outline-1'],
+    feedbackRetry: ['outline-1'],
+    transferApplication: ['outline-1'],
+    assessment: ['outline-1'],
+  },
+};
+
 function request(body: unknown) {
   return new NextRequest('http://localhost/api/generate/course-audit', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ learningContract, ...(body as Record<string, unknown>) }),
   });
 }
 
@@ -57,9 +81,12 @@ describe('POST /api/generate/course-audit', () => {
     mocks.requireCorpusVisible.mockResolvedValue({ ok: true, account: { id: 'acct-1' } });
     mocks.resolveModelFromRequest.mockResolvedValue({ modelString: 'generator' });
     mocks.fetchEvidence.mockResolvedValue({
-      chunks: [{ source_id: 'S1', title: '教材', content: '批准材料' }],
-      matchedConcepts: [],
-      summary: '',
+      status: 'ok',
+      bundle: {
+        chunks: [{ source_id: 'S1', title: '教材', content: '批准材料' }],
+        matchedConcepts: [],
+        summary: '',
+      },
     });
     mocks.buildAuditPanel.mockResolvedValue({
       judgeCalls: [vi.fn(), vi.fn()],
@@ -94,6 +121,7 @@ describe('POST /api/generate/course-audit', () => {
       expect.objectContaining({
         courseTitle: '测试课',
         scenes: [scene],
+        learningContract,
         judgeModels: ['judge-a', 'judge-b'],
         corpus: 'manufacturing',
         evidenceCount: 1,
@@ -114,6 +142,20 @@ describe('POST /api/generate/course-audit', () => {
     expect(mocks.auditCourseContent).not.toHaveBeenCalled();
   });
 
+  it('configured corpus with zero evidence blocks the course audit', async () => {
+    mocks.fetchEvidence.mockResolvedValue({
+      status: 'empty',
+      reason: '知识库 manufacturing 未命中可用于本课的证据',
+    });
+
+    const response = await POST(
+      request({ courseTitle: '测试课', corpus: 'manufacturing', scenes: [scene] }),
+    );
+
+    expect(response.status).toBe(500);
+    expect(mocks.auditCourseContent).not.toHaveBeenCalled();
+  });
+
   it('rejects anonymous callers with 401 even for a public corpus', async () => {
     mocks.requireCorpusVisible.mockResolvedValue({ ok: true, account: null });
     const response = await POST(request({ courseTitle: '测试课', corpus: 'ai', scenes: [scene] }));
@@ -125,7 +167,11 @@ describe('POST /api/generate/course-audit', () => {
 
   it('rejects excessive scene count before model or evidence calls', async () => {
     const response = await POST(
-      request({ courseTitle: '超长课', corpus: 'ai', scenes: Array.from({ length: 65 }, () => scene) }),
+      request({
+        courseTitle: '超长课',
+        corpus: 'ai',
+        scenes: Array.from({ length: 65 }, () => scene),
+      }),
     );
 
     expect(response.status).toBe(413);

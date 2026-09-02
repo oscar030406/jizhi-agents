@@ -379,7 +379,7 @@ function ComparisonView({ report, sourceNote }: { report: CompareReport; sourceN
               两份材料一起核了 {report.fact_invariance.checked_claims} 条断言：
               {report.fact_invariance.passed
                 ? '引用都落在各自检索到的教材里，没有互相矛盾的说法。'
-                : '检出疑似不一致，详情在引擎返回的 fact_invariance 字段里。'}
+                : '检出疑似不一致，请查看事实一致性复核详情。'}
             </span>
           </p>
         )}
@@ -655,7 +655,7 @@ export default function ComparePage() {
               )}
               <ComparisonView
                 report={showcase}
-                sourceNote={`预先跑好的一组真实结果${showcaseDate ? `，${showcaseDate} 落盘` : ''}`}
+                sourceNote={`预先跑好的一组真实结果${showcaseDate ? `，${showcaseDate} 归档` : ''}`}
               />
             </>
           )
@@ -773,7 +773,7 @@ export default function ComparePage() {
                   {showcase!.entries
                     .map((e) => formatElapsed(e.cost?.duration_ms ?? 0))
                     .join(' / ')}
-                  {showcaseDate ? `（${showcaseDate} 落盘）` : ''}。实际时长随模型响应速度浮动。
+                  {showcaseDate ? `（${showcaseDate} 归档）` : ''}。实际时长随模型响应速度浮动。
                 </p>
               )}
             </CardContent>

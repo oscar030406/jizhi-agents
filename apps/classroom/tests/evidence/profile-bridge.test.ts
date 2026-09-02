@@ -81,7 +81,7 @@ describe('通用面不混进专业面那张表', () => {
     expect(Object.keys(f.conceptMastery)).toEqual(['rag']);
   });
 
-  it('跨域同名概念取证据多的那个', () => {
+  it('跨域同名概念分桶，扁平视图只取当前课程领域', () => {
     const f = deriveProfileFields(
       [
         ev(0, 0, { kind: 'concept', domain: 'embodied', concept: '控制' }),
@@ -90,9 +90,11 @@ describe('通用面不混进专业面那张表', () => {
         ev(3, 1, { kind: 'concept', domain: 'ai', concept: '控制' }),
       ],
       { now: NOW },
+      'embodied',
     );
-    // ai 域 3 条证据全对，embodied 域 1 条答错——取前者
-    expect(f.conceptMastery['控制']).toBeGreaterThan(0.5);
+    expect(f.conceptMastery['控制']).toBeLessThan(0.5);
+    expect(f.conceptMasteryByDomain.ai['控制']).toBeGreaterThan(0.5);
+    expect(f.conceptMasteryByDomain.embodied['控制']).toBeLessThan(0.5);
   });
 });
 

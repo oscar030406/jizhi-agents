@@ -11,6 +11,7 @@ numpy>=1.26,<3
 requests>=2.32,<3
 scikit-learn>=1.5,<2
 httpx>=0.28
+filelock>=3.13,<4
 pytest>=8.2
 
 # PDF 正文抽取（WO-N16 A1）。**2026-08-23 补登记**：这个包漏在这里没写，

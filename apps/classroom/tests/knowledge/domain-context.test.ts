@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   applyEffectiveDomain,
+  projectProfileToDomain,
   resolveEffectiveDomainContext,
 } from '@/lib/knowledge/domain-context';
 import { loadEffectiveDomainContext } from '@/lib/knowledge/use-domain-context';
@@ -45,6 +46,7 @@ describe('effective domain context', () => {
           courseId: 'course-mfg',
           title: 'ROS2 与 S7-1200 PLC',
           createdAt: '2026-08-31T12:00:00.000Z',
+          availability: 'ready',
         },
       ],
       courseDomains: {
@@ -67,6 +69,38 @@ describe('effective domain context', () => {
       corpus: 'smart-manufacturing',
       role: '学生',
     });
+  });
+
+  it('同一学员的两门同域 ready 课程全部保留，最新指派只决定领域', () => {
+    const context = resolveEffectiveDomainContext({
+      assignments: [
+        {
+          id: 'asg-new',
+          courseId: 'course-mfg-2',
+          createdAt: '2026-09-01T12:00:00.000Z',
+          availability: 'ready',
+        },
+        {
+          id: 'asg-old',
+          courseId: 'course-mfg-1',
+          createdAt: '2026-08-31T12:00:00.000Z',
+          availability: 'ready',
+        },
+      ],
+      courseDomains: {
+        'course-mfg-1': { domain: 'smart-manufacturing' },
+        'course-mfg-2': { domain: 'smart-manufacturing' },
+      },
+      registry,
+      profile: { domain: 'ai', corpus: 'ai' },
+    });
+
+    expect(context).toMatchObject({
+      domain: 'smart-manufacturing',
+      assignment: { id: 'asg-new' },
+    });
+    expect(context.assignments?.map((item) => item.id)).toEqual(['asg-new', 'asg-old']);
+    expect(context.courseIds).toEqual(['course-mfg-2', 'course-mfg-1']);
   });
 
   it('课程归属表只给 corpus 时仍按该引擎语料域解析', () => {
@@ -97,6 +131,42 @@ describe('effective domain context', () => {
     expect(context.status).toBe('missing-course-domain');
     expect(context.isAi).toBe(false);
     expect(context.reason).toContain('领域归属');
+  });
+
+  it('机构指派课程 unavailable 时停在显式缺失态，不读取旧 AI 画像', () => {
+    const context = resolveEffectiveDomainContext({
+      assignments: [
+        {
+          id: 'asg-unavailable',
+          courseId: 'course-mfg',
+          createdAt: '2026-09-01T12:00:00.000Z',
+          availability: 'unavailable',
+          unavailableReason: '机构课程暂不可用：课程尚未通过发布审核。',
+        },
+        {
+          id: 'asg-older-ready',
+          courseId: 'course-older-mfg',
+          createdAt: '2026-08-31T12:00:00.000Z',
+          availability: 'ready',
+        },
+      ],
+      courseDomains: {
+        'course-mfg': { domain: 'smart-manufacturing' },
+        'course-older-mfg': { domain: 'smart-manufacturing' },
+      },
+      registry,
+      profile: { domain: 'ai', corpus: 'ai' },
+    });
+
+    expect(context).toMatchObject({
+      domain: null,
+      source: 'course-assignment',
+      status: 'assignment-unavailable',
+      isAi: false,
+      assignment: { id: 'asg-unavailable' },
+      courseIds: [],
+      reason: '机构课程暂不可用：课程尚未通过发布审核。',
+    });
   });
 
   it('最新指派缺领域时不扫描旧 AI 指派兜底', () => {
@@ -159,6 +229,59 @@ describe('effective domain context', () => {
       isAi: false,
     });
   });
+
+  it('投影智能制造画像时只携带该域测量，绝不继承 AI 扁平值', () => {
+    const projected = projectProfileToDomain(
+      {
+        domain: 'ai',
+        corpus: 'ai',
+        conceptMastery: { 控制: 0.2, agent_basics: 0.9 },
+        conceptConfidence: { 控制: 0.3 },
+        conceptRecall: { 控制: 0.4 },
+        conceptMasteryByDomain: {
+          ai: { 控制: 0.2, agent_basics: 0.9 },
+          'smart-manufacturing': { 控制: 0.8 },
+        },
+        conceptConfidenceByDomain: { 'smart-manufacturing': { 控制: 0.7 } },
+        conceptRecallByDomain: { 'smart-manufacturing': { 控制: 0.6 } },
+        currentDifficulty: 'L4',
+        currentDifficultyByDomain: { ai: 'L4', 'smart-manufacturing': 'L2' },
+        eloRating: 1800,
+        eloRatingByDomain: { ai: 1800, 'smart-manufacturing': 1200 },
+      },
+      'smart-manufacturing',
+    );
+
+    expect(projected).toMatchObject({
+      domain: 'smart-manufacturing',
+      corpus: 'smart-manufacturing',
+      conceptMastery: { 控制: 0.8 },
+      conceptConfidence: { 控制: 0.7 },
+      conceptRecall: { 控制: 0.6 },
+      currentDifficulty: 'L2',
+      eloRating: 1200,
+    });
+    expect(projected.conceptMastery).not.toHaveProperty('agent_basics');
+  });
+
+  it('本域没有测量桶时发送空测量，不把旧扁平值当成本域证据', () => {
+    const projected = projectProfileToDomain(
+      {
+        conceptMastery: { agent_basics: 0.9 },
+        conceptConfidence: { agent_basics: 0.9 },
+        conceptRecall: { agent_basics: 0.9 },
+        currentDifficulty: 'L4',
+        eloRating: 1800,
+      },
+      'smart-manufacturing',
+    );
+
+    expect(projected.conceptMastery).toEqual({});
+    expect(projected.conceptConfidence).toEqual({});
+    expect(projected.conceptRecall).toEqual({});
+    expect(projected.currentDifficulty).toBeUndefined();
+    expect(projected.eloRating).toBeUndefined();
+  });
 });
 
 const response = (body: unknown, status = 200) =>
@@ -176,6 +299,7 @@ describe('current-account domain context loader', () => {
       if (url === '/api/org/assignments') {
         return response({
           success: true,
+          memberRole: 'member',
           assignments: [{ id: 'mine', courseId: 'course-mfg', title: '我的智能制造课' }],
         });
       }
@@ -204,7 +328,9 @@ describe('current-account domain context loader', () => {
   it('AI 学员没有过滤后指派时保持 AI 行为', async () => {
     const fetcher = async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === '/api/org/assignments') return response({ success: true, assignments: [] });
+      if (url === '/api/org/assignments') {
+        return response({ success: true, memberRole: 'member', assignments: [] });
+      }
       if (url === '/api/course-domains') return response({});
       if (url === '/api/domains') return response({ entries: registry });
       throw new Error(`unexpected ${url}`);
@@ -215,6 +341,44 @@ describe('current-account domain context loader', () => {
       kind: 'ready',
       context: { domain: 'ai', source: 'profile-domain', isAi: true },
     });
+  });
+
+  it('owner 多领域管理清单不覆盖所选预览画像', async () => {
+    const fetcher = async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/org/assignments') {
+        return response({
+          success: true,
+          memberRole: 'owner',
+          assignments: [
+            { id: 'learner-ai', courseId: 'course-ai' },
+            { id: 'learner-mfg', courseId: 'course-mfg' },
+          ],
+        });
+      }
+      if (url === '/api/course-domains') {
+        return response({
+          'course-ai': { domain: 'ai' },
+          'course-mfg': { domain: 'smart-manufacturing' },
+        });
+      }
+      if (url === '/api/domains') return response({ entries: registry });
+      throw new Error(`unexpected ${url}`);
+    };
+
+    const state = await loadEffectiveDomainContext(
+      { domain: 'ai', corpus: 'smart-manufacturing' },
+      fetcher as typeof fetch,
+    );
+
+    expect(state).toMatchObject({
+      kind: 'ready',
+      context: {
+        domain: 'smart-manufacturing',
+        source: 'profile-corpus',
+      },
+    });
+    expect(state.kind === 'ready' ? state.context : null).not.toHaveProperty('assignment');
   });
 
   it('当前账户指派接口异常时显式报错，不把未知账户当成无指派 AI 学员', async () => {

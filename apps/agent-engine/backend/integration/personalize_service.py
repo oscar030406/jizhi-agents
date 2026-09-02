@@ -33,6 +33,7 @@ from backend.services.model_routing import route_for
 from backend.services.review_scheduler import ReviewCard, review
 
 CHAT_TIERS = ("FAST", "STRONG", "JUDGE")
+CORPUS_PATTERN = r"^[a-z0-9][a-z0-9_-]{0,31}$"
 
 
 class ModelConfig(BaseModel):
@@ -56,6 +57,7 @@ class PersonalizeProfile(BaseModel):
 
 class PersonalizeRequest(BaseModel):
     userId: str
+    corpus: str = Field(min_length=1, max_length=32, pattern=CORPUS_PATTERN)
     learningGoal: str
     profile: PersonalizeProfile = Field(default_factory=PersonalizeProfile)
     modelConfig: Optional[ModelConfig] = None
@@ -63,6 +65,7 @@ class PersonalizeRequest(BaseModel):
 
 class PersonalizeFollowupRequest(BaseModel):
     userId: str
+    corpus: str = Field(min_length=1, max_length=32, pattern=CORPUS_PATTERN)
     profile: PersonalizeProfile = Field(default_factory=PersonalizeProfile)
     parentRun: WorkflowRun
     feedback: FeedbackInput
@@ -118,6 +121,7 @@ def _to_profile(
         time_budget_hours=p.time_budget_hours,
         learning_preference=p.learning_preference,
         constraints=p.constraints,
+        corpus=request.corpus,
     )
 
 
@@ -432,6 +436,7 @@ def learner_blueprint_api(
     learning_preference: str = "可运行示例与分步练习",
     time_budget_hours: int = 24,
     corpus: str = "",
+    concept_mastery: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """画像 → 学情诊断 + 个性化蓝图（含资源配比计划），纯确定性无 LLM 调用。
 
@@ -461,13 +466,25 @@ def learner_blueprint_api(
     # 摘要与风险补充，路由不可用时规则本体独立成立——这不是生成侧那种兜底，
     # 诊断输出是下游约束，带采样随机性反而有害。engine 字段如实带出。
     _diag_agent = LearnerDiagnosisAgent(gateway=_bridge_gateway())
+    measured = {
+        str(key): float(value)
+        for key, value in (concept_mastery or {}).items()
+        if str(key).strip()
+        and isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and 0 <= float(value) <= 1
+    }
     diagnosis = _diag_agent.run(
-        profile, PretestResult(learner_profile_id=profile.id), learning_goal
+        profile,
+        PretestResult(learner_profile_id=profile.id, concept_scores=measured),
+        learning_goal,
     )
     blueprint = diagnosis.personalization_blueprint
     return {
         "mastery_vector": diagnosis.mastery_vector,
         "weak_concepts": diagnosis.weak_concepts,
+        "unmeasured_concepts": diagnosis.unmeasured_concepts,
+        "coverage": diagnosis.coverage.model_dump(mode="json"),
         "recommended_difficulty": diagnosis.recommended_difficulty,
         "learning_risks": diagnosis.learning_risks,
         "diagnosis_summary": diagnosis.diagnosis_summary,
@@ -589,16 +606,18 @@ def _bridge_gateway() -> LLMGateway:
     return LLMGateway()
 
 
-def _resolve_mastery(mastery_raw: str) -> dict[str, float]:
+def _resolve_mastery(mastery_raw: str, corpus: str) -> dict[str, float]:
     """把外部系统送来的「自由文本键→分数」解析成「概念 id→掌握度」。
 
     键可能是引擎概念 id（rag），也可能是课堂场景标题（「注意力权重可视化」）——
-    客户端不该背我们的概念词表，映射在词表所在的这一侧做（matched_goal_concepts）。
+    客户端不该背我们的概念词表，映射在词表所在的这一侧做；独立域只在自己的
+    readiness 概念表里映射，不能借 AI 主域的同名概念。
     同一概念多个键命中时取最新写入（dict 顺序即写入序）。解析失败一律返回空：
     画像数据坏了不能让检索跟着崩。
     """
-    from backend.services.goal_concepts import matched_goal_concepts
+    from backend.rag.retriever import DEFAULT_CORPUS_ALIASES
     from backend.services.concept_graph import load_graph
+    from backend.services.goal_concepts import domain_concepts, goal_concepts, matched_goal_concepts
 
     try:
         data = json.loads(mastery_raw) if mastery_raw else {}
@@ -606,7 +625,9 @@ def _resolve_mastery(mastery_raw: str) -> dict[str, float]:
             return {}
     except (ValueError, TypeError):
         return {}
-    known = set(load_graph())
+    name = corpus.strip().lower()
+    is_main = name in DEFAULT_CORPUS_ALIASES
+    known = set(load_graph()) if is_main else set(domain_concepts(name))
     resolved: dict[str, float] = {}
     for key, value in data.items():
         try:
@@ -616,7 +637,8 @@ def _resolve_mastery(mastery_raw: str) -> dict[str, float]:
         if key in known:
             resolved[key] = score
             continue
-        for concept in matched_goal_concepts(str(key)):
+        mapped = matched_goal_concepts(str(key)) if is_main else goal_concepts(str(key), name)
+        for concept in mapped:
             resolved[concept] = score
     return resolved
 
@@ -709,7 +731,7 @@ def evidence_retrieve_api(
     lint 改不动，只能在检索侧不让它进来。
     """
     from backend.rag.retriever import get_corpus_retriever
-    from backend.services.goal_concepts import goal_concepts, matched_goal_concepts
+    from backend.services.goal_concepts import goal_concepts
 
     retriever = get_corpus_retriever(corpus)
     if retriever is None:
@@ -725,12 +747,9 @@ def evidence_retrieve_api(
                 "本次不会回退到其他领域语料。"
             ),
         }
-    # goal_concepts 的关键词表是 AI 领域的，其他领域只认真实命中，不用它的兜底概念
-    from backend.rag.retriever import DEFAULT_CORPUS_ALIASES
-    is_default = corpus.strip().lower() in DEFAULT_CORPUS_ALIASES
-    tags = goal_concepts(query) if is_default else matched_goal_concepts(query)
+    tags = goal_concepts(query, corpus)
     top_k = max(1, min(12, top_k))
-    mastery_map = _resolve_mastery(mastery)
+    mastery_map = _resolve_mastery(mastery, corpus)
     order = {"L1": 1, "L2": 2, "L3": 3, "L4": 4}
     cap = order.get(max_difficulty.strip().upper())
     max_code_lines = max(0, max_code_lines)
@@ -800,11 +819,17 @@ def evidence_retrieve_api(
         )
         chunks = within
     if mastery_map:
-        from backend.services.concept_graph import load_graph, topological_order
+        from backend.rag.retriever import DEFAULT_CORPUS_ALIASES
+        from backend.services.concept_graph import known_concepts, load_graph, topological_order
 
         selection_mode = "fringe"
-        known = load_graph()
-        topo_rank = {c: i for i, c in enumerate(topological_order(list(known)))}
+        corpus_name = corpus.strip().lower()
+        domain = None if corpus_name in DEFAULT_CORPUS_ALIASES else corpus_name
+        known = set(load_graph()) if domain is None else known_concepts(domain)
+        topo_rank = {
+            concept: index
+            for index, concept in enumerate(topological_order(list(known), domain))
+        }
 
         def chunk_state(c) -> tuple[str, str]:
             """(判定, 理由)。判定 keep/skip。"""
@@ -1021,6 +1046,7 @@ CROSS_DOMAIN_CORPORA = frozenset({"iotdb", "odoo"})
 #: 出现在学习者的知识库下拉里；选中它会拿乱码生成一门课。
 SCRATCH_SUFFIXES = ("-probe", "-test", "-tmp", "-scratch")
 SCRATCH_PREFIXES = ("probe-", "test-", "tmp-", "scratch-")
+LEGACY_SCRATCH_PREFIX = "fullprobe"
 
 
 def is_scratch_corpus(name: str) -> bool:
@@ -1030,7 +1056,11 @@ def is_scratch_corpus(name: str) -> bool:
     管理者要能看到自己建过什么，包括测试库。
     """
     n = (name or "").strip().lower()
-    return n.endswith(SCRATCH_SUFFIXES) or n.startswith(SCRATCH_PREFIXES)
+    return (
+        n.endswith(SCRATCH_SUFFIXES)
+        or n.startswith(SCRATCH_PREFIXES)
+        or n.startswith(LEGACY_SCRATCH_PREFIX)
+    )
 
 
 def _vocabulary_verdict(name: str) -> tuple[str, str]:

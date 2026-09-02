@@ -17,6 +17,7 @@ import { saveAs } from 'file-saver';
 import { toast } from 'sonner';
 
 import { useStageStore } from '@/lib/store';
+import { useMediaGenerationStore } from '@/lib/store/media-generation';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { createLogger } from '@/lib/logger';
 import type { Scene } from '@/lib/types/stage';
@@ -32,6 +33,55 @@ export interface SceneScript {
 }
 
 export const SCRIPT_MD_MIME_TYPE = 'text/markdown;charset=utf-8';
+
+interface ExportStageState {
+  stage?: { id?: string } | null;
+  scenes: readonly unknown[];
+  generatingOutlines: readonly unknown[];
+  failedOutlines: readonly unknown[];
+}
+
+interface ExportMediaTask {
+  status: string;
+  stageId?: string;
+}
+
+/** Content-only exports do not depend on optional generated media. */
+export function isMediaFreeExportReady(stageState: ExportStageState): boolean {
+  return (
+    stageState.scenes.length > 0 &&
+    stageState.generatingOutlines.length === 0 &&
+    stageState.failedOutlines.length === 0
+  );
+}
+
+/** Complete packages may ship only after every current-stage media task succeeds. */
+export function isFullMediaExportReady(
+  stageState: ExportStageState,
+  mediaTasks: Record<string, ExportMediaTask>,
+): boolean {
+  if (!isMediaFreeExportReady(stageState)) return false;
+  const stageId = stageState.stage?.id;
+  return Object.values(mediaTasks)
+    .filter((task) => !stageId || !task.stageId || task.stageId === stageId)
+    .every((task) => task.status === 'done');
+}
+
+/** Click-time guard: re-read stores so a stale enabled control cannot export. */
+export function ensureMediaFreeExportReady(notReadyMessage: string): boolean {
+  if (isMediaFreeExportReady(useStageStore.getState())) return true;
+  toast.warning(notReadyMessage);
+  return false;
+}
+
+/** Click-time guard for exports that promise a complete media package. */
+export function ensureFullMediaExportReady(notReadyMessage: string): boolean {
+  if (isFullMediaExportReady(useStageStore.getState(), useMediaGenerationStore.getState().tasks)) {
+    return true;
+  }
+  toast.warning(notReadyMessage);
+  return false;
+}
 
 /**
  * Collect each scene's narration: concatenate its `SpeechAction.text` values in
@@ -127,8 +177,10 @@ export function useExportScript() {
   const { t } = useI18n();
 
   const exportScriptMd = useCallback(() => {
-    const scenes = useStageStore.getState().scenes;
-    const stage = useStageStore.getState().stage;
+    const stageState = useStageStore.getState();
+    if (!ensureMediaFreeExportReady(t('share.notReady'))) return;
+
+    const { scenes, stage } = stageState;
     // 场景无标题时的兜底页名（locale 未收录 slideFallback key，直接中文文案）。
     const scripts = collectSceneScripts(scenes, (order) => `幻灯片 ${order + 1}`);
     if (scripts.length === 0) {

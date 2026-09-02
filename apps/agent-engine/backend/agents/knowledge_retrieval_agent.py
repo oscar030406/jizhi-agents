@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from backend.rag.retriever import get_retriever
+from backend.rag.retriever import get_corpus_retriever
 from backend.schemas.learner import DiagnosisResult
 from backend.schemas.resources import RetrievalResult
-from backend.services.goal_concepts import goal_concepts
 
 
 class KnowledgeRetrievalAgent:
@@ -11,8 +10,13 @@ class KnowledgeRetrievalAgent:
     max_diversified_chunks = 12
 
     def run(self, learning_goal: str, diagnosis: DiagnosisResult, top_k: int = 7) -> RetrievalResult:
-        retriever = get_retriever()
-        required_concepts = self._required_concepts(learning_goal, diagnosis)
+        blueprint = diagnosis.personalization_blueprint
+        if not blueprint or blueprint.goal_mapping_status != "mapped":
+            raise RuntimeError("知识检索失败：学习目标尚未映射到当前领域概念词表。")
+        retriever = get_corpus_retriever(blueprint.corpus)
+        if retriever is None:
+            raise RuntimeError(f"知识检索失败：领域「{blueprint.corpus}」没有可用检索索引。")
+        required_concepts = self._required_concepts(diagnosis)
         # 目标概念在前：学习目标决定检索主轴，薄弱概念补充——否则跨领域目标
         # （如深度学习）会被基础薄弱概念淹没（2026-07 迁移实验发现）
         query_tags = list(dict.fromkeys(required_concepts + diagnosis.weak_concepts))
@@ -58,10 +62,9 @@ class KnowledgeRetrievalAgent:
             missing_evidence_warning=warning,
         )
 
-    def _required_concepts(self, learning_goal: str, diagnosis: DiagnosisResult) -> list[str]:
+    def _required_concepts(self, diagnosis: DiagnosisResult) -> list[str]:
         blueprint = diagnosis.personalization_blueprint
-        blueprint_concepts = [
-            skill.concept for skill in blueprint.required_skills
-        ] if blueprint else []
-        return list(dict.fromkeys(goal_concepts(learning_goal) + blueprint_concepts))
+        if not blueprint or blueprint.goal_mapping_status != "mapped":
+            raise RuntimeError("知识检索失败：缺少已裁决的领域个性化蓝图。")
+        return list(dict.fromkeys(skill.concept for skill in blueprint.required_skills))
 

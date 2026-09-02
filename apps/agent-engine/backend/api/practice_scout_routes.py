@@ -51,9 +51,21 @@ def _corpus_meta(corpus: str) -> tuple[str, list[str]]:
 @router.post("/{corpus}/draft", dependencies=[Depends(verify_internal_token)])
 def create_draft(corpus: str, payload: dict = Body(default={})) -> dict:
     scope, topics = _corpus_meta(corpus)
-    count = int(payload.get("count") or 6)
+    courses = payload.get("courses")
+    if not isinstance(courses, list):
+        raise HTTPException(status_code=400, detail="courses 必须是课程 {id,title} 数组（可为空）")
     try:
-        return practice_scout.run_draft(corpus, scope, topics, count=max(3, min(10, count)))
+        count = int(payload.get("count") or 6)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="count 必须是整数") from exc
+    try:
+        return practice_scout.run_draft(
+            corpus,
+            scope,
+            topics,
+            courses,
+            count=max(3, min(10, count)),
+        )
     except practice_scout.ScoutError as exc:
         # 失败必须对管理端可见——网络不通/模型未启用都不许静默成空结果
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -63,13 +75,21 @@ def create_draft(corpus: str, payload: dict = Body(default={})) -> dict:
 def read_draft(corpus: str) -> dict:
     doc = practice_scout.load_draft(corpus)
     if not doc:
-        return {"corpus": corpus, "status": "none", "projects": []}
-    return doc
+        return {
+            "corpus": corpus,
+            "status": "none",
+            "projects": [],
+            "publication": practice_scout.release_history(corpus),
+        }
+    return {**doc, "publication": practice_scout.release_history(corpus)}
 
 
 @router.get("/{corpus}/published")
 def read_published(corpus: str) -> dict:
-    return {"corpus": corpus, "projects": practice_scout.published_projects(corpus)}
+    try:
+        return {"corpus": corpus, "projects": practice_scout.published_projects(corpus)}
+    except practice_scout.ScoutError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/{corpus}/approve", dependencies=[Depends(verify_internal_token)])
@@ -77,7 +97,46 @@ def approve_draft(corpus: str, payload: dict = Body(...)) -> dict:
     ids = payload.get("projectIds")
     if not isinstance(ids, list):
         raise HTTPException(status_code=400, detail="projectIds 必须是数组（可为空数组=全部下架）")
+    draft_snapshot_id = payload.get("draftSnapshotId")
+    if not isinstance(draft_snapshot_id, str) or not draft_snapshot_id.startswith("sha256:"):
+        raise HTTPException(status_code=400, detail="draftSnapshotId 必须来自当前实操初稿")
+    courses = payload.get("courses")
+    if not isinstance(courses, list):
+        raise HTTPException(
+            status_code=400,
+            detail="courses 必须是当前领域课程 {id,title} 数组（可为空）",
+        )
     try:
-        return practice_scout.approve(corpus, [str(i) for i in ids])
+        return practice_scout.approve(
+            corpus,
+            [str(i) for i in ids],
+            courses,
+            draft_snapshot_id,
+        )
     except practice_scout.ScoutError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/{corpus}/releases")
+def read_releases(corpus: str) -> dict:
+    try:
+        return practice_scout.release_history(corpus)
+    except practice_scout.ScoutError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/{corpus}/restore", dependencies=[Depends(verify_internal_token)])
+def restore_release(corpus: str, payload: dict = Body(...)) -> dict:
+    courses = payload.get("courses")
+    if not isinstance(courses, list):
+        raise HTTPException(
+            status_code=400,
+            detail="courses 必须是当前领域课程 {id,title} 数组（可为空）",
+        )
+    version = payload.get("version")
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+        raise HTTPException(status_code=400, detail="version 必须是正整数")
+    try:
+        return practice_scout.restore_release(corpus, version, courses)
+    except practice_scout.ScoutError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

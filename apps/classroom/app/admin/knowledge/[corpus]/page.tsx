@@ -42,11 +42,7 @@ export default async function CorpusDetailPage({
   const account = await managerAccount();
   if (!account) return <Denied />;
   if (!isValidCorpusName(name)) notFound();
-  if (
-    isScratchCorpus(name) ||
-    /(?:fullprobe|fullpath[-_]?probe|(?:^|[-_])probe(?:[-_]|$))/i.test(name)
-  )
-    notFound();
+  if (isScratchCorpus(name)) notFound();
   const visible = await corpusVisibilityFor(account.id);
   if (!visible(name)) notFound();
   // 页标题走 domainLabel，先灌域注册清单（同 admin 总览页的补法）
@@ -61,15 +57,11 @@ export default async function CorpusDetailPage({
 
   return (
     <>
-      <SiteHeader
-        backHref="/admin/knowledge"
-        backLabel="回知识库"
-        maxWidth="max-w-4xl"
-      />
+      <SiteHeader backHref="/admin/knowledge" backLabel="回知识库" maxWidth="max-w-4xl" />
       <main className="mx-auto max-w-4xl px-4 py-10 sm:px-6">
         <header className="mb-8">
           {/* 中文名走 `lib/knowledge/domain-labels.ts` 的单一真源；库 id 仍然印出来，
-              因为下面的复算命令与磁盘路径都用它，抹掉 id 反而不能照着核。
+              这是系统识别知识库的唯一编号，查看接入记录时会用到。
               没登记中文名的库（开放集，接入链随时会造新的）就只印 id，不编一个。 */}
           <h1 className="text-xl font-semibold tracking-tight">{domainLabel(corpus.corpus)}</h1>
           {hasDomainLabel(corpus.corpus) && (
@@ -77,7 +69,7 @@ export default async function CorpusDetailPage({
           )}
           {corpus.scope && <p className="mt-1 text-sm text-muted-foreground">{corpus.scope}</p>}
           <p className="mt-2 text-xs text-muted-foreground">
-            五站中 {built} 站有产物
+            五站中 {built} 站已有处理结果
             {corpus.chunks !== null && ` · ${corpus.chunks} 个证据块`}
             {updated && ` · 最近处理时间 ${updated}`}
           </p>
@@ -105,15 +97,19 @@ export default async function CorpusDetailPage({
           {corpus.gates ? (
             <div className="rounded-2xl border border-border bg-card p-5 shadow-card">
               <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
-                {([
-                  ['闸零 可检索', corpus.gates.retrievable],
-                  ['闸一 概念词表', corpus.gates.vocabulary],
-                  ['闸二 前置图连通', corpus.gates.graph],
-                  ['闸三 测项映射', corpus.gates.itemMapping],
-                ] as const).map(([label, ok]) => (
+                {(
+                  [
+                    ['闸零 可检索', corpus.gates.retrievable],
+                    ['闸一 概念词表', corpus.gates.vocabulary],
+                    ['闸二 前置图连通', corpus.gates.graph],
+                    ['闸三 测项映射', corpus.gates.itemMapping],
+                  ] as const
+                ).map(([label, ok]) => (
                   <div key={label}>
                     <dt className="text-[10px] text-muted-foreground">{label}</dt>
-                    <dd className={`text-sm ${ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'}`}>
+                    <dd
+                      className={`text-sm ${ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'}`}
+                    >
                       {ok ? '过' : '未过'}
                     </dd>
                   </div>
@@ -128,14 +124,14 @@ export default async function CorpusDetailPage({
                   。
                 </li>
                 {!corpus.gates.itemMapping && (
-                  <li>
-                    闸三未过：测项映射未实现，这个库里概念的掌握度置信封顶、且不允许跳过。
-                  </li>
+                  <li>闸三未过：测项映射未实现，这个库里概念的掌握度置信封顶、且不允许跳过。</li>
                 )}
                 {corpus.license && (
                   <li>
                     许可 {corpus.license.spdx}
-                    {corpus.license.unknown && '（源目录里没找到许可声明，待人工确认后再对外用）'}。
+                    {corpus.license.unknown &&
+                      '（接入资料中未找到许可声明，待人工确认后再对外使用）'}
+                    。
                   </li>
                 )}
               </ul>
@@ -182,7 +178,7 @@ export default async function CorpusDetailPage({
                     <dd className="text-sm tabular-nums">{corpus.fitness.shortPct}%</dd>
                   </div>
                   <div>
-                    <dt className="text-[10px] text-muted-foreground">带标题路径</dt>
+                    <dt className="text-[10px] text-muted-foreground">带章节标题</dt>
                     <dd className="text-sm tabular-nums">{corpus.fitness.titledPct}%</dd>
                   </div>
                   {corpus.fitness.edu && (
@@ -198,11 +194,10 @@ export default async function CorpusDetailPage({
                   )}
                 </dl>
                 <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
-                  这两项原本是想用来提前判断素材好不好，拿三个已经跑过效果测量的库去标定，
-                  结果没标住：效果最差的那一版素材，块长和打分反而比效果更好的那一版高。
-                  所以它们留在这里只作画像，不作结论，也不参与判灯。
+                  块长与自动评分曾用于预测素材适配性，但在三个已有评测结果的知识库上没有呈现一致关系，
+                  因此这里只把它们作为资料画像，不用于质量结论，也不参与状态灯判定。
                   {corpus.fitness.edu &&
-                    ' 打分那把尺子的档位定义是给中小学网页素材写的，对着操作手册类文档系统性偏低。'}
+                    ' 当前评分规则更适合中小学网页材料，对操作手册类文档可能系统性偏低。'}
                 </p>
                 {corpus.fitness.lowest.length > 0 && (
                   <>
@@ -252,9 +247,8 @@ export default async function CorpusDetailPage({
         <section className="mb-10">
           <h2 className="mb-1 text-sm font-medium">原件与处理过程</h2>
           <p className="mb-4 text-[11px] leading-relaxed text-muted-foreground">
-            每个原件切出多少块，是数索引里 source_id 的前缀数出来的；退回清单直接读就绪度报告，
-            没有记录就写没有记录。原文按纯文本上屏，不做 markdown 渲染——这一页要看的是原件本身
-            长什么样（front-matter、标题层级、表格），渲染过就核不了了。
+            每份原件都会显示证据块数量与接入状态，退回原因取自本次接入记录；没有记录时会明确说明。
+            原文以纯文本展示，便于核对标题层级、表格与文档元信息。
           </p>
           {sources?.rootLabel ? (
             <SourceFilesPanel corpus={corpus.corpus} view={sources} />

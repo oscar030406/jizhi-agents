@@ -59,6 +59,7 @@ import { requireCorpusVisible } from '@/lib/server/corpus-access';
 import { resolveVocationalActive } from '@/lib/config/feature-flags';
 import {
   fetchEvidence,
+  requireEvidenceWhenConfigured,
   evidenceDirective,
   excerptDirective,
   injectExcerpts,
@@ -214,14 +215,14 @@ export async function POST(req: NextRequest) {
     });
 
     // ── Multi-agent graft: diagnosis agent plans, retrieval agent fences facts ──
-    // Both fold into outline.description (zero schema intrusion) and both degrade
-    // silently, so an engine outage costs adaptation but never the generation.
+    // Both fold into outline.description (zero schema intrusion). A configured
+    // evidence bridge is mandatory; only an unconfigured local runtime is optional.
     const courseTitle = _stageInfo?.name ?? '';
     // 桥真失败（配了但调用炸了）收进 pipeline.bridgeWarnings → 车间面板红行。
-    // 未配置/零命中不进来——那是正常降级，不是事故。
+    // 未配置不进来；配置后的零命中或故障会阻断本课。
     const bridgeWarnings: string[] = [];
     const onBridgeFailure = (msg: string) => bridgeWarnings.push(msg);
-    const [evidence, learnerPlan] = await Promise.all([
+    const [evidenceResult, learnerPlan] = await Promise.all([
       // Course title anchors the query — scene titles alone (e.g. "角色扮演模拟")
       // are often metaphorical and retrieve the wrong concepts.
       fetchEvidence(
@@ -254,6 +255,7 @@ export async function POST(req: NextRequest) {
     for (const w of bridgeWarnings) {
       log.warn(`Engine bridge degraded for "${effectiveOutline.title}": ${w}`);
     }
+    const evidence = requireEvidenceWhenConfigured(evidenceResult);
 
     // 拼装模式（路线实验 E3 落地）：有证据时默认开。EXCERPT_ASSEMBLY=0 关掉回纯生成。
     const assemblyMode = evidence != null && process.env.EXCERPT_ASSEMBLY !== '0';

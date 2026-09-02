@@ -86,7 +86,12 @@ def _events(run) -> list[dict]:
 
 
 def test_full_chain_two_md_files(sandbox):
-    run = domain_intake.create_run(_files(TWO_DOCS), corpus="tsdb-demo", scope="时序数据库运维")
+    run = domain_intake.create_run(
+        _files(TWO_DOCS),
+        corpus="tsdb-demo",
+        scope="时序数据库运维",
+        owner_org_id="org-a",
+    )
     domain_intake.execute(run)
 
     record = json.loads(run.record_path.read_text(encoding="utf-8"))
@@ -115,6 +120,7 @@ def test_full_chain_two_md_files(sandbox):
     # 产物
     index_file = domain_intake.CORPORA_DIR / "tsdb-demo" / "knowledge_index.jsonl"
     assert index_file.is_file()
+    assert (index_file.parent / ".jizhi-owner-org").read_text(encoding="utf-8").strip() == "org-a"
     assert stages["chunk"]["detail"]["chunks"] == len(
         [ln for ln in index_file.read_text(encoding="utf-8").splitlines() if ln.strip()]
     )
@@ -145,6 +151,40 @@ def test_full_chain_two_md_files(sandbox):
     assert "tsdb-demo" in domain_corpora()
 
 
+def test_refresh_corpus_caches_invalidates_warmed_prerequisite_graph(sandbox, monkeypatch):
+    from backend.services import concept_graph
+
+    monkeypatch.setattr(concept_graph, "KB_DIR", domain_intake.KB)
+    monkeypatch.setattr(
+        concept_graph,
+        "PREREQ_GRAPH_PATH",
+        domain_intake.KB / "prereq_graph.json",
+    )
+    concept_graph.refresh_concept_graph()
+    assert concept_graph.load_prereq_edges("fresh-domain") == {}
+
+    intake = domain_intake.KB / "fresh-domain_intake"
+    intake.mkdir()
+    (intake / "readiness.json").write_text(
+        json.dumps(
+            {
+                "prereq_graph": {
+                    "clauses": {"机器人联调": [{"all": ["PLC连接"]}]}
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    try:
+        domain_intake._refresh_corpus_caches()
+        assert concept_graph.load_prereq_edges("fresh-domain") == {
+            "机器人联调": ["PLC连接"]
+        }
+    finally:
+        concept_graph.refresh_concept_graph()
+
+
 def test_query_endpoints_read_from_disk(sandbox):
     run = domain_intake.create_run(_files(TWO_DOCS), corpus="tsdb-query")
     domain_intake.execute(run)
@@ -171,6 +211,42 @@ def test_deferred_run_persists_immutable_owner_org_at_creation(sandbox):
     assert record["owner_org_id"] == "org-a"
 
 
+def test_private_owner_is_visible_before_background_materialization(sandbox):
+    """私有库一取得名字就必须带归属；不能等原件、索引或整链完成后才补。"""
+    run = domain_intake.create_run_deferred(
+        "git",
+        "https://example.test/private.git",
+        corpus="private-building",
+        owner_org_id="org-a",
+    )
+
+    corpus_dir = domain_intake.CORPORA_DIR / "private-building"
+    marker = corpus_dir / domain_intake.CORPUS_OWNER_MARKER
+    assert run.record["status"] == "running"
+    assert marker.read_text(encoding="utf-8").strip() == "org-a"
+    assert not (corpus_dir / "knowledge_index.jsonl").exists()
+
+    owners = domain_intake.read_corpus_owners()
+    assert owners["private-building"] == "org-a"
+    # classroom 的可见性闸以这份实时映射为真源：有 marker 时只有 owner 可读。
+    assert owners["private-building"] != "org-b"
+    assert owners["private-building"] != ""
+
+
+def test_same_new_corpus_is_reserved_atomically_for_first_creator(sandbox):
+    first = domain_intake.create_run_deferred(
+        "git", "https://example.test/a.git", corpus="same-name", owner_org_id="org-a"
+    )
+    with pytest.raises(domain_intake.StageError, match="已经建过了"):
+        domain_intake.create_run_deferred(
+            "git", "https://example.test/b.git", corpus="same-name", owner_org_id="org-b"
+        )
+    assert first.record["owner_org_id"] == "org-a"
+    assert (
+        domain_intake.CORPORA_DIR / "same-name" / domain_intake.CORPUS_OWNER_MARKER
+    ).read_text(encoding="utf-8").strip() == "org-a"
+
+
 # ── 失败态 ─────────────────────────────────────────────────────────────────
 
 
@@ -178,7 +254,11 @@ def test_binary_renamed_md_fails_run_and_leaves_no_corpus(sandbox):
     run = domain_intake.create_run(
         _files({"trojan.md": b"\x89PNG\r\n\x1a\n\x00\xff\xfe\x00\x01" * 40}),
         corpus="broken-demo",
+        owner_org_id="org-a",
     )
+    assert (
+        domain_intake.CORPORA_DIR / "broken-demo" / domain_intake.CORPUS_OWNER_MARKER
+    ).is_file()
     domain_intake.execute(run)
 
     record = json.loads(run.record_path.read_text(encoding="utf-8"))
@@ -188,6 +268,7 @@ def test_binary_renamed_md_fails_run_and_leaves_no_corpus(sandbox):
     # 下游全部跳过，且说得出是被谁挡住的
     assert record["stages"]["chunk"]["status"] == "skipped"
     assert record["stages"]["gold"]["status"] == "skipped"
+    assert not (domain_intake.CORPORA_DIR / "broken-demo").exists()
 
     # 失败事件要说得出是哪个文件、为什么被退（不是一句「失败」，也不是一坨栈）
     failed = [e for e in _events(run) if e["kind"] == "stage_failed"]
@@ -427,50 +508,88 @@ def _fake_scene(tier: str, kcs: list[str], length: int) -> dict:
 
 @pytest.fixture()
 def trial_stubs(monkeypatch):
-    """把 ⑥ 的两个 HTTP 出口与盲评判官全部打桩——定向测试一分钱不花。"""
-    posts: list[tuple[str, dict]] = []
-    inflight = {"now": 0, "peak": 0}
-    lock = threading.Lock()
+    """把完整造课 job、发布读取与盲评判官打桩——定向测试一分钱不花。"""
+    posts: list[tuple[str, dict, dict[str, str] | None]] = []
+    gets: list[tuple[str, dict[str, str] | None]] = []
+    jobs: dict[str, str] = {}
 
-    def fake_post(path, payload, timeout):
-        with lock:
-            inflight["now"] += 1
-            inflight["peak"] = max(inflight["peak"], inflight["now"])
-            posts.append((path, payload))
-        try:
-            time.sleep(0.05)
-            if path.endswith("scene-content"):
-                tier = "beginner" if payload["requirements"]["learnerProfile"]["programming_level"] == 0 else "advanced"
-                return _fake_scene(tier, payload["outline"]["keyPoints"], 20 if tier == "beginner" else 4)
+    def fake_post(path, payload, timeout, *, headers=None):
+        posts.append((path, payload, headers))
+        assert path == "/api/generate-classroom"
+        tier = "beginner" if payload["learnerProfile"]["programming_level"] == 0 else "advanced"
+        job_id = f"job-{tier}"
+        jobs[job_id] = tier
+        return {"success": True, "jobId": job_id, "status": "queued"}
+
+    def fake_get(path, timeout, *, allow_not_found=False, headers=None):
+        gets.append((path, headers))
+        if path.startswith("/api/generate-classroom/"):
+            job_id = path.rsplit("/", 1)[-1]
+            tier = jobs[job_id]
             return {
                 "success": True,
-                "audit": {
-                    "verdict": "caveat",
-                    "totalClaims": 3,
-                    "flaggedCount": 1,
-                    "uncertainCount": 1,
-                    "incorrectCount": 0,
-                    "evidenceCount": 2,
-                    "claims": [
-                        {"claim": "断言一", "verdict": "supported", "sourceIds": []},
-                        {"claim": "断言二", "verdict": "supported", "sourceIds": []},
-                        {"claim": "断言三", "verdict": "uncertain", "sourceIds": []},
-                    ],
-                    "sources": [{"source_id": "chapter-one#s0 时序数据库入门", "title": "t"}],
-                },
-                "content": payload["content"],
+                "status": "succeeded",
+                "classroomId": f"course-{tier}",
+                "result": {"classroomId": f"course-{tier}", "scenesCount": 2},
             }
-        finally:
-            with lock:
-                inflight["now"] -= 1
+        assert path.startswith("/api/classroom?id=course-")
+        tier = path.rsplit("-", 1)[-1]
+        kcs = ["时间序列", "批量写入", "降采样"]
+        audit = {
+            "verdict": "caveat",
+            "decision": "publish_with_caveats",
+            "grounded": True,
+            "totalClaims": 3,
+            "flaggedCount": 1,
+            "uncertainCount": 1,
+            "incorrectCount": 0,
+            "evidenceCount": 2,
+            "claims": [
+                {"claim": "断言一", "verdict": "supported", "sourceIds": []},
+                {"claim": "断言二", "verdict": "supported", "sourceIds": []},
+                {"claim": "断言三", "verdict": "uncertain", "sourceIds": []},
+            ],
+            "sources": [{"source_id": "chapter-one#s0 时序数据库入门", "title": "t"}],
+        }
+        scenes = []
+        for i, scene_type in enumerate(("slide", "discussion"), start=1):
+            generated = _fake_scene(tier, kcs, 20 if tier == "beginner" else 4)
+            scenes.append({
+                "id": f"{tier}-{i}",
+                "outlineId": f"outline-{i}",
+                "title": f"{tier} 场景 {i}",
+                "type": scene_type,
+                "keyPoints": kcs,
+                "content": generated["content"],
+                "audit": audit,
+            })
+        return {
+            "success": True,
+            "classroom": {
+                "id": f"course-{tier}",
+                "stage": {
+                    "name": f"真实课程-{tier}",
+                    "learningContract": {"version": 2, "requiredSceneTypes": ["slide", "discussion"]},
+                    "courseAudit": {"verdict": "verified", "panelComplete": True},
+                },
+                "scenes": scenes,
+                "generation": {
+                    "recommendedDifficulty": "L1" if tier == "beginner" else "L4",
+                    "presentationTier": "deep" if tier == "beginner" else "light",
+                    "learnerType": "新手" if tier == "beginner" else "熟手",
+                    "engine": "llm",
+                },
+            },
+        }
 
     monkeypatch.setattr(domain_intake, "_classroom_post", fake_post)
+    monkeypatch.setattr(domain_intake, "_classroom_get", fake_get)
     monkeypatch.setattr(
         domain_intake,
         "_blind_tier_judge",
         lambda run, trial: {"ran": True, "hit": 4, "total": 4, "rows": []},
     )
-    return {"posts": posts, "inflight": inflight}
+    return {"posts": posts, "gets": gets}
 
 
 def test_trial_and_metrics_full_chain(sandbox, trial_stubs):
@@ -483,20 +602,21 @@ def test_trial_and_metrics_full_chain(sandbox, trial_stubs):
     metrics = record["stages"]["metrics"]
     assert trial["status"] == "done" and metrics["status"] == "done", (trial, metrics)
 
-    # ⑥：两档各两屏，四次生成 + 四次判官，落在 run 目录里、不进课程库
+    # ⑥：两档各走一次完整造课任务，再从统一学习者发布接口读取真实课程副本
     assert trial["detail"]["courses"] == 2 and trial["detail"]["scenes"] == 4
-    assert len([p for p, _ in trial_stubs["posts"] if p.endswith("scene-content")]) == 4
-    assert len([p for p, _ in trial_stubs["posts"] if p.endswith("scene-audit")]) == 4
-    # 判官必须收到 corpus，而且是新库——这是幻觉率口径的地基
-    audits = [b for p, b in trial_stubs["posts"] if p.endswith("scene-audit")]
-    assert {b["learnerProfile"]["corpus"] for b in audits} == {"trial-demo"}
+    assert [p for p, _, _ in trial_stubs["posts"]] == ["/api/generate-classroom"] * 2
+    assert {b["learnerProfile"]["corpus"] for _, b, _ in trial_stubs["posts"]} == {"trial-demo"}
+    assert all(headers is None for _, _, headers in trial_stubs["posts"])
+    assert len([p for p, _ in trial_stubs["gets"] if p.startswith("/api/classroom?id=")]) == 2
     for tier in ("beginner", "advanced"):
-        assert (run.dir / "trial_courses" / f"{tier}.json").is_file()
+        course = json.loads((run.dir / "trial_courses" / f"{tier}.json").read_text(encoding="utf-8"))
+        assert course["stage"]["learningContract"]["version"] == 2
+        assert course["stage"]["courseAudit"]["panelComplete"] is True
+        assert {s["type"] for s in course["scenes"]} == {"slide", "discussion"}
     assert not (run.dir / "trial_courses" / "beginner.json").is_relative_to(
         domain_intake.ROOT / "data" / "classrooms"
     )
-    # 受控并行：并发度 2 意味着同时最多两条在飞（串行的话 peak 会是 1）
-    assert trial_stubs["inflight"]["peak"] == domain_intake.TRIAL_CONCURRENCY
+    assert trial["detail"]["teaching_ready"] is True
 
     # ⑦：三项都有分子分母，且每一项自带小样本声明
     hall = metrics["detail"]["hallucination"]
@@ -521,14 +641,9 @@ def test_trial_and_metrics_full_chain(sandbox, trial_stubs):
     for block in (hall, cov, pers):
         assert block["sample_note"] == domain_intake.SMALL_SAMPLE_NOTE
 
-    # 资料到位率：生成端拿没拿到摘录必须显式入账（stub 里 advanced 两屏桥挂了）
+    # 已发布课程逐屏都通过统一发布门；资料就绪不再从旧 pipeline.assembly 猜。
     er = trial["detail"]["evidence_ready"]
-    assert er["ready"] == 2 and er["total"] == 4
-    assert {f["tier"] for f in er["no_material"]} == {"advanced"}
-    assert all("TimeoutError" in "；".join(f["reasons"]) for f in er["no_material"])
-    # 屏级失败要喊出来（事件流），不许只躺在 trial_courses/*.json 里
-    trial_msgs = [e["message"] for e in _events(run) if e["stage"] == "trial"]
-    assert sum("无资料生成" in t for t in trial_msgs) == 2
+    assert er == {"ready": 4, "total": 4, "no_material": []}
 
     # 事件与产物文档都必须写着「非对外指标」
     texts = [e["message"] for e in _events(run) if e["stage"] == "metrics"]
@@ -536,7 +651,76 @@ def test_trial_and_metrics_full_chain(sandbox, trial_stubs):
     report = (run.dir / "trial_courses" / "REPORT.md").read_text(encoding="utf-8")
     assert domain_intake.SMALL_SAMPLE_NOTE in report and "分子/分母" in report
     # 报告第一屏就要给「资料到位率 N/M」与逐屏标注
-    assert "资料到位率 2/4 屏" in report and report.count("无资料生成") >= 2
+    assert "资料到位率 4/4 屏" in report
+
+
+def test_private_trial_sends_one_bound_service_identity_across_all_three_hops(
+    sandbox, trial_stubs, monkeypatch
+):
+    monkeypatch.setenv("AI_SERVICE_TOKEN", "service-secret")
+    run = domain_intake.create_run(
+        _files(TWO_DOCS),
+        corpus="private-trial",
+        scope="时序数据库运维",
+        trial_run=True,
+        owner_org_id="org-a",
+    )
+
+    domain_intake.execute(run)
+
+    record = json.loads(run.record_path.read_text(encoding="utf-8"))
+    assert record["owner_org_id"] == "org-a"
+    marker = domain_intake.CORPORA_DIR / "private-trial" / domain_intake.CORPUS_OWNER_MARKER
+    assert marker.read_text(encoding="utf-8").strip() == "org-a"
+    assert domain_intake.create_checkup_run("private-trial").record["owner_org_id"] == "org-a"
+    assert record["stages"]["trial"]["status"] == "done", record["stages"]["trial"]
+    expected = {
+        "x-internal-token": "service-secret",
+        "x-jizhi-service-org": "org-a",
+        "x-jizhi-service-corpus": "private-trial",
+    }
+    assert trial_stubs["posts"]
+    assert trial_stubs["gets"]
+    assert all(headers == expected for _, _, headers in trial_stubs["posts"])
+    assert all(headers == expected for _, headers in trial_stubs["gets"])
+
+
+def test_private_trial_without_service_token_fails_before_classroom_call(sandbox, monkeypatch):
+    monkeypatch.delenv("AI_SERVICE_TOKEN", raising=False)
+    calls = []
+
+    def should_not_call(path, payload, timeout, *, headers=None):
+        calls.append((path, headers))
+        raise AssertionError("missing token must fail before HTTP")
+
+    monkeypatch.setattr(domain_intake, "_classroom_post", should_not_call)
+    run = domain_intake.create_run(
+        _files(TWO_DOCS),
+        corpus="private-no-token",
+        trial_run=True,
+        owner_org_id="org-a",
+    )
+
+    domain_intake.execute(run)
+
+    record = json.loads(run.record_path.read_text(encoding="utf-8"))
+    assert record["stages"]["trial"]["status"] == "failed"
+    assert "AI_SERVICE_TOKEN" in record["stages"]["trial"]["error"]
+    assert calls == []
+
+
+def test_private_trial_never_overwrites_a_different_corpus_owner(sandbox, monkeypatch):
+    monkeypatch.setenv("AI_SERVICE_TOKEN", "service-secret")
+    run = domain_intake.create_run(
+        _files(TWO_DOCS), corpus="owner-conflict", owner_org_id="org-a"
+    )
+    marker = domain_intake.CORPORA_DIR / "owner-conflict" / domain_intake.CORPUS_OWNER_MARKER
+    marker.write_text("org-b\n", encoding="utf-8")
+
+    with pytest.raises(domain_intake.StageError, match="归属与本次 run 不一致"):
+        domain_intake._classroom_service_headers(run)
+
+    assert marker.read_text(encoding="utf-8").strip() == "org-b"
 
 
 def test_budget_cap_halts_generation(sandbox, trial_stubs, monkeypatch):
@@ -553,6 +737,25 @@ def test_budget_cap_halts_generation(sandbox, trial_stubs, monkeypatch):
     # 体检失败不许把已经建成的库删掉
     assert record["status"] == "done" and record["warnings"]
     assert (domain_intake.CORPORA_DIR / "budget-demo" / "knowledge_index.jsonl").is_file()
+
+
+def test_完整造课失败不回退到旧场景接口(sandbox, monkeypatch):
+    calls = []
+
+    def fail(path, payload, timeout, *, headers=None):
+        calls.append(path)
+        raise domain_intake.StageError("完整造课不可用")
+
+    monkeypatch.setattr(domain_intake, "_classroom_post", fail)
+    run = domain_intake.create_run(_files(TWO_DOCS), corpus="no-fallback", trial_run=True)
+    domain_intake.execute(run)
+    record = json.loads(run.record_path.read_text(encoding="utf-8"))
+    assert record["stages"]["trial"]["status"] == "failed"
+    assert calls == ["/api/generate-classroom"]
+    readiness = json.loads(
+        (domain_intake.KB / "no-fallback_intake" / "readiness.json").read_text(encoding="utf-8")
+    )
+    assert readiness["teaching_ready"] is None
 
 
 def test_vector_bypass_failure_does_not_fail_the_run(sandbox, monkeypatch):
@@ -647,59 +850,61 @@ def test_create_run_from_dir_refuses_existing_corpus(sandbox, tmp_path):
     assert "换个库名" in msg and "删掉它" in msg, f"报错要给出路：{msg}"
 
 
-def test_不过线的库照样建成但被标试运行(sandbox, trial_stubs, monkeypatch):
-    """D29：⑦ 复测不过线 → 判词 degraded 落进 readiness.json，学习端的闸读得到。
+def test_发布门拦截会独立标记教学未就绪(sandbox, trial_stubs, monkeypatch):
+    """完整造课成功但 learner release 拒绝时，明确记 false，不退回旧假大纲。"""
+    stubbed = domain_intake._classroom_get
 
-    两件事必须同时成立：库**照样建成**（索引在盘上、检索得到、run 状态 done），
-    但它不再静默地以合格库的身份出货——`_corpus_gate` 把它拦下并说得出具体数字。
-    """
-    stubbed = domain_intake._classroom_post
+    def block_advanced(path, timeout, *, allow_not_found=False, headers=None):
+        if path == "/api/classroom?id=course-advanced":
+            assert allow_not_found is True
+            return {"success": False, "error": "Classroom not found"}
+        return stubbed(path, timeout, allow_not_found=allow_not_found, headers=headers)
 
-    def all_incorrect(path, payload, timeout):
-        out = stubbed(path, payload, timeout)
-        if path.endswith("scene-audit"):
-            for claim in out["audit"]["claims"]:
-                claim["verdict"] = "incorrect"
-        return out
-
-    monkeypatch.setattr(domain_intake, "_classroom_post", all_incorrect)
-    run = domain_intake.create_run(_files(TWO_DOCS), corpus="degraded-demo", trial_run=True)
+    monkeypatch.setattr(domain_intake, "_classroom_get", block_advanced)
+    run = domain_intake.create_run(_files(TWO_DOCS), corpus="release-blocked", trial_run=True)
     domain_intake.execute(run)
 
     record = json.loads(run.record_path.read_text(encoding="utf-8"))
     assert record["status"] == "done", record["error"]
-    assert (domain_intake.CORPORA_DIR / "degraded-demo" / "knowledge_index.jsonl").is_file()
+    readiness = json.loads(
+        (domain_intake.KB / "release-blocked_intake" / "readiness.json").read_text(encoding="utf-8")
+    )
+    assert readiness["teaching_ready"] is False
+    assert readiness["teaching_ready_detail"]["status"] == "blocked"
+    assert "发布门拒绝" in readiness["teaching_ready_detail"]["reason"]
+    assert record["stages"]["trial"]["detail"]["teaching_ready"] is False
+    assert (run.dir / "trial_courses" / "beginner.json").is_file()
+    assert not (run.dir / "trial_courses" / "advanced.json").exists()
+    assert any(
+        e.get("teaching_ready") is False and "发布门" in e["message"]
+        for e in _events(run)
+        if e["stage"] == "trial"
+    )
 
-    verdict = json.loads(
-        (domain_intake.KB / "degraded-demo_intake" / "readiness.json").read_text(encoding="utf-8")
-    )["trial_verdict"]
-    assert verdict["verdict"] == "degraded", verdict
-    assert verdict["run_id"] == run.run_id
-    # 判词要带得出数字和门线，不能只有一个标签
-    graded = {c["metric"]: c for c in verdict["checks"]}
-    assert graded["hallucination_rate"]["value"] == 1.0
-    assert graded["hallucination_rate"]["ceiling"] == 0.10
-    assert graded["factuality"]["floor"] == 0.62
-    assert not any(c["passed"] for c in verdict["checks"])
-    assert "1.0" in verdict["reason"] and "0.1" in verdict["reason"], verdict["reason"]
-    # 事件流里也要喊出来（G6 分道渲染的那条）
-    assert any("体检判词：degraded" in e["message"] for e in _events(run))
-
-    # 学习端的闸：读同一个文件，拦下并说得出原因
-    from backend.integration import personalize_service
-
-    gate = personalize_service._corpus_gate("degraded-demo", chunks=9999, retrievable=True)
-    assert not gate["passed"] and gate["trial_verdict"] == "degraded"
-    assert any("试跑体检未过线" in r for r in gate["reasons"]), gate
-
-    # ⑧ 的清单跑在 ⑦ 之前（那两站要等 LLM），判词落盘后本库那一行必须被校正——
-    # 不校正的话清单里仍是 eligible=true，学习端照旧拿它出货
     registry = json.loads(
         (domain_intake.KB / domain_intake.REGISTRY_NAME).read_text(encoding="utf-8")
     )
-    row = next(r for r in registry["corpora"] if r["corpus"] == "degraded-demo")
-    assert row["eligible"] is False
-    assert row["gate"]["trial_verdict"] == "degraded"
+    row = next(r for r in registry["corpora"] if r["corpus"] == "release-blocked")
+    assert row["teaching_ready"] is False
+    assert row["eligible"] is row["gate"]["passed"]
+
+
+def test_刷新教学就绪度不改eligible或gate(sandbox):
+    path = domain_intake.KB / domain_intake.REGISTRY_NAME
+    path.write_text(
+        json.dumps({"corpora": [{"corpus": "probe", "eligible": True, "gate": {"passed": True}}]}),
+        encoding="utf-8",
+    )
+    run = domain_intake.create_run(_files(TWO_DOCS), corpus="probe")
+    domain_intake._refresh_registry_teaching_ready(run, False, "发布门拒绝")
+    row = json.loads(path.read_text(encoding="utf-8"))["corpora"][0]
+    assert row == {
+        "corpus": "probe",
+        "eligible": True,
+        "gate": {"passed": True},
+        "teaching_ready": False,
+        "teaching_ready_reason": "发布门拒绝",
+    }
 
 
 def test_没跑体检的库是未知不是不过线(sandbox):
@@ -822,7 +1027,8 @@ def test_域注册清单字段齐(sandbox, monkeypatch):
     row = next(r for r in registry["corpora"] if r["corpus"] == "reg-fields")
     assert set(row) >= {
         "corpus", "label", "scope", "chunks", "eligible", "gate",
-        "cross_domain", "examples", "job_requirements", "generated_at", "source_run_id",
+        "teaching_ready", "teaching_ready_reason", "cross_domain", "examples",
+        "job_requirements", "generated_at", "source_run_id",
     }
     # 中文名取 readiness 的 scope 截成一行，不凭空起名
     assert row["label"] == "时序数据库运维" and row["label_source"] == "readiness.scope"
@@ -831,6 +1037,7 @@ def test_域注册清单字段齐(sandbox, monkeypatch):
     assert row["eligible"] is row["gate"]["passed"]
     assert row["gate"]["floor"] == 80 and row["cross_domain"] is False
     assert row["job_requirements"] is None  # 没投岗位要求就是 null，不编
+    assert row["teaching_ready"] is None  # 没跑完整课程，不冒充失败或通过
     assert row["source_run_id"] == run.run_id
     assert len(row["examples"]) == 3
     assert all(e["anchor"] and len(e["prompt"]) >= 10 for e in row["examples"])
@@ -1125,7 +1332,11 @@ def test_中断的run被判失败且清掉半成品(sandbox):
         ),
         encoding="utf-8",
     )
-    (domain_intake.CORPORA_DIR / "orphaned").mkdir(parents=True)
+    corpus_dir = domain_intake.CORPORA_DIR / "orphaned"
+    corpus_dir.mkdir(parents=True)
+    (corpus_dir / domain_intake.CORPUS_RESERVATION_MARKER).write_text(
+        "20260101T000000-orphan\n", encoding="utf-8"
+    )
 
     long_ago = time.time() - domain_intake.ORPHAN_RUN_AFTER_SECONDS - 60
     os.utime(run_dir / "run.json", (long_ago, long_ago))
@@ -1171,6 +1382,45 @@ def test_已完成的run不动(sandbox):
     assert domain_intake.sweep_orphan_runs() == []
 
 
+def test_中断的追加与体检run绝不清理既有库(sandbox, monkeypatch):
+    import os
+
+    long_ago = time.time() - domain_intake.ORPHAN_RUN_AFTER_SECONDS - 60
+    for mode in ("append", "checkup"):
+        run_id = f"20260101T000000-{mode}"
+        corpus = f"existing-{mode}"
+        run_dir = domain_intake.RUNS_DIR / run_id
+        run_dir.mkdir(parents=True)
+        record_path = run_dir / "run.json"
+        record_path.write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "corpus": corpus,
+                    "status": "running",
+                    "options": {mode: True},
+                    "events": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        os.utime(record_path, (long_ago, long_ago))
+        corpus_dir = domain_intake.CORPORA_DIR / corpus
+        corpus_dir.mkdir(parents=True)
+        (corpus_dir / "knowledge_index.jsonl").write_text("existing\n", encoding="utf-8")
+
+    def must_not_clean(*_args, **_kwargs):
+        raise AssertionError("append/checkup orphan must never enter partial-corpus cleanup")
+
+    monkeypatch.setattr(domain_intake, "_cleanup_partial", must_not_clean)
+    swept = domain_intake.sweep_orphan_runs()
+
+    assert {item["corpus"] for item in swept} == {"existing-append", "existing-checkup"}
+    for mode in ("append", "checkup"):
+        corpus_dir = domain_intake.CORPORA_DIR / f"existing-{mode}"
+        assert (corpus_dir / "knowledge_index.jsonl").read_text(encoding="utf-8") == "existing\n"
+
+
 def test_失败后告诉管理者可以直接重投(sandbox):
     """C25：干净重投这条路本来就通（`_cleanup_partial` 清三处、零残留、
     同名放行），**缺的是没人告诉管理者**。
@@ -1201,7 +1451,77 @@ def test_清理干净到同名可以重投(sandbox):
     assert len(removed) == 3
 
     # 清完立刻能重投——不抛就是放行
-    domain_intake._reserve_corpus("retryme")
+    domain_intake._reserve_corpus("retryme", "retry-run")
+
+
+def test_迟到的旧run清理不删除同名新run占位与归属(sandbox):
+    domain_intake._reserve_corpus("reused", "new-run", "org-new")
+
+    assert domain_intake._cleanup_partial("reused", "old-run") == []
+    corpus_dir = domain_intake.CORPORA_DIR / "reused"
+    assert (corpus_dir / domain_intake.CORPUS_RESERVATION_MARKER).read_text(
+        encoding="utf-8"
+    ).strip() == "new-run"
+    assert (corpus_dir / domain_intake.CORPUS_OWNER_MARKER).read_text(
+        encoding="utf-8"
+    ).strip() == "org-new"
+
+
+def test_带run_id但缺少占位标记时拒绝清理(sandbox):
+    paths = (
+        domain_intake.CORPORA_DIR / "marker-missing",
+        domain_intake.KB / "marker-missing_intake",
+        domain_intake.GOLD_DIR / "marker-missing",
+    )
+    for path in paths:
+        path.mkdir(parents=True)
+        (path / "keep.txt").write_text("existing", encoding="utf-8")
+
+    assert domain_intake._cleanup_partial("marker-missing", "orphan-run") == []
+    assert all((path / "keep.txt").read_text(encoding="utf-8") == "existing" for path in paths)
+
+
+def test_占位标记写入失败时释放刚创建的空目录(sandbox, monkeypatch):
+    def fail_marker(_path, _value):
+        raise OSError("marker write failed")
+
+    monkeypatch.setattr(domain_intake, "_atomic_write_marker", fail_marker)
+    with pytest.raises(OSError, match="marker write failed"):
+        domain_intake._reserve_corpus("reservation-failed", "run-a", "org-a")
+
+    assert not (domain_intake.CORPORA_DIR / "reservation-failed").exists()
+
+
+def test_新建成功先持久化done再移除占位标记(sandbox, monkeypatch):
+    class SimulatedProcessExit(BaseException):
+        pass
+
+    run = domain_intake.create_run_deferred(
+        "git",
+        "https://example.test/crash-window.git",
+        corpus="crash-window",
+        owner_org_id="org-a",
+    )
+    monkeypatch.setattr(
+        domain_intake,
+        "HANDLERS",
+        {stage: (lambda _run: {}) for stage in domain_intake.STAGES},
+    )
+
+    def crash_before_marker_removal(_corpus, _run_id):
+        persisted = json.loads(run.record_path.read_text(encoding="utf-8"))
+        assert persisted["status"] == "done"
+        raise SimulatedProcessExit
+
+    monkeypatch.setattr(domain_intake, "_finish_corpus_reservation", crash_before_marker_removal)
+    with pytest.raises(SimulatedProcessExit):
+        domain_intake.execute(run)
+
+    corpus_dir = domain_intake.CORPORA_DIR / "crash-window"
+    assert (corpus_dir / domain_intake.CORPUS_RESERVATION_MARKER).exists()
+    assert json.loads(run.record_path.read_text(encoding="utf-8"))["status"] == "done"
+    assert domain_intake.sweep_orphan_runs(now=time.time() + 2 * domain_intake.ORPHAN_RUN_AFTER_SECONDS) == []
+    assert corpus_dir.exists()
 
 
 # ── 并发投币串行化（C24）────────────────────────────────────
@@ -1231,13 +1551,101 @@ def test_同时只跑一条接入链(sandbox, monkeypatch):
     runs = []
     for i in range(3):
         r = domain_intake.create_run(_files({f"a{i}.md": TWO_DOCS["chapter-one.md"].encode()}),
-                                     corpus=f"conc{i}")
+                                     corpus=f"conc{i}", owner_org_id=f"org-{i}")
         runs.append(domain_intake.start_run(r))
 
     time.sleep(0.3)
     assert peak["n"] == 1, f"同时在跑 {peak['n']} 条链——闸没生效"
     release.set()
     time.sleep(0.5)
+
+
+def test_接入任务按全局与机构硬上限拒绝且完成后释放名额(sandbox, monkeypatch):
+    """active + queued 在建线程前计数；同机构和全局任一撞线都明确拒绝。"""
+    gate = threading.Semaphore(1)
+    monkeypatch.setattr(domain_intake, "_CHAIN_GATE", gate)
+    monkeypatch.setattr(domain_intake, "_CHAIN_WAITING", [])
+    monkeypatch.setattr(domain_intake, "_CHAIN_ADMITTED", {})
+    monkeypatch.setattr(domain_intake, "MAX_ADMITTED_RUNS_GLOBAL", 3)
+    monkeypatch.setattr(domain_intake, "MAX_ADMITTED_RUNS_PER_ORG", 2)
+
+    active = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    completed = {"count": 0}
+    completed_lock = threading.Lock()
+
+    def fake_execute(_run):
+        active.set()
+        assert release.wait(5)
+        with completed_lock:
+            completed["count"] += 1
+            if completed["count"] == 3:
+                finished.set()
+
+    monkeypatch.setattr(domain_intake, "execute", fake_execute)
+
+    def make(name, owner):
+        return domain_intake.create_run_deferred(
+            "git", f"https://example.test/{name}.git", corpus=name, owner_org_id=owner
+        )
+
+    domain_intake.start_run(make("org-a-active", "org-a"))
+    assert active.wait(2)
+    domain_intake.start_run(make("org-a-queued", "org-a"))
+
+    rejected_org = make("org-a-rejected", "org-a")
+    with pytest.raises(domain_intake.IntakeCapacityError, match="机构.*上限"):
+        domain_intake.start_run(rejected_org)
+    assert not (domain_intake.CORPORA_DIR / "org-a-rejected").exists()
+
+    domain_intake.start_run(make("org-b-queued", "org-b"))
+    rejected_global = make("org-c-rejected", "org-c")
+    with pytest.raises(domain_intake.IntakeCapacityError, match="全局.*上限"):
+        domain_intake.start_run(rejected_global)
+    assert not (domain_intake.CORPORA_DIR / "org-c-rejected").exists()
+
+    release.set()
+    assert finished.wait(5)
+    assert domain_intake._CHAIN_ADMITTED == {}
+
+    # 名额必须释放；完成后同机构可再次进入。
+    done = threading.Event()
+    monkeypatch.setattr(domain_intake, "execute", lambda _run: done.set())
+    domain_intake.start_run(make("org-a-after", "org-a"))
+    assert done.wait(2)
+
+
+@pytest.mark.parametrize("kind", ["zip", "dir"])
+def test_容量拒绝立即删除本次inbox及记录(sandbox, monkeypatch, kind):
+    monkeypatch.setattr(domain_intake, "_CHAIN_WAITING", [])
+    monkeypatch.setattr(domain_intake, "_CHAIN_ADMITTED", {})
+    monkeypatch.setattr(domain_intake, "MAX_ADMITTED_RUNS_GLOBAL", 4)
+    monkeypatch.setattr(domain_intake, "MAX_ADMITTED_RUNS_PER_ORG", 0)
+
+    inbox = domain_intake.RUNS_DIR / "_inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+    ref = inbox / ("upload-rejected.zip" if kind == "zip" else "files-rejected")
+    if kind == "zip":
+        ref.write_bytes(b"rejected upload")
+    else:
+        ref.mkdir()
+        (ref / "chapter.md").write_text("rejected upload", encoding="utf-8")
+
+    run = domain_intake.create_run_deferred(
+        kind,
+        str(ref),
+        corpus=f"capacity-{kind}",
+        owner_org_id="org-a",
+    )
+    with pytest.raises(domain_intake.IntakeCapacityError, match="机构.*上限"):
+        domain_intake.start_run(run)
+
+    assert not ref.exists()
+    assert "inbox" not in run.record
+    persisted = json.loads(run.record_path.read_text(encoding="utf-8"))
+    assert "inbox" not in persisted
+    assert persisted["status"] == "failed"
 
 
 def test_排队时告诉管理者前面还有几个(sandbox):

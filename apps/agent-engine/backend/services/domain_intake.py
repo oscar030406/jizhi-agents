@@ -21,7 +21,8 @@
       └ 向量索引   scripts/build_embedding_index.build_corpus_index（**默认关，调嵌入 API 花钱**）
     ④ 知识整理     structure_edges.probe（零 API）+ 概念抽取/前置图（默认关，调 LLM 花钱）
     ⑤ 金标派生     scripts/derive_kc_gold.derive + write_gold，落盘时盖冻结时间戳
-    ⑥ 试跑课程     classroom 的 `/api/generate/scene-content` + `/api/generate/scene-audit`
+    ⑥ 试跑课程     非 AI 库走 classroom 的 `/api/generate-classroom` 完整造课任务，
+                   再从 `/api/classroom` 的统一学习者发布门读取成课；AI 主库保留旧抽检路径
                    （**默认关，真花钱**；开关 trial_run，另有 run 级 token 预算闸）
     ⑦ 指标复测     ⑥ 那一遍判官的判定 + scripts/compute_kc_coverage.py + 盲评判档
     ⑧ 个性化注册   personalize_service._corpus_status（eligible/gate 判据不另写一份）
@@ -54,6 +55,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[2]
 KB = ROOT / "data" / "knowledge_base"
@@ -110,6 +112,8 @@ ALLOWED_SUFFIXES = {".md", ".markdown", ".txt", ".rst", ".pdf"}
 #: 语料名进路径，字符集与 `retriever.CORPUS_NAME_RE` 同一条——外部输入不可信。
 #: 这几个名字指向主语料，永远不许被流水线建的新库占用（真源同 _MAIN_CORPUS_ALIASES）。
 RESERVED_NAMES = frozenset(_MAIN_CORPUS_ALIASES)
+CORPUS_OWNER_MARKER = ".jizhi-owner-org"
+CORPUS_RESERVATION_MARKER = ".jizhi-intake-run"
 
 
 def now_iso() -> str:
@@ -160,6 +164,10 @@ STAGES: dict[str, StageSpec] = {
 
 class StageError(RuntimeError):
     """业务性失败（语料全被退回、库名冲突……）。带原因进事件，不吞。"""
+
+
+class IntakeCapacityError(StageError):
+    """active + queued 接入任务撞到硬上限；请求入口映射为 429。"""
 
 
 class StageSkipped(RuntimeError):
@@ -938,6 +946,13 @@ def _stage_knowledge(run: IntakeRun) -> dict[str, Any]:
             "reason": "本次 run 未跑 ⑦ 指标复测（⑥⑦ 是 optional，试跑体检默认关）",
             "checks": [],
         },
+        # 课程能否真正交给学习者由 classroom 的统一发布门判定；不拿 corpus 的
+        # eligible 代替，也不把「没试跑」写成 false。
+        "teaching_ready": None,
+        "teaching_ready_detail": {
+            "status": "unknown",
+            "reason": "本次 run 未跑完整课程发布试跑",
+        },
     }
     out_dir = KB / f"{run.corpus}_intake"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1128,6 +1143,8 @@ TRIAL_TOKEN_BUDGET = int(os.environ.get("TRIAL_TOKEN_BUDGET", "500000") or 50000
 TRIAL_SCENES_PER_COURSE = 2
 #: 单次生成的读超时。F1 实测最长一次 592.9s，留到 15 分钟。
 TRIAL_HTTP_TIMEOUT = 900
+#: 完整造课是后台 job；轮询间隔可在测试与部署中调小，默认跟 classroom 返回建议一致。
+TRIAL_POLL_INTERVAL_SECONDS = float(os.environ.get("TRIAL_POLL_INTERVAL_SECONDS", "5") or 5)
 
 #: 两档画像。除等级与背景外一个字段不差——差异只能来自档位，否则「个性化跟随」不成立。
 #: `corpus` 单独给（G3 的口径：corpus 选书，domain 是培训领域语义，两件事不合并）。
@@ -1168,7 +1185,7 @@ TRIAL_OFF_REASON = "默认关闭——试跑课程会调用生成与审核接口
 #: 覆盖这一站为什么不出比率。`{screens}` 屏、`{outline}` 个大纲点名的知识成分、
 #: `{gold}` 个金标知识成分，三个数都在运行期填真值。
 COVERAGE_NO_RATIO = (
-    "试跑固定 {screens} 屏，大纲机械点名 {outline} 个知识成分，而金标主题共 {gold} 个。"
+    "本次试跑产出 {screens} 个场景，课程真实大纲点名 {outline} 个知识成分，而金标主题共 {gold} 个。"
     "两者相除量到的是试跑规模与金标规模之比，不是覆盖能力，"
     "所以这一站不出覆盖率，只列没讲到的知识成分供排查。"
 )
@@ -1220,15 +1237,44 @@ class _TokenMeter:
         return self.snapshot()["total_tokens"] >= self.budget
 
 
-def _classroom_post(path: str, payload: dict[str, Any], timeout: int) -> dict[str, Any]:
+def _classroom_post(
+    path: str,
+    payload: dict[str, Any],
+    timeout: int,
+    *,
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
     import requests
 
     url = f"{CLASSROOM_BASE_URL.rstrip('/')}{path}"
-    response = requests.post(url, json=payload, timeout=(15, timeout))
+    response = requests.post(url, json=payload, headers=headers, timeout=(15, timeout))
     try:
         body = response.json()
     except ValueError:
         raise StageError(f"生成端返回的不是 JSON（HTTP {response.status_code}）") from None
+    if not response.ok or not body.get("success"):
+        raise StageError(f"生成端 HTTP {response.status_code}：{body.get('error') or '未知原因'}")
+    return body
+
+
+def _classroom_get(
+    path: str,
+    timeout: int,
+    *,
+    allow_not_found: bool = False,
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """读取 classroom 的平铺 JSON 合同；只有发布读取的 404 可由调用方显式处理。"""
+    import requests
+
+    url = f"{CLASSROOM_BASE_URL.rstrip('/')}{path}"
+    response = requests.get(url, headers=headers, timeout=(15, timeout))
+    try:
+        body = response.json()
+    except ValueError:
+        raise StageError(f"生成端返回的不是 JSON（HTTP {response.status_code}）") from None
+    if response.status_code == 404 and allow_not_found:
+        return body
     if not response.ok or not body.get("success"):
         raise StageError(f"生成端 HTTP {response.status_code}：{body.get('error') or '未知原因'}")
     return body
@@ -1330,8 +1376,8 @@ def _generate_and_audit(
     }
 
 
-def _stage_trial(run: IntakeRun) -> dict[str, Any]:
-    """⑥ 在新库上真跑课程：1 个课题 × 2 档画像 × N 屏，受控并行。"""
+def _stage_scene_trial(run: IntakeRun) -> dict[str, Any]:
+    """AI 主库的既有小样本抽检：1 个课题 × 2 档画像 × N 屏。"""
     topic = _pick_gold_topic(run)
     kcs = topic["knowledge_components"]
     names = [str(kc.get("name") or kc.get("id")) for kc in kcs]
@@ -1501,6 +1547,263 @@ def _stage_trial(run: IntakeRun) -> dict[str, Any]:
     }
 
 
+def _classroom_service_headers(run: IntakeRun) -> dict[str, str] | None:
+    """私有 corpus 试跑必须携带固化的服务身份；公共库保持原浏览器兼容路径。"""
+    owner_org_id = str(run.record.get("owner_org_id") or "").strip()
+    if not owner_org_id:
+        return None
+    token = os.environ.get("AI_SERVICE_TOKEN", "")
+    if not token:
+        raise StageError("私有知识库完整试跑缺少 AI_SERVICE_TOKEN，已拒绝调用 classroom")
+    # 新库的正式归属原本在整条 run 收尾才落盘，但 ⑥ 完整造课早于收尾。
+    # 先用同一个原子 marker 固化已由管理端角色闸确认的 run 归属，classroom 才能
+    # 从自己的实时 ownership 真源核回这份服务声明；后续硬失败仍会随半成品库一起清理。
+    _write_corpus_owner_marker(run.corpus, owner_org_id)
+    return {
+        "x-internal-token": token,
+        "x-jizhi-service-org": owner_org_id,
+        "x-jizhi-service-corpus": run.corpus,
+    }
+
+
+def _generate_teaching_course(run: IntakeRun, tier: str, course_title: str) -> dict[str, Any]:
+    """沿 classroom 的真实后台任务造一门课，再通过统一学习者发布读取确认终态。"""
+    service_headers = _classroom_service_headers(run)
+    profile = {
+        **TRIAL_TIERS[tier]["profile"],
+        "corpus": run.corpus,
+        **({"domain": run.record["scope"]} if run.record.get("scope") else {}),
+    }
+    started = _classroom_post(
+        "/api/generate-classroom",
+        {
+            "requirement": course_title,
+            "learnerProfile": profile,
+            "enableWebSearch": False,
+            "enableImageGeneration": False,
+            "enableVideoGeneration": False,
+            "enableTTS": False,
+        },
+        30,
+        headers=service_headers,
+    )
+    job_id = str(started.get("jobId") or "").strip()
+    if not job_id:
+        raise StageError("完整造课任务创建成功但没有返回 jobId")
+
+    deadline = time.monotonic() + TRIAL_HTTP_TIMEOUT
+    while True:
+        job = _classroom_get(
+            f"/api/generate-classroom/{quote(job_id, safe='')}",
+            30,
+            headers=service_headers,
+        )
+        status = str(job.get("status") or "")
+        if status == "failed":
+            raise StageError(f"完整造课任务 {job_id} 失败：{job.get('error') or job.get('message') or '未知原因'}")
+        if status == "succeeded":
+            break
+        if status not in ("queued", "running"):
+            raise StageError(f"完整造课任务 {job_id} 返回未知状态：{status or '空'}")
+        if time.monotonic() >= deadline:
+            raise StageError(f"完整造课任务 {job_id} 超过 {TRIAL_HTTP_TIMEOUT}s 仍未完成")
+        time.sleep(TRIAL_POLL_INTERVAL_SECONDS)
+
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    classroom_id = str(result.get("classroomId") or job.get("classroomId") or "").strip()
+    if not classroom_id:
+        raise StageError(f"完整造课任务 {job_id} 成功但没有返回 classroomId")
+
+    # `/api/classroom` 只返回通过 `isCourseLearnerReleased` 的课程。404 是明确的发布拦截，
+    # 其他 HTTP/协议错误仍抛出，不能把基础设施故障伪装成「教学未就绪」。
+    released = _classroom_get(
+        f"/api/classroom?id={quote(classroom_id, safe='')}",
+        30,
+        allow_not_found=True,
+        headers=service_headers,
+    )
+    if not released.get("success"):
+        return {
+            "teaching_ready": False,
+            "classroom_id": classroom_id,
+            "job_id": job_id,
+            "scenes_count": int(result.get("scenesCount") or job.get("scenesGenerated") or 0),
+            "reason": "完整课程已生成，但 classroom 统一学习者发布门拒绝读取",
+        }
+
+    classroom = released.get("classroom")
+    if not isinstance(classroom, dict):
+        raise StageError(f"课程 {classroom_id} 已通过发布读取，但响应缺少 classroom 对象")
+    stage = classroom.get("stage")
+    scenes = classroom.get("scenes")
+    if not isinstance(stage, dict) or not isinstance(scenes, list):
+        raise StageError(f"课程 {classroom_id} 已通过发布读取，但缺少 stage/scenes")
+    # 这里只钉完整链的协议产物，不在引擎侧复制合同或终审判据；真正的资格判断已经由
+    # `/api/classroom` 内的唯一发布函数完成。
+    if not isinstance(stage.get("learningContract"), dict) or not isinstance(stage.get("courseAudit"), dict):
+        raise StageError(f"课程 {classroom_id} 已发布，但缺少教学合同或课程终审账单")
+
+    generation = classroom.get("generation") if isinstance(classroom.get("generation"), dict) else {}
+    blueprint = {
+        "difficulty": generation.get("recommendedDifficulty"),
+        "scaffold": generation.get("presentationTier"),
+        "learnerType": generation.get("learnerType"),
+        "engine": generation.get("engine"),
+    }
+    normalized_scenes = []
+    for scene in scenes:
+        if not isinstance(scene, dict):
+            raise StageError(f"课程 {classroom_id} 的 scenes 含非对象条目")
+        normalized_scenes.append(
+            {
+                **scene,
+                # 冻结的个性化复测从 scene.pipeline.blueprint 读结构化差异；完整造课把
+                # 同一份真值落在 course.generation，这里只做形状适配，不重算也不猜。
+                "pipeline": scene.get("pipeline")
+                if isinstance(scene.get("pipeline"), dict)
+                else {"blueprint": {k: v for k, v in blueprint.items() if v is not None}},
+            }
+        )
+    return {
+        "teaching_ready": True,
+        "classroom_id": classroom_id,
+        "job_id": job_id,
+        "classroom": {**classroom, "scenes": normalized_scenes},
+        "scenes_count": len(normalized_scenes),
+        "reason": "通过 classroom 统一学习者发布门",
+    }
+
+
+def _stage_full_course_trial(run: IntakeRun) -> dict[str, Any]:
+    """非 AI corpus 试跑：两档各造一门真实课程，完整链串行，避免叠加场景并发。"""
+    topic = _pick_gold_topic(run)
+    kcs = topic["knowledge_components"]
+    names = [str(kc.get("name") or kc.get("id")) for kc in kcs]
+    subject = run.record.get("scope") or run.corpus
+    course_title = f"{subject}：{names[0]}与{names[1]}" if len(names) > 1 else f"{subject}：{names[0]}"
+    meter = _TokenMeter(TRIAL_TOKEN_BUDGET)
+    run.ctx["meter"] = meter
+    run.emit(
+        "trial",
+        "stage_progress",
+        f"课题「{course_title}」：两档画像各走一次完整造课、教学合同、混合场景、课程终审与发布门"
+        f"（串行，token 预算 {TRIAL_TOKEN_BUDGET:,}）",
+        course_title=course_title,
+        gold_topic=topic["topic"],
+        tiers=list(TRIAL_TIERS),
+        real_course_chain=True,
+        budget_tokens=TRIAL_TOKEN_BUDGET,
+    )
+
+    results: dict[str, dict[str, Any]] = {}
+    halted = ""
+    for tier in TRIAL_TIERS:
+        if meter.over_budget():
+            snap = meter.snapshot()
+            halted = (
+                f"已用 {snap['total_tokens']:,} token，达到本次预算 "
+                f"{TRIAL_TOKEN_BUDGET:,}，停止发起新的完整造课"
+            )
+            run.emit("trial", "stage_progress", f"预算闸触发：{halted}", budget_halt=True, **snap)
+            break
+        result = _generate_teaching_course(run, tier, course_title)
+        results[tier] = result
+        run.emit(
+            "trial",
+            "stage_progress",
+            f"{TRIAL_TIERS[tier]['label']}完整造课完成：{result['reason']}，"
+            f"课程 {result['classroom_id']}，{result['scenes_count']} 个场景",
+            tier=tier,
+            classroom_id=result["classroom_id"],
+            scenes=result["scenes_count"],
+            teaching_ready=result["teaching_ready"],
+        )
+
+    if not results:
+        raise StageError(f"预算闸在第一次完整造课前就触发：{halted}" if halted else "没有发起任何完整造课")
+
+    completed_all = len(results) == len(TRIAL_TIERS) and not halted
+    teaching_ready: bool | None = (
+        all(item["teaching_ready"] for item in results.values()) if completed_all else None
+    )
+    blocked = {
+        tier: item["reason"] for tier, item in results.items() if not item["teaching_ready"]
+    }
+    reason = (
+        "两档真实课程均通过 classroom 统一学习者发布门"
+        if teaching_ready is True
+        else "；".join(f"{TRIAL_TIERS[t]['label']}：{why}" for t, why in blocked.items())
+        if teaching_ready is False
+        else halted or "完整造课未跑完，教学就绪度保持未知"
+    )
+
+    produced = {
+        tier: item["classroom"]["scenes"]
+        for tier, item in results.items()
+        if item["teaching_ready"]
+    }
+    out_dir = run.dir / "trial_courses"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    paths: dict[str, str] = {}
+    for tier, scenes in produced.items():
+        classroom = results[tier]["classroom"]
+        path = out_dir / f"{tier}.json"
+        path.write_text(
+            json.dumps(
+                {
+                    **classroom,
+                    "corpus": run.corpus,
+                    "tier": tier,
+                    "gold_topic": topic["topic"],
+                    "teaching_ready": True,
+                    "note": f"领域接入流水线复制的真实完整造课产物，{SMALL_SAMPLE_NOTE}。",
+                    "scenes": scenes,
+                },
+                ensure_ascii=False,
+                indent=1,
+            ),
+            encoding="utf-8",
+        )
+        paths[tier] = _rel(path)
+
+    total_scenes = sum(len(v) for v in produced.values())
+    evidence_ready = {"ready": total_scenes, "total": total_scenes, "no_material": []}
+    run.ctx["trial"] = {
+        "course_title": course_title,
+        "gold_path": topic["_path"],
+        "gold_topic": topic["topic"],
+        "courses": produced,
+        "paths": paths,
+        "evidence_ready": evidence_ready,
+        "teaching_ready": teaching_ready,
+        "teaching_ready_reason": reason,
+        "classroom_ids": {tier: item["classroom_id"] for tier, item in results.items()},
+    }
+    _stamp_teaching_ready(run, teaching_ready, reason, run.ctx["trial"]["classroom_ids"])
+    snap = meter.snapshot()
+    run.record["products"]["trial_courses"] = _rel(out_dir)
+    return {
+        "course_title": course_title,
+        "gold_topic": topic["topic"],
+        "courses": len(produced),
+        "scenes": total_scenes,
+        "planned_courses": len(TRIAL_TIERS),
+        "teaching_ready": teaching_ready,
+        "teaching_ready_reason": reason,
+        "classroom_ids": run.ctx["trial"]["classroom_ids"],
+        "evidence_ready": evidence_ready,
+        "budget_halt": halted,
+        "cost": snap,
+        "paths": paths,
+        "sample_note": SMALL_SAMPLE_NOTE,
+    }
+
+
+def _stage_trial(run: IntakeRun) -> dict[str, Any]:
+    """主库保留旧抽检；非 AI corpus 必须走 classroom 的完整真实造课链。"""
+    return _stage_scene_trial(run) if run.corpus == "ai" else _stage_full_course_trial(run)
+
+
 # ── ⑦ 三项复测：互不依赖，并行 ─────────────────────────────────────────────
 
 
@@ -1635,7 +1938,9 @@ def _metric_coverage(run: IntakeRun, trial: dict) -> dict[str, Any]:
         "gold_total": total,
         "frozen_gold": _rel(Path(trial["gold_path"])),
         "reason": COVERAGE_NO_RATIO.format(
-            screens=TRIAL_SCENES_PER_COURSE, outline=outline_kcs, gold=total
+            screens=sum(len(scenes) for scenes in trial["courses"].values()),
+            outline=outline_kcs,
+            gold=total,
         ),
         "per_tier": per_tier,
         "sample_note": SMALL_SAMPLE_NOTE,
@@ -1872,6 +2177,43 @@ def _stamp_trial_verdict(run: IntakeRun, verdict: dict[str, Any]) -> None:
     _refresh_registry_gate(run)
 
 
+def _stamp_teaching_ready(
+    run: IntakeRun,
+    ready: bool | None,
+    reason: str,
+    classroom_ids: dict[str, str],
+) -> None:
+    """记录真实课程发布结果；它与 corpus 的 eligible/gate 是两条独立事实。"""
+    path = KB / f"{run.corpus}_intake" / "readiness.json"
+    report = _read_json(path)
+    if report:
+        report["teaching_ready"] = ready
+        report["teaching_ready_detail"] = {
+            "status": "passed" if ready is True else "blocked" if ready is False else "unknown",
+            "reason": reason,
+            "classroom_ids": classroom_ids,
+            "run_id": run.run_id,
+            "at": now_iso(),
+        }
+        path.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
+    _refresh_registry_teaching_ready(run, ready, reason)
+
+
+def _refresh_registry_teaching_ready(run: IntakeRun, ready: bool | None, reason: str) -> None:
+    """只刷新 registry 的教学发布事实，绝不借此改写 eligible/gate。"""
+    path = _registry_path()
+    with _REGISTRY_LOCK:
+        registry = _read_json(path)
+        if not registry:
+            return
+        for row in registry.get("corpora") or []:
+            if isinstance(row, dict) and row.get("corpus") == run.corpus:
+                row["teaching_ready"] = ready
+                row["teaching_ready_reason"] = reason
+                path.write_text(json.dumps(registry, ensure_ascii=False, indent=1), encoding="utf-8")
+                return
+
+
 def _refresh_registry_gate(run: IntakeRun) -> None:
     """判词盖章后，把 ⑧ 清单里本库那一行的闸位重算一遍。
 
@@ -1882,21 +2224,22 @@ def _refresh_registry_gate(run: IntakeRun) -> None:
     只改 `eligible` / `gate` 两格，且值来自 `_corpus_gate` 本身（判据仍是那一个真源）；
     行里其余字段（中文名、示例、岗位要求）是 ⑧ 的产物，一个字不动。
     """
-    path = _registry_path()
-    registry = _read_json(path)
-    if not registry:
-        return
     from backend.integration.personalize_service import _corpus_gate
     from backend.rag.retriever import get_corpus_retriever
 
     retriever = get_corpus_retriever(run.corpus)
     gate = _corpus_gate(run.corpus, len(retriever.chunks) if retriever else 0, retriever is not None)
-    for row in registry.get("corpora") or []:
-        if isinstance(row, dict) and row.get("corpus") == run.corpus:
-            row["eligible"] = gate["passed"]
-            row["gate"] = gate
-            path.write_text(json.dumps(registry, ensure_ascii=False, indent=1), encoding="utf-8")
+    path = _registry_path()
+    with _REGISTRY_LOCK:
+        registry = _read_json(path)
+        if not registry:
             return
+        for row in registry.get("corpora") or []:
+            if isinstance(row, dict) and row.get("corpus") == run.corpus:
+                row["eligible"] = gate["passed"]
+                row["gate"] = gate
+                path.write_text(json.dumps(registry, ensure_ascii=False, indent=1), encoding="utf-8")
+                return
 
 
 def _stage_metrics(run: IntakeRun) -> dict[str, Any]:
@@ -2062,6 +2405,7 @@ def _write_trial_report(run: IntakeRun, trial: dict, result: dict, cost: dict) -
 
 #: 域注册清单文件名：学习端认库的唯一真源。KB 在测试里被指到临时目录，路径不在导入期定死。
 REGISTRY_NAME = "domain_registry.json"
+_REGISTRY_LOCK = threading.Lock()
 
 #: 出示例提示词只走这两档结构化输出模型。判官档当前是 Qwen 系（`.env` 的
 #: LLM_MODEL_JUDGE），这类判断/出题任务不许交给它——ZPD-SCA（arXiv:2508.14377）Table 4
@@ -2092,6 +2436,16 @@ EXAMPLE_SYSTEM = (
 
 def _registry_path() -> Path:
     return KB / REGISTRY_NAME
+
+
+def _teaching_readiness(corpus: str) -> tuple[bool | None, str]:
+    report = _read_json(KB / f"{corpus}_intake" / "readiness.json") or {}
+    ready = report.get("teaching_ready")
+    detail = report.get("teaching_ready_detail")
+    return (
+        ready if isinstance(ready, bool) else None,
+        str(detail.get("reason") or "") if isinstance(detail, dict) else "",
+    )
 
 
 def _scope_label(corpus: str, scope: str) -> str:
@@ -2238,6 +2592,7 @@ def _stage_personalize(run: IntakeRun) -> dict[str, Any]:
     for row in _corpus_status():
         name = row["corpus"]
         scope = corpus_scope(name)
+        teaching_ready, teaching_ready_reason = _teaching_readiness(name)
         entry: dict[str, Any] = {
             "corpus": name,
             "label": _scope_label(name, scope),
@@ -2248,6 +2603,9 @@ def _stage_personalize(run: IntakeRun) -> dict[str, Any]:
             "chunks": row["chunk_count"],
             "eligible": row["eligible"],
             "gate": row["gate"],
+            # 能检索/块数过闸与课程能发布不是一回事，两格独立记录。
+            "teaching_ready": teaching_ready,
+            "teaching_ready_reason": teaching_ready_reason,
             "cross_domain": row["cross_domain"],
             "examples": [],
             "examples_note": "",
@@ -2281,21 +2639,30 @@ def _stage_personalize(run: IntakeRun) -> dict[str, Any]:
 
     path = _registry_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            {
-                "generated_at": stamp,
-                "source_run_id": run.run_id,
-                "corpus": run.corpus,
-                "note": "领域接入流水线 ⑧ 产出；classroom 运行时读它认库。"
-                        "手改会被下一次 run 覆盖——改中文名请置 label_overridden=true",
-                "corpora": entries,
-            },
-            ensure_ascii=False,
-            indent=1,
-        ),
-        encoding="utf-8",
-    )
+    with _REGISTRY_LOCK:
+        # trial 与 personalize 同属 ④⑤ 的下游，会并发结束。落盘前重读一次当前 run 的
+        # 发布结果：若 trial 已先盖章就带上；若 trial 后盖章，它会拿同一把锁再刷新。
+        current_ready, current_reason = _teaching_readiness(run.corpus)
+        for entry in entries:
+            if entry["corpus"] == run.corpus:
+                entry["teaching_ready"] = current_ready
+                entry["teaching_ready_reason"] = current_reason
+                break
+        path.write_text(
+            json.dumps(
+                {
+                    "generated_at": stamp,
+                    "source_run_id": run.run_id,
+                    "corpus": run.corpus,
+                    "note": "领域接入流水线 ⑧ 产出；classroom 运行时读它认库。"
+                            "手改会被下一次 run 覆盖——改中文名请置 label_overridden=true",
+                    "corpora": entries,
+                },
+                ensure_ascii=False,
+                indent=1,
+            ),
+            encoding="utf-8",
+        )
     rel = _rel(path)
     run.record["products"]["domain_registry"] = rel
     run.emit(
@@ -2437,8 +2804,23 @@ def execute(run: IntakeRun) -> None:
     run.record["status"] = "failed" if hard_failed else "done"
     run.record["finished_at"] = now_iso()
     run.record["duration_ms"] = round((time.perf_counter() - run._started) * 1000)
+    run.flush()
+
+    reservation_error = ""
+    if not hard_failed and not (
+        run.record["options"].get("append") or run.record["options"].get("checkup")
+    ):
+        try:
+            _finish_corpus_reservation(run.corpus, run.run_id)
+        except (OSError, StageError) as exc:
+            hard_failed = True
+            reservation_error = f"知识库接入占位收尾失败：{exc}"
+            run.record["status"] = "failed"
+            run.record["error"] = reservation_error
+            run.flush()
+
     if hard_failed:
-        first = next(
+        first = reservation_error or next(
             (s["error"] for s in run.record["stages"].values() if s["status"] == "failed"), ""
         )
         run.record["error"] = first
@@ -2449,7 +2831,7 @@ def execute(run: IntakeRun) -> None:
         # 与体检 run 同理——`_cleanup_partial` 的前提是「这个库是本次 run 建的」，
         # 追加模式下这个前提不成立。
         skip_cleanup = run.record["options"].get("checkup") or run.record["options"].get("append")
-        removed = [] if skip_cleanup else _cleanup_partial(run.corpus)
+        removed = [] if skip_cleanup else _cleanup_partial(run.corpus, run.run_id)
         # C25：失败之后管理者最需要知道的是「现在能不能重来」。
         # 半成品三处（corpora / <库>_intake / 金标）已经清干净，同名可以直接重投——
         # 不说清楚的话人会被 `_reserve_corpus` 的「已经建过了」挡住，
@@ -2484,8 +2866,10 @@ def _refresh_corpus_caches() -> None:
     """新库落盘后，不重启引擎也要能被检索到、能出现在语料库枚举里。"""
     from backend.integration.personalize_service import skill_map_api
     from backend.rag.retriever import refresh_corpora
+    from backend.services.concept_graph import refresh_concept_graph
 
     refresh_corpora()
+    refresh_concept_graph()
     skill_map_api.cache_clear()
 
 
@@ -2524,7 +2908,10 @@ def sweep_orphan_runs(now: float | None = None) -> list[dict[str, Any]]:
             continue  # 还在跑，别动
 
         corpus = str(record.get("corpus") or "")
-        removed = [] if record.get("options", {}).get("checkup") else _cleanup_partial(corpus)
+        options = record.get("options", {})
+        removed = [] if options.get("append") or options.get("checkup") else _cleanup_partial(
+            corpus, str(record.get("run_id") or "") or None
+        )
         record["status"] = "failed"
         record["finished_at"] = now_iso()
         record["error"] = (
@@ -2550,18 +2937,111 @@ def sweep_orphan_runs(now: float | None = None) -> list[dict[str, Any]]:
     return swept
 
 
-def _cleanup_partial(corpus: str) -> list[str]:
+def _cleanup_partial(corpus: str, run_id: str | None = None) -> list[str]:
     """失败就把这次建的库删干净。
 
-    只删 `_reserve_corpus` 开跑前确认过「不存在」的那三个路径，所以不可能误删既有库。
+    传入 run_id 时，reservation marker 必须存在且严格匹配；否则一处不动。
+    这避免迟到的 orphan 清理误删既有库或同名新任务。
     run 目录留着——事件与失败原因是要给人看的。
     """
+    corpus_dir = CORPORA_DIR / corpus
+    reservation = corpus_dir / CORPUS_RESERVATION_MARKER
+    if run_id:
+        try:
+            reserved_by = reservation.read_text(encoding="utf-8").strip()
+        except OSError:
+            return []
+        if reserved_by != run_id:
+            return []
     removed = []
-    for path in (CORPORA_DIR / corpus, KB / f"{corpus}_intake", GOLD_DIR / corpus):
+    for path in (corpus_dir, KB / f"{corpus}_intake", GOLD_DIR / corpus):
         if path.exists():
             shutil.rmtree(path, ignore_errors=True)
             removed.append(_rel(path))
     return removed
+
+
+def _atomic_write_marker(path: Path, value: str) -> None:
+    pending = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with pending.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(value + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        pending.replace(path)
+    finally:
+        pending.unlink(missing_ok=True)
+
+
+def _write_corpus_owner_marker(corpus: str, owner_org_id: str) -> None:
+    """原子固化 corpus -> org；已存在的不同归属绝不覆盖。"""
+    owner_org_id = owner_org_id.strip()
+    if not owner_org_id:
+        raise StageError("私有知识库缺少机构归属")
+    marker = CORPORA_DIR / corpus / CORPUS_OWNER_MARKER
+    try:
+        existing = marker.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        existing = ""
+    if existing:
+        if existing != owner_org_id:
+            raise StageError(f"知识库「{corpus}」的归属与本次 run 不一致")
+        return
+
+    _atomic_write_marker(marker, owner_org_id)
+
+
+def _finish_corpus_reservation(corpus: str, run_id: str) -> None:
+    reservation = CORPORA_DIR / corpus / CORPUS_RESERVATION_MARKER
+    try:
+        reserved_by = reservation.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return
+    if reserved_by != run_id:
+        raise StageError(f"知识库「{corpus}」的接入占位已不属于 run {run_id}")
+    reservation.unlink()
+
+
+def read_corpus_owners() -> dict[str, str]:
+    """读取成功入库链写下的归属；无标记的存量库仍是公共库。"""
+    from backend.rag.retriever import CORPUS_NAME_RE
+
+    if not CORPORA_DIR.exists():
+        return {}
+    owners: dict[str, str] = {}
+    for corpus_dir in sorted(path for path in CORPORA_DIR.iterdir() if path.is_dir()):
+        if not CORPUS_NAME_RE.fullmatch(corpus_dir.name):
+            continue
+        marker = corpus_dir / CORPUS_OWNER_MARKER
+        try:
+            owner = marker.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            continue
+        if not owner:
+            raise StageError(f"知识库「{corpus_dir.name}」的归属标记为空")
+        owners[corpus_dir.name] = owner
+    return owners
+
+
+def release_corpus_owner(corpus: str, actor_org_id: str) -> str:
+    """由引擎进程释放归属，返回 released / missing / forbidden。"""
+    from backend.rag.retriever import CORPUS_NAME_RE
+
+    name = corpus.strip().lower()
+    if not CORPUS_NAME_RE.fullmatch(name):
+        raise StageError(f"库名不合法：只允许小写字母数字与 - _，1-32 位（收到「{corpus}」）")
+    marker = CORPORA_DIR / name / CORPUS_OWNER_MARKER
+    try:
+        owner = marker.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return "missing"
+    if owner != actor_org_id:
+        return "forbidden"
+    try:
+        marker.unlink()
+    except FileNotFoundError:
+        return "missing"
+    return "released"
 
 
 # ── 创建 run：校验 + 落盘 + 发车 ────────────────────────────────────────────
@@ -2594,7 +3074,7 @@ def _require_corpus(corpus: str) -> str:
     return name
 
 
-def _reserve_corpus(corpus: str) -> None:
+def _reserve_corpus(corpus: str, run_id: str, owner_org_id: str = "") -> None:
     from backend.rag.retriever import CORPUS_NAME_RE
 
     name = corpus.strip().lower()
@@ -2602,7 +3082,8 @@ def _reserve_corpus(corpus: str) -> None:
         raise StageError(f"「{name}」是主语料的保留名，流水线不许占用")
     if not CORPUS_NAME_RE.fullmatch(name):
         raise StageError(f"库名不合法：只允许小写字母数字与 - _，1-32 位（收到「{corpus}」）")
-    for path in (CORPORA_DIR / name, KB / f"{name}_intake", GOLD_DIR / name):
+    corpus_dir = CORPORA_DIR / name
+    for path in (KB / f"{name}_intake", GOLD_DIR / name):
         if path.exists():
             # 只拒不指路的报错会让人卡住（A7）：管理者重投同一批语料是常态——
             # 上次投失败了、书更新了、想换个档位设置重来。说清三条出路。
@@ -2615,6 +3096,33 @@ def _reserve_corpus(corpus: str) -> None:
                 "  · 只是想补几篇文档进已有的库——勾上「追加到已有库」直接投，"
                 "既有块原样保留、旧课出处不断链；改过或要删的文档不在此列，那仍需整库重建。"
             )
+    CORPORA_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        # mkdir(exist_ok=False) 是跨线程/进程的原子占位。同名双投即使都在首条链
+        # 落索引前到达，也只能有一条取得这个目录。
+        corpus_dir.mkdir()
+    except FileExistsError as exc:
+        raise StageError(
+            f"「{name}」已经建过了（{_rel(corpus_dir)}）。这条链只建新库、不覆盖既有库——"
+            "覆盖意味着正在用它的课程和学情记录会对不上原来的出处。\n"
+            "想继续的话有三条路：\n"
+            "  · 换个库名新建（比如加个版本后缀），两份并存、旧课不受影响；\n"
+            "  · 确认旧库不再需要，先在知识库中心删掉它，再用同名投一次；\n"
+            "  · 只是想补几篇文档进已有的库——勾上「追加到已有库」直接投，"
+            "既有块原样保留、旧课出处不断链；改过或要删的文档不在此列，那仍需整库重建。"
+        ) from exc
+    try:
+        _atomic_write_marker(corpus_dir / CORPUS_RESERVATION_MARKER, run_id)
+    except BaseException:
+        shutil.rmtree(corpus_dir)
+        raise
+    try:
+        if owner_org_id:
+            # 目录占位拿到后立刻固化归属；此后才允许 run/docs、原件或索引落盘。
+            _write_corpus_owner_marker(name, owner_org_id)
+    except BaseException:
+        _cleanup_partial(name, run_id)
+        raise
 
 
 def _new_run(
@@ -2639,27 +3147,34 @@ def _new_run(
     from backend.rag.intake import parse_exclusions
 
     name = corpus.strip().lower()
+    owner_org_id = owner_org_id.strip()
+    run_id = f"{time.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
     if append:
         _require_corpus(name)
     else:
-        _reserve_corpus(name)
-    run = IntakeRun(
-        f"{time.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}",
-        name,
-        scope,
-        {
-            "tier_range": tier_range,
-            "build_vector": bool(build_vector),
-            "extract_concepts": bool(extract_concepts),
-            "trial_run": bool(trial_run),
-            "hands_on_safety": bool(hands_on_safety),
-            "append": bool(append),
-            "exclude": parse_exclusions(exclude),
-        },
-        owner_org_id,
-    )
-    run.docs_dir.mkdir(parents=True, exist_ok=True)
-    return run
+        _reserve_corpus(name, run_id, owner_org_id)
+    try:
+        run = IntakeRun(
+            run_id,
+            name,
+            scope,
+            {
+                "tier_range": tier_range,
+                "build_vector": bool(build_vector),
+                "extract_concepts": bool(extract_concepts),
+                "trial_run": bool(trial_run),
+                "hands_on_safety": bool(hands_on_safety),
+                "append": bool(append),
+                "exclude": parse_exclusions(exclude),
+            },
+            owner_org_id,
+        )
+        run.docs_dir.mkdir(parents=True, exist_ok=True)
+        return run
+    except BaseException:
+        if not append:
+            _cleanup_partial(name, run_id)
+        raise
 
 
 def estimate_chunks(sizes: list[int]) -> int:
@@ -2747,6 +3262,7 @@ def create_run(
     append: bool = False,
     # 疆域的「范围」：明确不教的路径前缀。留空则沿用这个库上一次接入时声明的那份。
     exclude: list[str] | str | None = None,
+    owner_org_id: str = "",
 ) -> IntakeRun:
     """校验上传、落盘、建 run 记录。**不发车**——发车走 `start_run`。"""
     if not files:
@@ -2760,21 +3276,26 @@ def create_run(
     check_budget([(safe_filename(n), len(b)) for n, b in files])
     run = _new_run(
         corpus, scope, tier_range, build_vector, extract_concepts, trial_run, hands_on_safety,
-        append, exclude,
+        append, exclude, owner_org_id,
     )
-    used: set[str] = set()
-    for raw_name, blob in files:
-        name = safe_filename(raw_name)
-        stem, suffix = Path(name).stem, Path(name).suffix
-        i = 2
-        while name in used:
-            name = f"{stem}-{i}{suffix}"
-            i += 1
-        used.add(name)
-        (run.docs_dir / name).write_bytes(blob)
-        run.record["files"].append({"name": name, "original": raw_name, "bytes": len(blob)})
-    run.flush()
-    return run
+    try:
+        used: set[str] = set()
+        for raw_name, blob in files:
+            name = safe_filename(raw_name)
+            stem, suffix = Path(name).stem, Path(name).suffix
+            i = 2
+            while name in used:
+                name = f"{stem}-{i}{suffix}"
+                i += 1
+            used.add(name)
+            (run.docs_dir / name).write_bytes(blob)
+            run.record["files"].append({"name": name, "original": raw_name, "bytes": len(blob)})
+        run.flush()
+        return run
+    except BaseException:
+        if not append:
+            _cleanup_partial(run.corpus, run.run_id)
+        raise
 
 
 def create_run_from_dir(
@@ -2791,6 +3312,7 @@ def create_run_from_dir(
     append: bool = False,
     # 疆域的「范围」：明确不教的路径前缀。留空则沿用这个库上一次接入时声明的那份。
     exclude: list[str] | str | None = None,
+    owner_org_id: str = "",
 ) -> IntakeRun:
     """zip 与 git 两条路的落地口：把一棵已经解好的目录树收进 run。
 
@@ -2802,17 +3324,22 @@ def create_run_from_dir(
 
     run = _new_run(
         corpus, scope, tier_range, build_vector, extract_concepts, trial_run, hands_on_safety,
-        append, exclude,
+        append, exclude, owner_org_id,
     )
     # 解压/落盘的字节上界：防 zip bomb 用，不是产品限额。按防崩底线的块数折算
     # （每块正文约 1.4KB），比任何真实语料都宽，只拦「解开来是几百 G」那种。
-    kept = collect_readable(src, run.docs_dir, MAX_EST_CHUNKS * 1400)
-    if not kept:
-        raise StageError("这份投料里没有任何可读文档")
-    check_budget(_effective_sizes(run.docs_dir, kept))
-    run.record["files"] = [{"name": rel, "original": rel, "bytes": size} for rel, size in kept]
-    run.flush()
-    return run
+    try:
+        kept = collect_readable(src, run.docs_dir, MAX_EST_CHUNKS * 1400)
+        if not kept:
+            raise StageError("这份投料里没有任何可读文档")
+        check_budget(_effective_sizes(run.docs_dir, kept))
+        run.record["files"] = [{"name": rel, "original": rel, "bytes": size} for rel, size in kept]
+        run.flush()
+        return run
+    except BaseException:
+        if not append:
+            _cleanup_partial(run.corpus, run.run_id)
+        raise
 
 
 #: `_inbox` 里的残包多久算过期。站点化之后投料先落这里、接收站①处理完就删，
@@ -2880,12 +3407,17 @@ def create_run_deferred(
         corpus, scope, tier_range, build_vector, extract_concepts, trial_run, hands_on_safety,
         append, exclude, owner_org_id,
     )
-    run.record["inbox"] = {"kind": inbox_kind, "ref": inbox_ref}
-    # 文件清单这时还不知道——接收站①收完才填。留空数组而不是不写这个键，
-    # 免得观看端要判两种形态。
-    run.record["files"] = []
-    run.flush()
-    return run
+    try:
+        run.record["inbox"] = {"kind": inbox_kind, "ref": inbox_ref}
+        # 文件清单这时还不知道——接收站①收完才填。留空数组而不是不写这个键，
+        # 免得观看端要判两种形态。
+        run.record["files"] = []
+        run.flush()
+        return run
+    except BaseException:
+        if not append:
+            _cleanup_partial(run.corpus, run.run_id)
+        raise
 
 
 def corpus_scope(corpus: str) -> str:
@@ -2931,12 +3463,21 @@ def create_checkup_run(corpus: str, scope: str = "") -> IntakeRun:
     gold = checkup_gold_dir(name)
     if not gold.is_dir():
         raise StageError(f"「{name}」没有冻结金标（{_rel(gold)}）——⑥ 无题可跑")
+    owner_org_id = ""
+    if name not in _MAIN_CORPUS_ALIASES:
+        try:
+            owner_org_id = (CORPORA_DIR / name / CORPUS_OWNER_MARKER).read_text(
+                encoding="utf-8"
+            ).strip()
+        except FileNotFoundError:
+            pass
     run_id = f"{time.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
     run = IntakeRun(
         run_id,
         name,
         scope or corpus_scope(name) or name,
         {"checkup": True, "trial_run": True, "build_vector": False, "extract_concepts": False},
+        owner_org_id,
     )
     run.dir.mkdir(parents=True, exist_ok=True)
     run.flush()
@@ -2952,43 +3493,120 @@ def create_checkup_run(corpus: str, scope: str = "") -> IntakeRun:
 #: 串行而不是拒绝：管理者只是来早了，拒了他会以为系统坏了。
 _CHAIN_GATE = threading.Semaphore(1)
 
+#: active + queued 的硬上限。在 `Thread.start()` 之前原子计数，所以线程数也被同一上限兜住。
+MAX_ADMITTED_RUNS_GLOBAL = int(os.environ.get("INTAKE_MAX_ADMITTED_GLOBAL", "4"))
+MAX_ADMITTED_RUNS_PER_ORG = int(os.environ.get("INTAKE_MAX_ADMITTED_PER_ORG", "2"))
+
 #: 正在排队等着开跑的 run。只用于给等待者报「前面还有几个」——
 #: 不说清楚的话排队和卡死在界面上长得一模一样。
 _CHAIN_WAITING: list[str] = []
 _CHAIN_WAITING_LOCK = threading.Lock()
+_CHAIN_ADMITTED: dict[str, str] = {}
+
+
+def _capacity_owner(run: IntakeRun) -> str:
+    return str(run.record.get("owner_org_id") or "").strip() or "<public>"
+
+
+def _discard_deferred_inbox(run: IntakeRun) -> None:
+    inbox = run.record.get("inbox")
+    if not isinstance(inbox, dict):
+        return
+    if inbox.get("kind") in ("zip", "dir"):
+        ref = Path(str(inbox.get("ref") or "")).resolve()
+        root = (RUNS_DIR / "_inbox").resolve()
+        try:
+            ref.relative_to(root)
+        except ValueError as exc:
+            raise StageError(f"拒绝删除 _inbox 之外的投料：{ref}") from exc
+        if ref.is_dir():
+            shutil.rmtree(ref)
+        else:
+            ref.unlink(missing_ok=True)
+    run.record.pop("inbox", None)
+
+
+def _reject_unstarted_run(run: IntakeRun, reason: str) -> None:
+    run.record["status"] = "failed"
+    run.record["finished_at"] = now_iso()
+    run.record["error"] = reason
+    _discard_deferred_inbox(run)
+    skip_cleanup = run.record["options"].get("checkup") or run.record["options"].get("append")
+    removed = [] if skip_cleanup else _cleanup_partial(run.corpus, run.run_id)
+    run.emit(
+        "run",
+        "run_rejected",
+        reason,
+        error=reason,
+        cleaned=removed,
+        retriable=True,
+    )
 
 
 def _run_with_gate(run: IntakeRun) -> None:
     """拿到闸再跑。等待期间把队列位置告诉管理者。"""
-    with _CHAIN_WAITING_LOCK:
-        ahead = len(_CHAIN_WAITING)
-        _CHAIN_WAITING.append(run.run_id)
-
-    if ahead or not _CHAIN_GATE.acquire(blocking=False):
-        run.emit(
-            "run",
-            "run_queued",
-            f"前面还有 {max(ahead, 1)} 个接入在跑，这条先排队。"
-            "这台机器只有 2 核，同时跑两条链会把彼此都拖慢，"
-            "所以一次只放一条进去——不用重投，轮到就自动开始。",
-            ahead=max(ahead, 1),
-        )
-        _CHAIN_GATE.acquire()
-
-    with _CHAIN_WAITING_LOCK:
-        if run.run_id in _CHAIN_WAITING:
-            _CHAIN_WAITING.remove(run.run_id)
+    acquired = False
     try:
+        acquired = _CHAIN_GATE.acquire(blocking=False)
+        if not acquired:
+            with _CHAIN_WAITING_LOCK:
+                ahead = max(_CHAIN_WAITING.index(run.run_id), 1)
+            run.emit(
+                "run",
+                "run_queued",
+                f"前面还有 {ahead} 个接入在跑，这条先排队。"
+                "这台机器只有 2 核，同时跑两条链会把彼此都拖慢，"
+                "所以一次只放一条进去——不用重投，轮到就自动开始。",
+                ahead=ahead,
+            )
+            _CHAIN_GATE.acquire()
+            acquired = True
+        with _CHAIN_WAITING_LOCK:
+            _CHAIN_WAITING.remove(run.run_id)
         execute(run)
     finally:
-        _CHAIN_GATE.release()
+        if acquired:
+            _CHAIN_GATE.release()
+        with _CHAIN_WAITING_LOCK:
+            if run.run_id in _CHAIN_WAITING:
+                _CHAIN_WAITING.remove(run.run_id)
+            _CHAIN_ADMITTED.pop(run.run_id, None)
 
 
 def start_run(run: IntakeRun) -> IntakeRun:
-    # 走闸不直接 execute：同时只跑一条链（C24），排队时告诉管理者前面还有几个。
-    threading.Thread(
+    # active + queued 在创建线程前一起占名额；撞线明确拒绝，不制造无界等待线程。
+    owner = _capacity_owner(run)
+    rejection = ""
+    with _CHAIN_WAITING_LOCK:
+        org_count = sum(1 for admitted_owner in _CHAIN_ADMITTED.values() if admitted_owner == owner)
+        if org_count >= MAX_ADMITTED_RUNS_PER_ORG:
+            rejection = (
+                f"机构接入任务 active+queued 已达上限 {MAX_ADMITTED_RUNS_PER_ORG}；"
+                "请等待本机构已有任务完成后重试。"
+            )
+        elif len(_CHAIN_ADMITTED) >= MAX_ADMITTED_RUNS_GLOBAL:
+            rejection = (
+                f"全局接入任务 active+queued 已达上限 {MAX_ADMITTED_RUNS_GLOBAL}；"
+                "请等待队列释放后重试。"
+            )
+        else:
+            _CHAIN_ADMITTED[run.run_id] = owner
+            _CHAIN_WAITING.append(run.run_id)
+    if rejection:
+        _reject_unstarted_run(run, rejection)
+        raise IntakeCapacityError(rejection)
+
+    thread = threading.Thread(
         target=_run_with_gate, args=(run,), name=f"intake-{run.run_id}", daemon=True
-    ).start()
+    )
+    try:
+        thread.start()
+    except BaseException:
+        with _CHAIN_WAITING_LOCK:
+            _CHAIN_WAITING.remove(run.run_id)
+            _CHAIN_ADMITTED.pop(run.run_id, None)
+        _reject_unstarted_run(run, "接入后台线程启动失败，任务未进入队列。")
+        raise
     return run
 
 

@@ -33,7 +33,10 @@ def _client(token: str = "test-internal-token") -> TestClient:
 
 def test_generate_requires_internal_token():
     client = _client()
-    resp = client.post("/internal/v1/personalize/generate", json={"userId": "1", "learningGoal": "完成 RAG 文档问答 Agent"})
+    resp = client.post(
+        "/internal/v1/personalize/generate",
+        json={"userId": "1", "corpus": "ai", "learningGoal": "完成 RAG 文档问答 Agent"},
+    )
     assert resp.status_code == 401
 
 
@@ -44,6 +47,7 @@ def test_generate_returns_apiresponse_envelope_and_metrics():
         headers={"x-internal-token": "test-internal-token", "x-trace-id": "t-123"},
         json={
             "userId": "42",
+            "corpus": "ai",
             "learningGoal": "完成 RAG 文档问答 Agent",
             "profile": {"background": "会 Python 不懂 Agent", "programming_level": 2, "agent_level": 0, "engineering_level": 2},
         },
@@ -62,6 +66,62 @@ def test_generate_returns_apiresponse_envelope_and_metrics():
     assert obs["engines"] and "hallucinationRate" in obs
 
 
+def test_deployed_http_generate_and_followup_preserve_external_corpus():
+    """生产入口必须把 corpus 穿过外层 schema、引擎 schema，最终落到 LearnerProfile。"""
+    from app.config.settings import settings
+    from app.main import app as deployed_app
+
+    client = TestClient(deployed_app)
+    headers = {"x-internal-token": settings.ai_service_token}
+    generated = client.post(
+        "/internal/v1/personalize/generate",
+        headers=headers,
+        json={
+            "userId": "mfg-http",
+            "corpus": "smart-manufacturing",
+            "learningGoal": "ROS2 与 S7-1200 PLC 协同控制",
+            "profile": {"background": "自动化专业", "learning_preference": "实操优先"},
+        },
+    )
+    assert generated.status_code == 200, generated.text
+    parent = generated.json()["data"]
+    assert parent["diagnosis"]["coverage"]["corpus"] == "smart-manufacturing"
+    assert parent["diagnosis"]["personalization_blueprint"]["corpus"] == "smart-manufacturing"
+
+    followed = client.post(
+        "/internal/v1/personalize/followup",
+        headers=headers,
+        json={
+            "userId": "mfg-http",
+            "corpus": "smart-manufacturing",
+            "profile": {"background": "自动化专业", "learning_preference": "实操优先"},
+            "parentRun": parent,
+            "feedback": {
+                "learner_profile_id": "user_mfg-http",
+                "quiz_score": 0.4,
+                "confidence": 2,
+                "concept_scores": {"S7 连接配置": 0.2},
+            },
+        },
+    )
+    assert followed.status_code == 200, followed.text
+    child = followed.json()["data"]
+    assert child["diagnosis"]["coverage"]["corpus"] == "smart-manufacturing"
+    assert child["diagnosis"]["personalization_blueprint"]["corpus"] == "smart-manufacturing"
+
+
+def test_deployed_http_rejects_generate_without_corpus():
+    from app.config.settings import settings
+    from app.main import app as deployed_app
+
+    response = TestClient(deployed_app).post(
+        "/internal/v1/personalize/generate",
+        headers={"x-internal-token": settings.ai_service_token},
+        json={"userId": "missing-corpus", "learningGoal": "学习 RAG"},
+    )
+    assert response.status_code == 422
+
+
 def test_env_from_model_config_bridges_all_chat_tiers():
     env = env_from_model_config(ModelConfig(model="deepseek-ai/DeepSeek-V3", baseUrl="https://x/v1", apiKey="sk-x"))
     for tier in ("FAST", "STRONG", "JUDGE"):
@@ -76,7 +136,10 @@ def test_env_empty_when_no_valid_config():
 
 def test_run_personalize_without_config_uses_default_routes():
     """无 modelConfig 时走默认模型路由（测试里由罐头网关承接），不再有确定性兜底。"""
-    run, metrics = run_personalize(PersonalizeRequest(userId="7", learningGoal="搭建多 Agent 协作的内容审核工作流"), "trace-x")
+    run, metrics = run_personalize(
+        PersonalizeRequest(userId="7", corpus="ai", learningGoal="搭建多 Agent 协作的内容审核工作流"),
+        "trace-x",
+    )
     assert run["run_id"]
     assert metrics.fallbackUsed is False
     assert metrics.model == "deterministic"
@@ -87,7 +150,7 @@ def test_followup_internal_endpoint_generates_child_run():
     generate_response = client.post(
         "/internal/v1/personalize/generate",
         headers={"x-internal-token": "test-internal-token", "x-trace-id": "parent-trace"},
-        json={"userId": "42", "learningGoal": "掌握 Agentic RAG"},
+        json={"userId": "42", "corpus": "ai", "learningGoal": "掌握 Agentic RAG"},
     )
     parent = generate_response.json()["data"]
 
@@ -96,6 +159,7 @@ def test_followup_internal_endpoint_generates_child_run():
         headers={"x-internal-token": "test-internal-token", "x-trace-id": "child-trace"},
         json={
             "userId": "42",
+            "corpus": "ai",
             "profile": {"background": "会 Python，正在学习 Agent"},
             "parentRun": parent,
             "feedback": {
@@ -214,7 +278,7 @@ def test_learning_modes_endpoint_contract():
 def test_stream_personalize_events_order_and_final_run():
     events = list(
         stream_personalize_events(
-            PersonalizeRequest(userId="11", learningGoal="完成 RAG 文档问答 Agent"),
+            PersonalizeRequest(userId="11", corpus="ai", learningGoal="完成 RAG 文档问答 Agent"),
             "stream-trace",
         )
     )
@@ -236,7 +300,7 @@ def test_generate_stream_endpoint_emits_sse_frames():
     resp = client.post(
         "/internal/v1/personalize/generate/stream",
         headers={**HEADERS, "x-trace-id": "sse-1"},
-        json={"userId": "12", "learningGoal": "掌握 Agentic RAG"},
+        json={"userId": "12", "corpus": "ai", "learningGoal": "掌握 Agentic RAG"},
     )
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/event-stream")
@@ -297,11 +361,12 @@ def test_pretest_grade_applies_divergence_correction_rule():
 
 def test_run_personalize_followup_uses_parent_goal():
     parent, _ = run_personalize(
-        PersonalizeRequest(userId="9", learningGoal="完成工具调用与审核闭环"),
+        PersonalizeRequest(userId="9", corpus="ai", learningGoal="完成工具调用与审核闭环"),
         "parent",
     )
     request = PersonalizeFollowupRequest(
         userId="9",
+        corpus="ai",
         parentRun=parent,
         feedback={
             "learner_profile_id": "user_9",

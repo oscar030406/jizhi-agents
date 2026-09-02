@@ -5,6 +5,9 @@ from typing import Annotated, Any
 from pydantic import BaseModel, Field
 
 
+CORPUS_PATTERN = r"^[a-z0-9][a-z0-9_-]{0,31}$"
+
+
 class PersonalizeModelConfig(BaseModel):
     """Java 后端按请求透传的模型配置。"""
 
@@ -42,6 +45,7 @@ class PersonalizeGenerateRequest(BaseModel):
     """Spring Boot → ai-service 的内部个性化生成请求。"""
 
     userId: str = Field(min_length=1, max_length=64)
+    corpus: str = Field(min_length=1, max_length=32, pattern=CORPUS_PATTERN)
     learningGoal: str = Field(min_length=1, max_length=500)
     profile: PersonalizeProfile = Field(default_factory=PersonalizeProfile)
     modelConfig: PersonalizeModelConfig | None = None
@@ -105,6 +109,7 @@ class PersonalizeFollowupRequest(BaseModel):
     """Spring Boot → ai-service 的反馈二次生成请求。"""
 
     userId: str = Field(min_length=1, max_length=64)
+    corpus: str = Field(min_length=1, max_length=32, pattern=CORPUS_PATTERN)
     profile: PersonalizeProfile = Field(default_factory=PersonalizeProfile)
     parentRun: dict[str, Any]
     feedback: PersonalizeFeedback

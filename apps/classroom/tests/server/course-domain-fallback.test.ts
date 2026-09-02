@@ -10,46 +10,41 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import {
-  courseDomainOf,
-  RETIRED_DOMAIN,
-  UNKNOWN_DOMAIN,
-} from '@/lib/server/course-domains';
+import { courseDomainOf, RETIRED_DOMAIN, UNKNOWN_DOMAIN } from '@/lib/server/course-domains';
 
 const course = (over: Record<string, unknown> = {}) =>
   ({ scenes: [], ...over }) as Parameters<typeof courseDomainOf>[0];
 
 describe('课程自己记的出身最大', () => {
-  it('路径上的课，也不许改写它自己记的库', () => {
+  it('课程出身压过引用推断', () => {
     // 这就是 c3HH74qwAH 的原形
     const c = course({ stage: { origin: { corpus: 'rag-adv' } } });
-    expect(courseDomainOf(c, true)).toBe('rag-adv');
+    expect(courseDomainOf(c)).toBe('rag-adv');
   });
 
   it('服务端生成记录里的库同样压得过路径规则', () => {
     const c = course({ generation: { profile: { corpus: 'vecdb' } } });
-    expect(courseDomainOf(c, true)).toBe('vecdb');
+    expect(courseDomainOf(c)).toBe('vecdb');
   });
 });
 
 describe('em 前缀归主库', () => {
-  it('引 em 块的课路径内外都判 ai（2026-08-28 起 em 规则直接映射主库，不再靠路径纠偏）', () => {
+  it('引 em 块的课判 ai（2026-08-28 起 em 规则直接映射主库）', () => {
     const c = course({ scenes: [{ audit: { sources: [{ source_id: 'em1#s2' }] } }] });
-    expect(courseDomainOf(c, true)).toBe('ai');
-    expect(courseDomainOf(c, false)).toBe('ai');
+    expect(courseDomainOf(c)).toBe('ai');
   });
 });
 
 describe('判不出来就说判不出来', () => {
   it('什么信号都没有 → unknown，不冒充主域', () => {
-    expect(courseDomainOf(course(), false)).toBe(UNKNOWN_DOMAIN);
+    expect(courseDomainOf(course())).toBe(UNKNOWN_DOMAIN);
   });
 
   it('认不出的前缀不投票给 ai', () => {
     // 投币新建的库前缀一律不在手工前缀表里。默认投主域等于每建一个新库
     // 就往 ai 里掺一批不属于它的课。
     const c = course({ scenes: [{ audit: { sources: [{ source_id: 'brand-new-lib#s1' }] } }] });
-    expect(courseDomainOf(c, false)).toBe(UNKNOWN_DOMAIN);
+    expect(courseDomainOf(c)).toBe(UNKNOWN_DOMAIN);
   });
 });
 
@@ -58,17 +53,17 @@ describe('库被删了如实标 retired', () => {
 
   it('出身记的库不在清单里 → retired', () => {
     const c = course({ stage: { origin: { corpus: 'vecdb' } } });
-    expect(courseDomainOf(c, false, live)).toBe(RETIRED_DOMAIN);
+    expect(courseDomainOf(c, live)).toBe(RETIRED_DOMAIN);
   });
 
   it('库还在就照常返回库名', () => {
     const c = course({ stage: { origin: { corpus: 'iotdb' } } });
-    expect(courseDomainOf(c, false, live)).toBe('iotdb');
+    expect(courseDomainOf(c, live)).toBe('iotdb');
   });
 
   it('清单读不到时跳过这一判，不把所有课都判成 retired', () => {
     const c = course({ stage: { origin: { corpus: 'vecdb' } } });
-    expect(courseDomainOf(c, false, undefined)).toBe('vecdb');
+    expect(courseDomainOf(c, undefined)).toBe('vecdb');
   });
 });
 

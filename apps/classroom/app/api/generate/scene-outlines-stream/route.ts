@@ -21,6 +21,7 @@ import {
   corpusOf,
 } from '@/lib/generation/learner-profile';
 import {
+  bindLearningObjectivesToOutlines,
   groundingRefsForOutline,
   resolveOutlineEngine,
   validateAndRepairLearningContract,
@@ -634,6 +635,10 @@ export async function POST(req: NextRequest) {
                   violations.length === 0
                 ) {
                   learningContract = contractResult.contract;
+                  parsedOutlines = bindLearningObjectivesToOutlines(
+                    contractResult.contract,
+                    parsedOutlines,
+                  );
                   if (contractResult.repaired) {
                     log.info('LearningContract normalized from request-grounded identifiers');
                   }

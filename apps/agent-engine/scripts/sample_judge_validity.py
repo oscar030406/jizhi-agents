@@ -33,7 +33,6 @@ def cmd_sample(args) -> None:
     from backend.agents.knowledge_retrieval_agent import KnowledgeRetrievalAgent
     from backend.agents.learner_diagnosis_agent import LearnerDiagnosisAgent
     from backend.agents.resource_generation_agent import ResourceGenerationAgent
-    from backend.schemas.learner import DiagnosisResult
     from backend.services.data_loader import (
         get_learner_profile, load_e2e_cases, load_pretest_questions)
     from backend.services.quiz_service import estimate_pretest_from_profile
@@ -45,11 +44,9 @@ def cmd_sample(args) -> None:
         diagnosis = LearnerDiagnosisAgent().run(
             profile, estimate_pretest_from_profile(profile, load_pretest_questions()),
             learning_goal=case.learning_goal)
-        generic = DiagnosisResult.model_validate(
-            diagnosis.model_dump(mode="python") | {"personalization_blueprint": None})
-        retrieval = KnowledgeRetrievalAgent().run(case.learning_goal, generic)
-        resources = ResourceGenerationAgent().run(profile, case.learning_goal, generic, retrieval)
-        audit = ContentAuditAgent().run(resources, generic, retrieval)
+        retrieval = KnowledgeRetrievalAgent().run(case.learning_goal, diagnosis)
+        resources = ResourceGenerationAgent().run(profile, case.learning_goal, diagnosis, retrieval)
+        audit = ContentAuditAgent().run(resources, diagnosis, retrieval)
         chunk_by_id = {c.source_id: c for c in retrieval.retrieved_chunks}
         for vi, v in enumerate(audit.claim_verdicts):
             evidence = " / ".join(

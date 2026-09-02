@@ -8,7 +8,12 @@ from backend.schemas.learner import (
     SkillRequirement,
 )
 from backend.services.concept_difficulty import concept_difficulty_map
-from backend.services.concept_graph import concept_meta, prerequisite_closure, topological_order
+from backend.services.concept_graph import (
+    concept_meta,
+    isolated_corpus,
+    prerequisite_closure,
+    topological_order,
+)
 from backend.services.goal_concepts import goal_concepts
 
 TARGET_MASTERY = {"L1": 0.45, "L2": 0.60, "L3": 0.75, "L4": 0.90}
@@ -18,24 +23,31 @@ def build_personalization_blueprint(
     profile: LearnerProfile,
     learning_goal: str,
     mastery_vector: dict[str, float],
+    corpus: str,
 ) -> PersonalizationBlueprint:
     """构造可复算的 goal→skill→gap→content 个性化蓝图。"""
-    direct_concepts = goal_concepts(learning_goal)
-    required_concepts = topological_order(prerequisite_closure(direct_concepts))
+    name = corpus.strip().lower()
+    if not name:
+        raise ValueError("个性化蓝图必须显式指定 corpus")
+    domain = isolated_corpus(name)
+    direct_concepts = goal_concepts(learning_goal, name)
+    required_concepts = topological_order(
+        prerequisite_closure(direct_concepts, domain), domain
+    )
     if not required_concepts:
         required_concepts = direct_concepts
+    mapping_status = "mapped" if direct_concepts else "unmapped_goal"
 
-    difficulty_map = concept_difficulty_map()
+    # 独立域没有经过 AI 主域那套难度定标；同名 ID 也不能借主域分数。
+    difficulty_map = {} if domain else concept_difficulty_map()
     requirements: list[SkillRequirement] = []
     unsorted_gaps: list[tuple[int, int, SkillGap]] = []
     for order, concept in enumerate(required_concepts):
-        meta = concept_meta(concept)
+        meta = concept_meta(concept, domain)
         level = str(meta.get("difficulty") or f"L{difficulty_map.get(concept, 2)}")
         if level not in TARGET_MASTERY:
             level = "L2"
         target = TARGET_MASTERY[level]
-        current = round(max(0.0, min(1.0, mastery_vector.get(concept, 0.0))), 3)
-        gap_value = round(max(0.0, target - current), 3)
         relationship = "目标直接要求" if concept in direct_concepts else "目标前置技能"
         requirements.append(
             SkillRequirement(
@@ -45,23 +57,26 @@ def build_personalization_blueprint(
                 reason=f"{relationship}；概念图标注难度为 {level}。",
             )
         )
-        unsorted_gaps.append(
-            (
-                -round(gap_value * 1000),
-                order,
-                SkillGap(
-                    concept=concept,
-                    current_mastery=current,
-                    target_mastery=target,
-                    gap=gap_value,
-                    priority=1,
-                    reason=(
-                        f"当前掌握度 {current:.2f}，目标掌握度 {target:.2f}；"
-                        f"{relationship}。"
+        if concept in mastery_vector:
+            current = round(max(0.0, min(1.0, mastery_vector[concept])), 3)
+            gap_value = round(max(0.0, target - current), 3)
+            unsorted_gaps.append(
+                (
+                    -round(gap_value * 1000),
+                    order,
+                    SkillGap(
+                        concept=concept,
+                        current_mastery=current,
+                        target_mastery=target,
+                        gap=gap_value,
+                        priority=1,
+                        reason=(
+                            f"当前掌握度 {current:.2f}，目标掌握度 {target:.2f}；"
+                            f"{relationship}。"
+                        ),
                     ),
-                ),
+                )
             )
-        )
 
     sorted_gaps = [item[2] for item in sorted(unsorted_gaps, key=lambda item: (item[0], item[1]))]
     skill_gaps = [gap.model_copy(update={"priority": index + 1}) for index, gap in enumerate(sorted_gaps)]
@@ -69,11 +84,18 @@ def build_personalization_blueprint(
     content, practice, assessment = _strategies(learner_type, profile.learning_preference)
     resource_mix = _resource_mix(profile, learner_type)
     refined_goal = (
-        f"围绕“{learning_goal.strip()}”，按前置关系补齐 "
-        f"{len([gap for gap in skill_gaps if gap.gap > 0])} 项技能缺口，"
-        f"最终完成可运行、可审核、可评测的学习产物。"
+        f"目标“{learning_goal.strip()}”未能映射到领域「{name}」的概念词表；"
+        "已停止技能推断，请补充领域词表或调整学习目标。"
+        if mapping_status == "unmapped_goal"
+        else (
+            f"围绕“{learning_goal.strip()}”，按前置关系组织 {len(required_concepts)} 项领域技能；"
+            f"其中 {len(skill_gaps)} 项有测量证据可计算缺口，"
+            "最终完成可运行、可审核、可评测的学习产物。"
+        )
     )
     return PersonalizationBlueprint(
+        corpus=name,
+        goal_mapping_status=mapping_status,
         refined_goal=refined_goal,
         required_skills=requirements,
         skill_gaps=skill_gaps,
@@ -87,7 +109,13 @@ def build_personalization_blueprint(
 
 def _learner_type(profile: LearnerProfile, mastery_vector: dict[str, float]) -> str:
     values = list(mastery_vector.values())
-    average = sum(values) / len(values) if values else 0.0
+    if not values:
+        if profile.programming_level <= 1 or profile.engineering_level <= 1:
+            return "guided_beginner"
+        if profile.programming_level >= 3 and profile.engineering_level >= 3:
+            return "systems_engineer"
+        return "practice_builder"
+    average = sum(values) / len(values)
     if average < 0.40 or profile.programming_level <= 1 or profile.engineering_level <= 1:
         return "guided_beginner"
     if average >= 0.70 or (profile.engineering_level >= 3 and profile.programming_level >= 3):
