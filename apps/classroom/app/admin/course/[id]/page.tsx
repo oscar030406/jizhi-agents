@@ -29,6 +29,8 @@ import { corpusOwnership, orgForAccount } from '@/lib/accounts/org-store';
 import { notableClaims } from '@/lib/server/admin-overview';
 import { isValidClassroomId, readClassroom } from '@/lib/server/classroom-storage';
 import { courseVisibleToOrg } from '@/lib/server/course-access';
+import { decideCourseLearnerRelease, readManualRelease } from '@/lib/generation/learner-release';
+import { ManualReleaseControl } from '@/components/admin/manual-release-control';
 import { SiteHeader } from '@/components/site-header';
 
 export const dynamic = 'force-dynamic';
@@ -135,6 +137,13 @@ export default async function AdminCoursePage({
     title?: string;
     audit: SceneAudit;
   }>;
+  const release = decideCourseLearnerRelease(course);
+  const releaseReasons = [
+    ...release.courseReasons,
+    ...release.contractViolations.slice(0, 6),
+    ...release.blockedScenes.map((b) => `${b.sceneId}: ${b.reasons.join(', ')}`),
+  ];
+  const manualRelease = readManualRelease((course.stage as { manualRelease?: unknown })?.manualRelease);
 
   return (
     <>
@@ -148,6 +157,18 @@ export default async function AdminCoursePage({
           <p className="mt-3 text-sm text-muted-foreground">
             {scenes.length} / {course.scenes?.length ?? 0} 个场景有审核账单
           </p>
+
+          {org?.memberRole === 'owner' && (
+            <div className="mt-6">
+              <ManualReleaseControl
+                courseId={id}
+                eligible={release.eligible}
+                protocol={release.protocol}
+                reasons={releaseReasons}
+                manualRelease={manualRelease}
+              />
+            </div>
+          )}
 
           <div className="mt-10 space-y-5">
             {scenes.length === 0 && (

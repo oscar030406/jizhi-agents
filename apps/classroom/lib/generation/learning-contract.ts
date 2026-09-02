@@ -122,7 +122,7 @@ const WORKFLOW_OR_JUDGMENT =
 
 // 程序性/动手类动作动词：只在课程没有 pbl 场景时视为不可评（见目标校验处注释）
 const PROCEDURAL_ACTION =
-  /(执行|配置|操作|标定|安装|调试|上电|部署|搭建|接线|维修|更换|校准|停机|编写|写出.{0,8}代码|写代码|运行代码|调用.{0,6}工具完成|perform|configure|operate|install|calibrate|deploy|set up|write (the )?code|run (the )?code)/iu;
+  /(执行(?!器|机构|层)|配置(?!文件|项|参数的含义)|操作(?!系统|符)|标定|安装|调试|上电|部署|搭建|接线|维修|更换|校准|停机|运行代码|调用.{0,6}工具完成|perform|configure|operate|install|calibrate|deploy|set up|run (the )?code)/iu;
 const NON_MEASURABLE_ACTION =
   /^(?:(?:理解|了解|掌握|熟悉|知道|认识|学习)(?:.+)?|(?:understand|know|learn|be familiar with|appreciate)(?:\s+.+)?)$/iu;
 const OBSERVABLE_ACTION =
@@ -925,13 +925,17 @@ export function validateAndRepairLearningContract(
     // 在浏览器里做不到，两位语义判官必然判「媒介无法承载」（2026-09-02 智造域第七跑：
     // 三个目标全是这种写法，全部 misaligned）。提示词规则模型不听，这里机械判：
     // 进修订，要求改写成测验可判定的认知动作（判定/排序/识别/说明/写出清单/补全关键步骤）。
-    if (
-      !handsOnAvailable &&
-      (PROCEDURAL_ACTION.test(objective.action) || PROCEDURAL_ACTION.test(objective.successCriterion))
-    ) {
-      violations.push(
-        `objective ${objective.id} action "${objective.action}" is a hands-on procedure but this course has no pbl scene — rephrase it as a quiz-gradable cognitive action (e.g. 判定/排序/识别错误步骤/写出检查清单/补全关键参数), and phrase successCriterion the same way`,
-      );
+    if (!handsOnAvailable) {
+      const hit = PROCEDURAL_ACTION.test(objective.action)
+        ? `action "${objective.action}"`
+        : PROCEDURAL_ACTION.test(objective.successCriterion)
+          ? `successCriterion "${objective.successCriterion}"`
+          : null;
+      if (hit) {
+        violations.push(
+          `objective ${objective.id} ${hit} describes a hands-on procedure but this course has no pbl or procedural-skill scene — rephrase it as a quiz-gradable cognitive action (判定/排序/识别错误步骤/写出检查清单/补全关键参数或代码行), and keep action and successCriterion consistent`,
+        );
+      }
     }
     if (seenObjectiveIds.has(objective.id)) {
       violations.push(`objective id ${objective.id} is duplicated`);
@@ -967,6 +971,24 @@ export function validateAndRepairLearningContract(
   }
   if (feedback.refs.some((id) => !isActivityScene(sceneById.get(id)))) {
     violations.push('feedbackRetry must reference an interactive, pbl, or quiz scene');
+  }
+  // 一屏「课程导览」挂满全部目标的前置激活，两位语义判官必判「泛谈，未激活该目标的先备经验」
+  // （2026-09-02 智造第十跑：scene_1 挂 O1–O4 全部 misaligned）。机械口径：一个前置激活屏最多服务两个目标，
+  // 且标题不能是导览/概述/总则类。
+  for (const id of prerequisite.refs) {
+    const scene = sceneById.get(id);
+    if (!scene) continue;
+    const served = objectiveIdsForOutline(scene, seenObjectiveIds);
+    if (served.length > 2) {
+      violations.push(
+        `prerequisiteActivation scene ${id} is mapped to ${served.length} objectives — one activation scene can elicit prior experience for at most 2 objectives; add per-objective activation scenes (or merge into the demonstration scene of each objective)`,
+      );
+    }
+    if (/(导览|概述|总览|总则|课程介绍|欢迎)/u.test(scene.title ?? '')) {
+      violations.push(
+        `prerequisiteActivation scene ${id} "${scene.title}" reads as a course overview; an activation scene must pose 2–3 recall prompts tied to the mapped objective's action, not introduce the course`,
+      );
+    }
   }
   if (transfer.refs.some((id) => !isAssessmentScene(sceneById.get(id)))) {
     violations.push('transferApplication must reference a quiz or pbl scene');

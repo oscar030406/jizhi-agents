@@ -93,7 +93,23 @@ export interface CourseLearnerReleaseDecision {
    *   仲裁三出口里「放行」「标记风险放行」可见，「拦截转人工」与审核缺失不可见。
    *   不这样做的后果实测过（2026-09-02）：线上 52 门课全部消失，公开列表为空。
    */
-  protocol: 'learning-contract' | 'scene-audit-legacy';
+  protocol: 'learning-contract' | 'scene-audit-legacy' | 'manual-review';
+}
+
+/** 仲裁三出口里的「拦截转人工」：机构所有者复核后放行的落盘记录。 */
+export interface ManualRelease {
+  by: string;
+  at: string;
+  note?: string;
+}
+
+export function readManualRelease(value: unknown): ManualRelease | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const by = typeof record.by === 'string' ? record.by.trim() : '';
+  const at = typeof record.at === 'string' ? record.at.trim() : '';
+  if (!by || !at || Number.isNaN(Date.parse(at))) return null;
+  return { by, at, ...(typeof record.note === 'string' && record.note.trim() ? { note: record.note.trim() } : {}) };
 }
 
 /** 旧协议：一屏能否给学习者看——审核在、没被拦截转人工、不是审核基础设施失败。 */
@@ -115,12 +131,25 @@ function legacySceneBlockReasons(scene: LearnerReleaseScene): LearnerReleaseBloc
 export function decideCourseLearnerRelease(course: {
   scenes?: readonly LearnerReleaseScene[];
   generating?: unknown;
-  stage?: { learningContract?: unknown; courseAudit?: SceneAudit | null };
+  stage?: { learningContract?: unknown; courseAudit?: SceneAudit | null; manualRelease?: unknown };
 }): CourseLearnerReleaseDecision {
   const scenes = Array.isArray(course.scenes) ? course.scenes : [];
   const courseReasons: CourseLearnerReleaseBlockReason[] = [];
   if (course.generating) courseReasons.push('course_incomplete');
   if (scenes.length === 0) courseReasons.push('course_empty');
+
+  // 仲裁三出口的第三条：拦截转人工。机构所有者在管理端复核判词后显式放行，发布门认这条记录，
+  // 但生成未完成、空课照旧不放；谁放行、何时放行随课程落盘，学习者侧可见「人工复核放行」。
+  const manual = readManualRelease(course.stage?.manualRelease);
+  if (manual && courseReasons.length === 0) {
+    return {
+      eligible: true,
+      courseReasons: [],
+      contractViolations: [],
+      blockedScenes: [],
+      protocol: 'manual-review',
+    };
+  }
 
   const courseAudit = course.stage?.courseAudit;
   const contract = course.stage?.learningContract;

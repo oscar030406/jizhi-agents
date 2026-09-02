@@ -362,6 +362,26 @@ describe('学习者发布资格纯函数', () => {
     expect(result.courseReasons).toContain('course_incomplete');
   });
 
+  it('机构所有者复核放行（manualRelease）后课程可见，协议标 manual-review；生成中仍不放', () => {
+    const manual = { by: 'acct_owner', at: '2026-09-02T17:00:00.000Z', note: '判词已复核' };
+    const released = decideCourseLearnerRelease({
+      stage: { learningContract: releasePlan, courseAudit: null, manualRelease: manual },
+      scenes: releasedScenes,
+    });
+    expect(released.protocol).toBe('manual-review');
+    expect(released.eligible).toBe(true);
+    const generating = decideCourseLearnerRelease({
+      stage: { learningContract: releasePlan, courseAudit: null, manualRelease: manual },
+      scenes: releasedScenes,
+      generating: { done: 1, total: 3 },
+    });
+    expect(generating.eligible).toBe(false);
+    expect(decideCourseLearnerRelease({
+      stage: { manualRelease: { by: '', at: 'not-a-date' } },
+      scenes: releasedScenes,
+    }).protocol).toBe('scene-audit-legacy');
+  });
+
   it('没有教学契约的旧课按屏级审核协议判定：审核在且未拦截即可见，并标明协议', () => {
     const result = decideCourseLearnerRelease({ scenes: releasedScenes });
     expect(result.protocol).toBe('scene-audit-legacy');
