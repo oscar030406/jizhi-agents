@@ -37,6 +37,13 @@ token_is_safe 'token_with-safe-chars_0123456789'
 ! token_is_safe '0123456789abcdef0123456789abc=+'
 ! token_is_safe 'demo-internal-token'
 
+printf '%s\n' '{"success":true,"classrooms":[{"id":"public-course_1"}]}' >"$base/public-classrooms.json"
+[[ "$(public_classroom_id "$base/public-classrooms.json")" == public-course_1 ]]
+printf '%s\n' '{"success":true,"classrooms":[]}' >"$base/public-classrooms.json"
+! public_classroom_id "$base/public-classrooms.json" >/dev/null 2>&1
+printf '%s\n' '{"success":true,"classrooms":[{"id":"../escape"}]}' >"$base/public-classrooms.json"
+! public_classroom_id "$base/public-classrooms.json" >/dev/null 2>&1
+
 # Archive gate accepts only relative, in-release symlinks and regular payload types.
 mkdir -p "$base/archive-src/dir"
 printf payload >"$base/archive-src/dir/file"
@@ -151,9 +158,9 @@ chmod 0600 "$stage"/*
 prefix="$(sha256sum "$stage/SHA256SUMS" | cut -c1-12)"
 release_id="$sha-$prefix"
 awk '/^validate_archive "\$web_archive"/{exit} {print}' "$apply" >"$base/preflight.sh"
-bash "$base/preflight.sh" "$release_id" "$stage" E-GoJ6GJDc >/dev/null
+bash "$base/preflight.sh" "$release_id" "$stage" >/dev/null
 printf tamper >>"$stage/manifest.json"
-! bash "$base/preflight.sh" "$release_id" "$stage" E-GoJ6GJDc >/dev/null 2>&1
+! bash "$base/preflight.sh" "$release_id" "$stage" >/dev/null 2>&1
 
 # Every declared fault point is injectable and returns the reserved failure status.
 mapfile -t fault_points < <(sed -n 's/^[[:space:]]*fault_point \([A-Za-z0-9_-]*\)$/\1/p' "$apply" | sort -u)

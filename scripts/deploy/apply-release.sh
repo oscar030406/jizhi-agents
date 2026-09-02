@@ -107,7 +107,7 @@ validate_release_permissions() {
 
 validate_release_access() {
   local root="$1" user="$2"
-  [[ -z "$(runuser -u "$user" -- find "$root" -xdev \
+  [[ -z "$(cd / && runuser -u "$user" -- find "$root" -xdev \
     \( \( -type d ! -executable \) -o \( -type f ! -readable \) \) -print -quit)" ]]
 }
 
@@ -245,6 +245,24 @@ wait_http() {
     sleep 2
   done
   return 1
+}
+
+public_classroom_id() {
+  python3 - "$1" <<'PY'
+import json
+import re
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    body = json.load(handle)
+rows = body.get("classrooms") if body.get("success") is True else None
+if not isinstance(rows, list) or not rows:
+    raise SystemExit("public classroom smoke requires at least one learner-visible course")
+course_id = rows[0].get("id") if isinstance(rows[0], dict) else None
+if not isinstance(course_id, str) or re.fullmatch(r"[A-Za-z0-9_-]+", course_id) is None:
+    raise SystemExit("public classroom list returned an invalid course id")
+print(course_id)
+PY
 }
 
 fault_point() {
@@ -609,11 +627,10 @@ case "${1:-}" in
     ;;
 esac
 
-release_id="${1:?usage: apply-release.sh <full-sha-package-prefix> <staging-dir> <classroom-id>}"
-staging_arg="${2:?usage: apply-release.sh <full-sha-package-prefix> <staging-dir> <classroom-id>}"
-classroom_id="${3:?usage: apply-release.sh <full-sha-package-prefix> <staging-dir> <classroom-id>}"
+[[ "$#" == 2 ]] || die "usage: apply-release.sh <full-sha-package-prefix> <staging-dir>"
+release_id="$1"
+staging_arg="$2"
 [[ "$release_id" =~ ^[0-9a-f]{40}-[0-9a-f]{12}$ ]] || die "invalid release id"
-[[ "$classroom_id" =~ ^[A-Za-z0-9_-]+$ ]] || die "invalid classroom id"
 [[ "$staging_arg" == /* && ! -L "$staging_arg" ]] || die "staging path must be an absolute real path"
 staging="$(readlink -f -- "$staging_arg")" || die "staging path does not resolve"
 [[ "$staging" == "$staging_arg" ]] || die "staging path must already be canonical"
@@ -951,6 +968,11 @@ wait_http http://127.0.0.1:8001/health
 wait_http http://127.0.0.1:3210/
 wait_http http://127.0.0.1:3210/api/auth
 wait_http http://127.0.0.1:3210/admin/org
+public_classrooms="$rollback_dir/public-classrooms.json"
+wait_http http://127.0.0.1:3210/api/classroom
+curl -fsS --max-time 15 http://127.0.0.1:3210/api/classroom >"$public_classrooms"
+classroom_id="$(public_classroom_id "$public_classrooms")"
+rm -f -- "$public_classrooms"
 wait_http "http://127.0.0.1:3210/api/classroom?id=$classroom_id"
 wait_http "http://127.0.0.1:3210/classroom/$classroom_id"
 fault_point smoke-complete
