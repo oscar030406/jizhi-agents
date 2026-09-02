@@ -765,7 +765,8 @@ if [[ "$reuse_release" == 0 ]]; then
   install -d -m 0755 "$engine_incoming/data"
   python3 -m venv "$engine_incoming/.venv"
   "$engine_incoming/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir \
-    --index-url https://pypi.org/simple --require-hashes -r "$engine_incoming/requirements.production.lock"
+    --index-url "${JIZHI_PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}" \
+    --require-hashes -r "$engine_incoming/requirements.production.lock"
   "$engine_incoming/.venv/bin/python" -m pip freeze >"$engine_incoming/installed-requirements.txt"
   verify_engine_venv "$engine_incoming"
   printf '%s\n' "$release_id" >"$web_incoming/.jizhi-release-id"
