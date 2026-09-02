@@ -29,6 +29,19 @@ import {
 import { blueprintDirective, type LearnerBlueprint } from './learner-profile';
 const log = createLogger('Generation');
 
+type OutlineGenerationData = {
+  languageDirective: string;
+  courseTitle?: string;
+  outlines: SceneOutline[];
+  learningContract?: LearningContract;
+};
+
+const OUTLINE_QUALITY_REVISION_SYSTEM = `You are the course-outline quality revision stage.
+Return one complete JSON object with exactly languageDirective, courseTitle, learningContract, and outlines. Do not return prose or markdown.
+Repair the rejected draft pedagogically: keep sound domain content and learner adaptation, but change objectives, scene mappings, scene types, ordering, descriptions, or phase references when the validator proves they are inconsistent.
+Every objective must have a genuine prerequisite, demonstration, learner action, later actionable feedback and retry, and later unseen quiz or PBL assessment. Do not mechanically attach every objective to every scene; a scene may name an objective only when its description and keyPoints actually serve that objective.
+Use only the allowed grounding refs. Recheck every listed violation before returning the full corrected JSON.`;
+
 /**
  * Used when the outline stage fails to produce an explicit directive (LLM
  * schema regression, empty response, upstream error). Downstream prompts
@@ -59,14 +72,7 @@ export async function generateSceneOutlinesFromRequirements(
     /** Production callers enable this to block structurally incomplete courses. */
     enforceLearningContract?: boolean;
   },
-): Promise<
-  GenerationResult<{
-    languageDirective: string;
-    courseTitle?: string;
-    outlines: SceneOutline[];
-    learningContract?: LearningContract;
-  }>
-> {
+): Promise<GenerationResult<OutlineGenerationData>> {
   // Build available images description for the prompt
   let availableImagesText = 'No images available';
   let visionImages: Array<{ id: string; src: string }> | undefined;
@@ -154,8 +160,9 @@ export async function generateSceneOutlinesFromRequirements(
     return { success: false, error: 'Prompt template not found' };
   }
 
-  try {
-    const response = await aiCall(prompts.system, prompts.user, visionImages);
+  const evaluateResponse = (
+    response: string,
+  ): { result: GenerationResult<OutlineGenerationData>; violations?: string[] } => {
     const parsed = parseJsonResponse<
       | {
           languageDirective: string;
@@ -186,11 +193,11 @@ export async function generateSceneOutlinesFromRequirements(
       rawOutlines = parsed.outlines;
       rawLearningContract = parsed.learningContract;
     } else {
-      return { success: false, error: 'Failed to parse scene outlines response' };
+      return { result: { success: false, error: 'Failed to parse scene outlines response' } };
     }
 
     if (!Array.isArray(rawOutlines)) {
-      return { success: false, error: 'Failed to parse scene outlines response' };
+      return { result: { success: false, error: 'Failed to parse scene outlines response' } };
     }
 
     // Ensure IDs and order
@@ -224,23 +231,55 @@ export async function generateSceneOutlinesFromRequirements(
       ];
       if (!contractResult.publishable || !contractResult.contract || violations.length > 0) {
         return {
-          success: false,
-          error: `Teaching-quality contract rejected: ${violations.join('; ')}`,
+          result: {
+            success: false,
+            error: `Teaching-quality contract rejected: ${violations.join('; ')}`,
+          },
+          violations,
         };
       }
 
       return {
-        success: true,
-        data: {
-          languageDirective,
-          courseTitle,
-          outlines: bindLearningObjectivesToOutlines(contractResult.contract, result),
-          learningContract: contractResult.contract,
+        result: {
+          success: true,
+          data: {
+            languageDirective,
+            courseTitle,
+            outlines: bindLearningObjectivesToOutlines(contractResult.contract, result),
+            learningContract: contractResult.contract,
+          },
         },
       };
     }
 
-    return { success: true, data: { languageDirective, courseTitle, outlines: result } };
+    return {
+      result: { success: true, data: { languageDirective, courseTitle, outlines: result } },
+    };
+  };
+
+  try {
+    const response = await aiCall(prompts.system, prompts.user, visionImages);
+    const initial = evaluateResponse(response);
+    if (initial.result.success || !initial.violations?.length) return initial.result;
+
+    const revisionPrompt = [
+      `Course requirement: ${requirements.requirement}`,
+      `Outline engine: ${outlineEngine}`,
+      `Allowed grounding refs: ${JSON.stringify(groundingRefs)}`,
+      'Validator violations:',
+      ...initial.violations.map((violation) => `- ${violation}`),
+      'Previous complete draft JSON:',
+      response,
+    ].join('\n');
+    const revisedResponse = await aiCall(OUTLINE_QUALITY_REVISION_SYSTEM, revisionPrompt);
+    const revised = evaluateResponse(revisedResponse);
+    if (!revised.result.success && revised.violations?.length) {
+      return {
+        success: false,
+        error: `Teaching-quality contract rejected after one quality revision: ${revised.violations.join('; ')}`,
+      };
+    }
+    return revised.result;
   } catch (error) {
     return { success: false, error: String(error) };
   }

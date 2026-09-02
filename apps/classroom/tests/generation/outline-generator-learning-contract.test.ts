@@ -121,7 +121,64 @@ describe('non-streaming outline LearningContract gate', () => {
     expect(aiCall).toHaveBeenCalledTimes(1);
   });
 
-  it('blocks a structurally incomplete response without spending a repair model call', async () => {
+  it('repairs one rejected teaching contract with the validator violations', async () => {
+    const aiCall = vi
+      .fn()
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          languageDirective: 'Teach in English.',
+          courseTitle: 'Grounded Answers',
+          learningContract: { ...contract, learnerPractice: ['s1'] },
+          outlines,
+        }),
+      )
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          languageDirective: 'Teach in English.',
+          courseTitle: 'Grounded Answers',
+          learningContract: contract,
+          outlines,
+        }),
+      );
+
+    const result = await generateSceneOutlinesFromRequirements(
+      { requirement: 'Teach grounded answering', learnerProfile: { corpus: 'ai' } },
+      undefined,
+      undefined,
+      aiCall,
+      { enforceLearningContract: true },
+    );
+
+    expect(result.success).toBe(true);
+    expect(aiCall).toHaveBeenCalledTimes(2);
+    expect(aiCall.mock.calls[1][1]).toContain(
+      'learnerPractice must reference an interactive or pbl scene',
+    );
+  });
+
+  it('stops after one explicit repair when the response remains incomplete', async () => {
+    const invalid = JSON.stringify({
+      languageDirective: 'Teach in English.',
+      courseTitle: 'Slide Inventory',
+      outlines: outlines.slice(0, 1),
+    });
+    const aiCall = vi.fn().mockResolvedValue(invalid);
+
+    const result = await generateSceneOutlinesFromRequirements(
+      { requirement: 'Teach grounded answering' },
+      undefined,
+      undefined,
+      aiCall,
+      { enforceLearningContract: true },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('after one quality revision');
+    expect(result.error).toContain('learningContract is missing');
+    expect(aiCall).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not repair when the teaching-quality gate is disabled', async () => {
     const aiCall = vi.fn().mockResolvedValue(
       JSON.stringify({
         languageDirective: 'Teach in English.',
@@ -135,11 +192,9 @@ describe('non-streaming outline LearningContract gate', () => {
       undefined,
       undefined,
       aiCall,
-      { enforceLearningContract: true },
     );
 
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('learningContract is missing');
+    expect(result.success).toBe(true);
     expect(aiCall).toHaveBeenCalledTimes(1);
   });
 });
