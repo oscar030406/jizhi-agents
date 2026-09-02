@@ -207,6 +207,9 @@ export function SceneAuditBadge({
   verification?: VerificationMeta;
 }) {
   const [open, setOpen] = useState(false);
+  // 侧栏与场景列表都是 overflow-hidden，绝对定位的弹窗会被裁掉右侧大半。
+  // 改为 fixed 定位：打开时记下按钮位置，并把左边界夹进视口。
+  const [anchor, setAnchor] = useState<{ left: number; top: number } | null>(null);
   if (!audit) return null;
   const style = VERDICT_STYLE[audit.verdict];
   const Icon = style.icon;
@@ -221,6 +224,10 @@ export function SceneAuditBadge({
         title={`${style.label} · ${audit.totalClaims} 条断言，${audit.flaggedCount} 条被标记`}
         onClick={(e) => {
           e.stopPropagation();
+          const r = e.currentTarget.getBoundingClientRect();
+          const width = 320;
+          const vw = typeof window === 'undefined' ? width : window.innerWidth;
+          setAnchor({ left: Math.max(8, Math.min(r.left, vw - width - 8)), top: r.bottom + 4 });
           setOpen((v) => !v);
         }}
         aria-expanded={open}
@@ -236,7 +243,8 @@ export function SceneAuditBadge({
         <div
           data-testid="scene-audit-panel"
           onClick={(e) => e.stopPropagation()}
-          className="absolute left-0 top-5 z-50 w-80 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-3 shadow-xl text-left"
+          style={anchor ? { position: 'fixed', left: anchor.left, top: anchor.top } : undefined}
+          className="absolute left-0 top-5 z-50 w-80 max-h-[70vh] overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-3 shadow-xl text-left"
         >
           <div className="flex items-center justify-between gap-2 mb-2">
             {/* 判官小图：这一栏说的是「谁在审」，给它一张脸。纯装饰——
