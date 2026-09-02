@@ -105,6 +105,14 @@ New-Item -ItemType Junction -Path (Join-Path $standalone 'node_modules\demo') -T
   git add .
   git commit --quiet -m fixture
   if ($LASTEXITCODE -ne 0) { throw 'fixture git commit failed' }
+
+  $nestedClassroom = Join-Path $fixture 'apps\classroom'
+  git init --quiet $nestedClassroom
+  git -C $nestedClassroom config user.name nested-release-test
+  git -C $nestedClassroom config user.email nested-release-test@example.invalid
+  git -C $nestedClassroom add .
+  git -C $nestedClassroom commit --quiet -m fixture
+  if ($LASTEXITCODE -ne 0) { throw 'nested classroom fixture commit failed' }
   $ErrorActionPreference = 'Stop'
 
   Set-Location $caller

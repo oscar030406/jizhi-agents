@@ -274,6 +274,7 @@ with tarfile.open(output, "w:gz", compresslevel=9) as handle:
   & python (Join-Path $repo 'scripts\scan-package-hygiene.py') $enginePackage --strict
   if ($LASTEXITCODE -ne 0) { throw 'Engine package hygiene gate failed.' }
 
+  Set-Location $repo
   $ErrorActionPreference = 'Continue'
   $finalDirty = @(git status --porcelain --untracked-files=all -- . ':(exclude).agents/**')
   if ($LASTEXITCODE -ne 0) { throw 'final git status failed' }
