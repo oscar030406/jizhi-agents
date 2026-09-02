@@ -419,6 +419,18 @@ function actualWidgetType(scene: LearningContractActualScene): string {
   return isRecord(scene.content) ? normalizedString(scene.content.widgetType) : '';
 }
 
+function plannedWidgetFulfilled(
+  scene: LearningContractActualScene,
+  expectedWidgetType: string,
+): boolean {
+  if (actualWidgetType(scene) === expectedWidgetType) return true;
+  return (
+    actualWidgetType(scene) === 'template' &&
+    isRecord(scene.content) &&
+    templateWidgetIsProductionReady(scene.content.widgetConfig)
+  );
+}
+
 const MIN_SUBSTANTIVE_TEXT_CHARS = 12;
 
 function normalizedTeachingText(scene: LearningContractActualScene): string {
@@ -648,7 +660,7 @@ export function validateLearningContractFulfillment(
         `planned scene type changed: ${sceneId} expected ${expected.type} got ${scene.type || 'missing'}`,
       );
     }
-    if (expected.widgetType && actualWidgetType(scene) !== expected.widgetType) {
+    if (expected.widgetType && !plannedWidgetFulfilled(scene, expected.widgetType)) {
       violations.push(
         `planned scene widget changed: ${sceneId} expected ${expected.widgetType} got ${actualWidgetType(scene) || 'missing'}`,
       );

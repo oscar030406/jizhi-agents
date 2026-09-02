@@ -82,8 +82,8 @@ export async function GET(
     ]);
     if (
       !classroom ||
-      !isCourseLearnerReleased(classroom) ||
-      !canReadCourse(classroomId, classroom, reader, ownership)
+      !canReadCourse(classroomId, classroom, reader, ownership) ||
+      (reader.memberRole !== 'owner' && !isCourseLearnerReleased(classroom))
     ) {
       return notFound();
     }

@@ -1,4 +1,5 @@
 import { createLogger } from '@/lib/logger';
+import { decideCourseLearnerRelease } from '@/lib/generation/learner-release';
 import { generateClassroom, type GenerateClassroomInput } from '@/lib/server/classroom-generation';
 import {
   markClassroomGenerationJobFailed,
@@ -30,6 +31,18 @@ export function runClassroomGenerationJob(
           await updateClassroomGenerationJobProgress(jobId, progress);
         },
       });
+
+      const release = decideCourseLearnerRelease(result);
+      if (!release.eligible) {
+        const reasons = [
+          ...release.courseReasons,
+          ...release.contractViolations,
+          ...release.blockedScenes.map(
+            ({ sceneId, reasons: sceneReasons }) => `${sceneId}: ${sceneReasons.join(', ')}`,
+          ),
+        ];
+        throw new Error(`课程已保存为草稿，未通过发布审核：${reasons.join('; ')}`);
+      }
 
       await markClassroomGenerationJobSucceeded(jobId, result);
     } catch (error) {

@@ -67,12 +67,11 @@ export async function GET(request: NextRequest) {
       corpusOwnership(),
       courseReaderForRequest(request),
     ]);
-    // 对外读取统一 fail-closed。404 不泄漏草稿是否存在；管理端仍通过原始存储读取
-    // 审核详情，因此这里不会删除或藏掉管理者需要复核的内容。
+    // 学习者与匿名访问统一 fail-closed；所属机构 owner 可进入草稿查看审核结果。
     if (
       !classroom ||
-      !isCourseLearnerReleased(classroom) ||
-      !canReadCourse(id, classroom, reader, ownership)
+      !canReadCourse(id, classroom, reader, ownership) ||
+      (reader.memberRole !== 'owner' && !isCourseLearnerReleased(classroom))
     ) {
       return apiError(API_ERROR_CODES.INVALID_REQUEST, 404, 'Classroom not found');
     }

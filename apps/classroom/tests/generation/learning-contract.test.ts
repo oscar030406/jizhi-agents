@@ -741,9 +741,7 @@ describe('LearningContract', () => {
   });
 
   it('模板教具必须通过现有生产参数校验，配置对象本身不算交互', () => {
-    const outlines = genericAiOutlines.map((outline) =>
-      outline.id === 'scene_3' ? { ...outline, widgetType: 'template' as const } : outline,
-    );
+    const outlines = genericAiOutlines;
     const plan = buildLearningContractPlan(genericAiContract, outlines);
     const config = {
       type: 'template',

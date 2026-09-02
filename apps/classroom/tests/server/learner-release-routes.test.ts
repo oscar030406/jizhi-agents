@@ -141,6 +141,23 @@ describe('GET /api/classroom 学习者发布门禁', () => {
     expect(draft.scenes).toHaveLength(1);
   });
 
+  it('所属机构 owner 可查看草稿复核，member 即使已指派仍不可读', async () => {
+    const draft = {
+      ...course('draft-course', audit({ decision: 'block_pending_review' })),
+      ownerOrgId: 'org-a',
+    };
+    mocks.readClassroom.mockResolvedValue(draft);
+    mocks.accountForSession.mockResolvedValue({ id: 'owner-a' });
+    mocks.orgForAccount.mockResolvedValue({ id: 'org-a', memberRole: 'owner' });
+
+    expect((await getClassroom(draft.id)).status).toBe(200);
+
+    mocks.accountForSession.mockResolvedValue({ id: 'member-a' });
+    mocks.orgForAccount.mockResolvedValue({ id: 'org-a', memberRole: 'member' });
+    mocks.assignmentsOf.mockResolvedValue([{ courseId: draft.id }]);
+    expect((await getClassroom(draft.id)).status).toBe(404);
+  });
+
   it('合格课程仍可读取', async () => {
     const released = course('released-course', audit());
     mocks.readClassroom.mockResolvedValue(released);

@@ -29,6 +29,7 @@ import {
 import { blueprintDirective, type LearnerBlueprint } from './learner-profile';
 const log = createLogger('Generation');
 const MAX_OUTLINE_QUALITY_REVISIONS = 2;
+const STANDARD_WIDGET_TYPES = new Set(['simulation', 'diagram', 'code', 'game', 'visualization3d']);
 
 type OutlineGenerationData = {
   languageDirective: string;
@@ -42,7 +43,65 @@ Return one complete JSON object with exactly languageDirective, courseTitle, lea
 Repair the rejected draft pedagogically: keep sound domain content and learner adaptation, but change objectives, scene mappings, scene types, ordering, descriptions, or phase references when the validator proves they are inconsistent.
 Every objective must have a genuine prerequisite, demonstration, learner action, later actionable feedback and retry, and later unseen quiz or PBL assessment. Do not mechanically attach every objective to every scene; a scene may name an objective only when its description and keyPoints actually serve that objective.
 Every learnerPractice ID must be an interactive or PBL scene. Every transferApplication ID and assessmentMap sceneId must be a quiz or PBL scene after feedback; in task-engine outlines this means quiz because PBL is not allowed.
+Interactive scenes must use a supported widgetType and a widgetOutline. PBL scenes must contain a complete pblConfig and must not contain widgetType. Non-interactive scenes must not contain widgetType.
 Use only the allowed grounding refs. Recheck every listed violation before returning the full corrected JSON.`;
+
+function outlineGenerationViolations(
+  outlines: readonly SceneOutline[],
+  outlineEngine: OutlineEngine,
+): string[] {
+  const violations: string[] = [];
+  for (const outline of outlines) {
+    const scene = outline.id || `scene ${outline.order}`;
+    if (!['slide', 'quiz', 'interactive', 'pbl'].includes(outline.type)) {
+      violations.push(`${scene} has unsupported scene type: ${String(outline.type)}`);
+      continue;
+    }
+    if (outline.type !== 'interactive' && outline.widgetType) {
+      violations.push(`${scene} ${outline.type} scene must not include widgetType`);
+    }
+    if (outline.type === 'interactive') {
+      const allowed =
+        STANDARD_WIDGET_TYPES.has(String(outline.widgetType)) ||
+        (outlineEngine === 'task-engine' && outline.widgetType === 'procedural-skill');
+      if (!allowed) {
+        violations.push(
+          `${scene} interactive widgetType must be one of: ${[
+            ...STANDARD_WIDGET_TYPES,
+            ...(outlineEngine === 'task-engine' ? ['procedural-skill'] : []),
+          ].join(', ')}`,
+        );
+      }
+      if (
+        !outline.widgetOutline ||
+        typeof outline.widgetOutline !== 'object' ||
+        Array.isArray(outline.widgetOutline)
+      ) {
+        violations.push(`${scene} interactive scene must include widgetOutline`);
+      }
+    }
+    if (outline.type === 'pbl') {
+      const config = outline.pblConfig;
+      if (
+        typeof config?.projectTopic !== 'string' ||
+        !config.projectTopic.trim() ||
+        typeof config.projectDescription !== 'string' ||
+        !config.projectDescription.trim() ||
+        !Array.isArray(config.targetSkills) ||
+        config.targetSkills.filter((skill) => typeof skill === 'string' && skill.trim()).length <
+          2 ||
+        !Number.isInteger(config.issueCount) ||
+        (config.issueCount ?? 0) < 2 ||
+        (config.issueCount ?? 0) > 5
+      ) {
+        violations.push(
+          `${scene} pblConfig must include projectTopic, projectDescription, 2-5 targetSkills, and issueCount 2-5`,
+        );
+      }
+    }
+  }
+  return violations;
+}
 
 /**
  * Used when the outline stage fails to produce an explicit directive (LLM
@@ -229,6 +288,7 @@ export async function generateSceneOutlinesFromRequirements(
       });
       const violations = [
         ...contractResult.violations,
+        ...outlineGenerationViolations(result, outlineEngine),
         ...(outlineEngine === 'task-engine' ? validateVocationalOutline(result) : []),
       ];
       if (!contractResult.publishable || !contractResult.contract || violations.length > 0) {

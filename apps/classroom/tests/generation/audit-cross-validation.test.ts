@@ -186,6 +186,7 @@ describe('auditSceneContent debate', () => {
     // The shipped claims are round 2's, so the trail must be round 2's too:
     // a stacked trail would report disputes over text that no longer exists.
     let round = 0;
+    let revisionInput = '';
     const judge = (first: AuditClaim['verdict']) => async () => {
       const v = round === 0 ? first : 'supported';
       return JSON.stringify({ claims: [c('该标准于 1998 年发布', v)] });
@@ -196,16 +197,19 @@ describe('auditSceneContent debate', () => {
       judgeCalls: [judge('incorrect'), judge('uncertain')],
       arbiterCall: async () =>
         JSON.stringify({ rulings: [{ index: 1, verdict: 'incorrect', fix: '1999 年' }] }),
-      reviseCall: async (system) => {
+      reviseCall: async (system, user) => {
         if (system.includes('答辩')) return JSON.stringify({ defenses: [] });
+        revisionInput = user;
         round = 1;
         return JSON.stringify({ ...content, text: '该标准于 1999 年发布。' });
       },
+      evidence: '[S1] 该标准于 1999 年发布。',
       judgeModel: 'j1',
     });
     expect(audit.rounds).toBe(2);
     expect(audit.verdict).toBe('revised');
     expect(audit.debate).toEqual([]);
+    expect(revisionInput).toContain('[S1] 该标准于 1999 年发布。');
   });
 
   /**

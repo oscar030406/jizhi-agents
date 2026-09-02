@@ -509,7 +509,7 @@ const RESCUE_SYSTEM = `你是事实审核员。上一轮审核时，因为参考
 
 const REVISE_SYSTEM = `你是教学内容修订员。给你一份场景内容 JSON 和审核员判定为错误的断言清单。
 要求：
-1. 只修改清单中断言涉及的文字，按给出的修正表述改写。
+1. 逐条修正清单中的每个错误断言；依据给出的教材证据改写，不能只修其中一条。
 2. **绝对不改变 JSON 的结构、字段名、数组长度和未被标记的内容**。
 3. 输出修订后的完整 JSON，不要围栏不要解释。JSON 字符串内换行必须写成 \\n。`;
 
@@ -1276,7 +1276,7 @@ export async function auditSceneContent(
       .join('\n');
     const revisedRaw = await reviseCall!(
       REVISE_SYSTEM,
-      `问题断言清单：\n${issueList}\n\n场景内容 JSON：\n${JSON.stringify(content)}`,
+      `问题断言清单：\n${issueList}\n\n教材证据：\n${evidence || '未提供'}\n\n场景内容 JSON：\n${JSON.stringify(content)}`,
     );
     const revised = parseJsonLoose(revisedRaw);
     // 原来的守卫是 `revised.type === content.type`——而 GeneratedSlideContent /

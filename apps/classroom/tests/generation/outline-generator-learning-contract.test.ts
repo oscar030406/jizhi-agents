@@ -46,6 +46,7 @@ const outlines = [
       projectTopic: 'Grounded answer task',
       projectDescription: 'Produce and justify a grounded answer.',
       targetSkills: ['Evidence selection', 'Grounded writing'],
+      issueCount: 3,
     },
   },
   {
@@ -154,6 +155,47 @@ describe('non-streaming outline LearningContract gate', () => {
     expect(aiCall.mock.calls[1][1]).toContain(
       'learnerPractice must reference an interactive or pbl scene',
     );
+  });
+
+  it('rejects impossible widget and PBL payloads before scene generation', async () => {
+    const brokenOutlines = outlines.map((outline) =>
+      outline.id === 's2'
+        ? { ...outline, widgetType: 'drag_drop' }
+        : outline.id === 's4'
+          ? { ...outline, widgetType: 'diagram', pblConfig: undefined }
+          : outline,
+    );
+    const aiCall = vi
+      .fn()
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          languageDirective: 'Teach in English.',
+          courseTitle: 'Grounded Answers',
+          learningContract: contract,
+          outlines: brokenOutlines,
+        }),
+      )
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          languageDirective: 'Teach in English.',
+          courseTitle: 'Grounded Answers',
+          learningContract: contract,
+          outlines,
+        }),
+      );
+
+    const result = await generateSceneOutlinesFromRequirements(
+      { requirement: 'Teach grounded answering', learnerProfile: { corpus: 'ai' } },
+      undefined,
+      undefined,
+      aiCall,
+      { enforceLearningContract: true },
+    );
+
+    expect(result.success).toBe(true);
+    expect(aiCall.mock.calls[1][1]).toContain('interactive widgetType must be one of');
+    expect(aiCall.mock.calls[1][1]).toContain('pbl scene must not include widgetType');
+    expect(aiCall.mock.calls[1][1]).toContain('pblConfig must include');
   });
 
   it('uses the remaining validator violation for a second and final revision', async () => {

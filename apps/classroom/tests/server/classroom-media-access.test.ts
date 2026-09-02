@@ -140,9 +140,10 @@ describe('GET /api/classroom-media course ACL', () => {
     expect(mocks.createReadStream).toHaveBeenCalledOnce();
   });
 
-  it('机构 owner 无需指派即可读取本机构私有媒体', async () => {
+  it('机构 owner 无需指派即可读取本机构草稿媒体', async () => {
     mocks.accountForSession.mockResolvedValue({ id: 'owner-a' });
     mocks.orgForAccount.mockResolvedValue({ id: 'org-a', memberRole: 'owner' });
+    mocks.isCourseLearnerReleased.mockReturnValue(false);
     mocks.readClassroom.mockResolvedValue({
       stage: { name: '私有课程', origin: { corpus: 'private-a' } },
       scenes: [],
