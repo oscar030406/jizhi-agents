@@ -189,7 +189,9 @@ PY
 }
 
 resolve_current() {
-  local root="$1" link="$root/current" target name releases
+  local root link target name releases
+  root="$1"
+  link="$root/current"
   if [[ ! -e "$link" && ! -L "$link" ]]; then return 0; fi
   [[ -L "$link" ]] || die "$link is not a symlink"
   target="$(readlink -e "$link")" || die "$link is dangling"

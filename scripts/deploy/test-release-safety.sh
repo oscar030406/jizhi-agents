@@ -28,6 +28,9 @@ grep -Fqx 'BindReadOnlyPaths=/var/lib/jizhi-web/usage:/srv/classroom/data/usage'
 
 source <(awk '/^case "\${1:-}" in/{exit} {print}' "$apply")
 
+unset root
+[[ -z "$(resolve_current "$base/no-current-release")" ]]
+
 token_is_safe '0123456789abcdef0123456789ABCDEF'
 token_is_safe 'token_with-safe-chars_0123456789'
 ! token_is_safe 'short'
