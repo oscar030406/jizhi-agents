@@ -156,7 +156,50 @@ describe('non-streaming outline LearningContract gate', () => {
     );
   });
 
-  it('stops after one explicit repair when the response remains incomplete', async () => {
+  it('uses the remaining validator violation for a second and final revision', async () => {
+    const aiCall = vi
+      .fn()
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          languageDirective: 'Teach in English.',
+          courseTitle: 'Grounded Answers',
+          learningContract: { ...contract, learnerPractice: ['s1'] },
+          outlines,
+        }),
+      )
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          languageDirective: 'Teach in English.',
+          courseTitle: 'Grounded Answers',
+          learningContract: { ...contract, transferApplication: ['s3'] },
+          outlines,
+        }),
+      )
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          languageDirective: 'Teach in English.',
+          courseTitle: 'Grounded Answers',
+          learningContract: contract,
+          outlines,
+        }),
+      );
+
+    const result = await generateSceneOutlinesFromRequirements(
+      { requirement: 'Teach grounded answering', learnerProfile: { corpus: 'ai' } },
+      undefined,
+      undefined,
+      aiCall,
+      { enforceLearningContract: true },
+    );
+
+    expect(result.success).toBe(true);
+    expect(aiCall).toHaveBeenCalledTimes(3);
+    expect(aiCall.mock.calls[2][1]).toContain(
+      'transferApplication must reference a quiz or pbl scene',
+    );
+  });
+
+  it('stops after two explicit revisions when the response remains incomplete', async () => {
     const invalid = JSON.stringify({
       languageDirective: 'Teach in English.',
       courseTitle: 'Slide Inventory',
@@ -173,9 +216,9 @@ describe('non-streaming outline LearningContract gate', () => {
     );
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain('after one quality revision');
+    expect(result.error).toContain('after two quality revisions');
     expect(result.error).toContain('learningContract is missing');
-    expect(aiCall).toHaveBeenCalledTimes(2);
+    expect(aiCall).toHaveBeenCalledTimes(3);
   });
 
   it('does not repair when the teaching-quality gate is disabled', async () => {

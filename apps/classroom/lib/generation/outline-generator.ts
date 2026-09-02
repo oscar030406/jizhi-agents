@@ -28,6 +28,7 @@ import {
 } from './learning-contract';
 import { blueprintDirective, type LearnerBlueprint } from './learner-profile';
 const log = createLogger('Generation');
+const MAX_OUTLINE_QUALITY_REVISIONS = 2;
 
 type OutlineGenerationData = {
   languageDirective: string;
@@ -40,6 +41,7 @@ const OUTLINE_QUALITY_REVISION_SYSTEM = `You are the course-outline quality revi
 Return one complete JSON object with exactly languageDirective, courseTitle, learningContract, and outlines. Do not return prose or markdown.
 Repair the rejected draft pedagogically: keep sound domain content and learner adaptation, but change objectives, scene mappings, scene types, ordering, descriptions, or phase references when the validator proves they are inconsistent.
 Every objective must have a genuine prerequisite, demonstration, learner action, later actionable feedback and retry, and later unseen quiz or PBL assessment. Do not mechanically attach every objective to every scene; a scene may name an objective only when its description and keyPoints actually serve that objective.
+Every learnerPractice ID must be an interactive or PBL scene. Every transferApplication ID and assessmentMap sceneId must be a quiz or PBL scene after feedback; in task-engine outlines this means quiz because PBL is not allowed.
 Use only the allowed grounding refs. Recheck every listed violation before returning the full corrected JSON.`;
 
 /**
@@ -258,28 +260,29 @@ export async function generateSceneOutlinesFromRequirements(
   };
 
   try {
-    const response = await aiCall(prompts.system, prompts.user, visionImages);
-    const initial = evaluateResponse(response);
-    if (initial.result.success || !initial.violations?.length) return initial.result;
-
-    const revisionPrompt = [
-      `Course requirement: ${requirements.requirement}`,
-      `Outline engine: ${outlineEngine}`,
-      `Allowed grounding refs: ${JSON.stringify(groundingRefs)}`,
-      'Validator violations:',
-      ...initial.violations.map((violation) => `- ${violation}`),
-      'Previous complete draft JSON:',
-      response,
-    ].join('\n');
-    const revisedResponse = await aiCall(OUTLINE_QUALITY_REVISION_SYSTEM, revisionPrompt);
-    const revised = evaluateResponse(revisedResponse);
-    if (!revised.result.success && revised.violations?.length) {
+    let response = await aiCall(prompts.system, prompts.user, visionImages);
+    let evaluated = evaluateResponse(response);
+    for (let revision = 0; revision < MAX_OUTLINE_QUALITY_REVISIONS; revision += 1) {
+      if (evaluated.result.success || !evaluated.violations?.length) return evaluated.result;
+      const revisionPrompt = [
+        `Course requirement: ${requirements.requirement}`,
+        `Outline engine: ${outlineEngine}`,
+        `Allowed grounding refs: ${JSON.stringify(groundingRefs)}`,
+        'Validator violations:',
+        ...evaluated.violations.map((violation) => `- ${violation}`),
+        'Previous complete draft JSON:',
+        response,
+      ].join('\n');
+      response = await aiCall(OUTLINE_QUALITY_REVISION_SYSTEM, revisionPrompt);
+      evaluated = evaluateResponse(response);
+    }
+    if (!evaluated.result.success && evaluated.violations?.length) {
       return {
         success: false,
-        error: `Teaching-quality contract rejected after one quality revision: ${revised.violations.join('; ')}`,
+        error: `Teaching-quality contract rejected after two quality revisions: ${evaluated.violations.join('; ')}`,
       };
     }
-    return revised.result;
+    return evaluated.result;
   } catch (error) {
     return { success: false, error: String(error) };
   }
