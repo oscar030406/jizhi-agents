@@ -90,6 +90,7 @@ Rules:
 
 - Do not return prose, markdown fences, or a bare array.
 - Never omit `courseTitle`: a concise, human-readable course name (≤30 chars, a noun phrase, in the teaching language) — not the raw user request.
+- Every scene must include a non-empty `objectiveIds` array using IDs from `learningContract.objectives`.
 - For suitable vocational tasks, produce 10-14 scenes.
 - For suitable vocational tasks, prefer 10-12 scenes by default.
 - For suitable vocational tasks, generate at least 10 scenes.
@@ -173,6 +174,7 @@ Use `type: "slide"` for stable PPT-style explanation:
   "title": "risk boundary or judgment basis",
   "description": "explain the standard, threshold, risk principle, or operation rationale",
   "keyPoints": ["why the rule exists", "what threshold matters", "what decision it supports"],
+  "objectiveIds": ["O1"],
   "order": 1
 }
 ```
@@ -188,6 +190,7 @@ Explanation slides must support the vocational task workflow. They must not beco
   "title": "short vocational task title",
   "description": "what the learner practices and why it matters",
   "keyPoints": ["task goal", "decision or checkpoint", "safe completion condition"],
+  "objectiveIds": ["O1"],
   "order": 1,
   "widgetType": "procedural-skill",
   "widgetOutline": {
@@ -267,6 +270,7 @@ Good game uses:
   "title": "GO / STOP Safety Challenge",
   "description": "Learners classify concrete inspection cases such as missing lockout tag, residual voltage above threshold, verified zero voltage, damaged insulation glove, and complete PPE. Each case has a GO or STOP target state and wrong choices show an operational consequence.",
   "keyPoints": ["5-8 concrete decision cards", "Correct outcome: GO or STOP for each case", "Wrong-choice feedback explains risk, recheck, blocked work, or unsafe continuation"],
+  "objectiveIds": ["O1"],
   "order": 9,
   "widgetType": "game",
   "widgetOutline": {
@@ -288,6 +292,7 @@ Use at most 1 diagram. Use it only for structure, process path, or risk propagat
   "title": "System Risk Path",
   "description": "Explore how unsafe energy or process risk travels through the system.",
   "keyPoints": ["Source", "Isolation point", "Measurement point"],
+  "objectiveIds": ["O1"],
   "order": 4,
   "widgetType": "diagram",
   "widgetOutline": {
@@ -370,6 +375,7 @@ Before finalizing, verify that:
 - Procedural-skill scenes include `procedureType`, `task`, `tools`, `steps`, `successCriteria`, and `errorConsequences`.
 - Game scenes include `gameType`, `challenge`, and `playerControls`.
 - Game scenes include concrete playable objects/cases/cards, correct outcomes, wrong-choice feedback, success condition, and failure consequence in description/keyPoints.
+- Every scene includes one or more valid `objectiveIds`, and each objective is covered by every required learning phase.
 - Slide scenes do not include `widgetType`.
 - No introductory slide appears before the procedural task.
 - No pure theory or ordinary concept summary scene appears.

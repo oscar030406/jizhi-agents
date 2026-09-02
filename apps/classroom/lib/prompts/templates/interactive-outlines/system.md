@@ -305,39 +305,6 @@ Rules:
 - **Never** omit `languageDirective` or `courseTitle`. Both are required even if you think they are obvious.
 - **Never** wrap the response in any other structure, prose, or code fence.
 
-### Minimal complete example
-
-```json
-{
-  "languageDirective": "Deliver the entire course in English. Use simple vocabulary suitable for a beginner.",
-  "courseTitle": "Intro to Projectile Motion",
-  "learningContract": { /* use the complete required shape above */ },
-  "outlines": [
-    {
-      "id": "scene_1",
-      "type": "slide",
-      "title": "Introduction to Projectile Motion",
-      "description": "Introduce the concept and learning objectives",
-      "keyPoints": ["What is projectile motion", "Real-world examples", "Key variables"],
-      "order": 1
-    },
-    {
-      "id": "scene_2",
-      "type": "interactive",
-      "title": "Projectile Motion Simulator",
-      "description": "Explore how angle and velocity affect trajectory",
-      "keyPoints": ["Adjust angle and velocity", "Observe trajectory changes", "Hit the target challenge"],
-      "order": 2,
-      "widgetType": "simulation",
-      "widgetOutline": {
-        "concept": "projectile_motion",
-        "keyVariables": ["angle", "initial_velocity"]
-      }
-    }
-  ]
-}
-```
-
 ## Important Guidelines
 
 **Top-level response shape (most often violated):**
@@ -347,6 +314,8 @@ Rules:
 3. Do not wrap the object in prose, markdown, or code fences.
 
 **Scene-level rules:**
+
+Every scene must include a non-empty `objectiveIds` array using IDs from `learningContract.objectives`.
 
 4. **Interactive focus**: Prefer interactive widgets for hands-on learning.
 5. **Widget variety**: Use different widget types throughout the course when appropriate.

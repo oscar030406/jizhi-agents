@@ -59,8 +59,42 @@ describe('outline learning-contract prompt', () => {
       expect(text).toContain('Every interactive or PBL practice scene');
       expect(text).toContain('collect learner input and visibly respond');
       expect(text).toContain('explicit completion criteria');
+      expect(text).toContain('Plan in this order: objectives');
+      expect(text).toContain('Complete cross-reference example');
       expect(text).toContain('corpus:ai');
       expect(text).not.toContain('{{groundingRefs}}');
+
+      const exampleJson = prompt!.system.match(
+        /### Complete cross-reference example[\s\S]*?```json\s*([\s\S]*?)```/,
+      )?.[1];
+      const example = JSON.parse(exampleJson!);
+      expect(
+        example.outlines.every(
+          (outline: { objectiveIds?: string[] }) => outline.objectiveIds?.length,
+        ),
+      ).toBe(true);
     });
   }
+
+  it('standard prompt does not contradict the four-key contract or omit scene mappings', () => {
+    const prompt = buildPrompt(PROMPT_IDS.REQUIREMENTS_TO_OUTLINES, {
+      requirement: 'Teach a grounded course',
+      pdfContent: 'None',
+      availableImages: 'No images available',
+      researchContext: 'None',
+      teacherContext: '',
+      userProfile: '',
+      groundingRefs: ['corpus:ai'],
+      hasSourceImages: false,
+      imageEnabled: false,
+      videoEnabled: false,
+      mediaEnabled: false,
+    });
+
+    expect(prompt).not.toBeNull();
+    expect(prompt!.user).toContain('"learningContract"');
+    expect(prompt!.user).toContain('"objectiveIds": ["O1"]');
+    expect(prompt!.user).not.toContain('All three keys are required');
+    expect(prompt!.user).not.toContain('default 15-30 minutes');
+  });
 });

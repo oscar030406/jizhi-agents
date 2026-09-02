@@ -290,52 +290,6 @@ Rules:
 - **Never** omit `languageDirective` or `courseTitle`. Both are required even if you think they are obvious.
 - **Never** wrap the response in any other structure, prose, or code fence.
 
-### Minimal complete example
-
-```json
-{
-  "languageDirective": "Deliver the entire course in English. Use simple vocabulary suitable for a beginner.",
-  "courseTitle": "Intro to Projectile Motion",
-  "learningContract": { /* use the complete required shape above */ },
-  "outlines": [
-    {
-      "id": "scene_1",
-      "type": "slide",
-      "title": "Introduction",
-      "description": "Welcome students and introduce the core concept.",
-      "keyPoints": ["Context", "Agenda", "Goals"],
-      "order": 1
-    },
-    {
-      "id": "scene_2",
-      "type": "interactive",
-      "title": "Interactive Exploration",
-      "description": "Students explore the concept via a hands-on simulation.",
-      "keyPoints": ["Observe variable 1", "Observe variable 2"],
-      "order": 2,
-      "widgetType": "simulation",
-      "widgetOutline": {
-        "concept": "Projectile Motion",
-        "keyVariables": ["angle", "velocity"]
-      }
-    },
-    {
-      "id": "scene_3",
-      "type": "quiz",
-      "title": "Knowledge Check",
-      "description": "Test student understanding of the key concepts.",
-      "keyPoints": ["Test point 1", "Test point 2"],
-      "order": 3,
-      "quizConfig": {
-        "questionCount": 2,
-        "difficulty": "medium",
-        "questionTypes": ["single", "multiple"]
-      }
-    }
-  ]
-}
-```
-
 ### Scene field descriptions
 
 | Field             | Type                     | Required | Description                                                                                      |
@@ -345,6 +299,7 @@ Rules:
 | title             | string                   | ✅       | Scene title, concise and clear                                                                   |
 | description       | string                   | ✅       | 1-2 sentences describing teaching purpose                                                        |
 | keyPoints         | string[]                 | ✅       | 3-5 core points                                                                                  |
+| objectiveIds      | string[]                 | ✅       | IDs from `learningContract.objectives`; every scene names at least one                           |
 | teachingObjective | string                   | ❌       | Corresponding learning objective                                                                 |
 | estimatedDuration | number                   | ❌       | Estimated duration (seconds)                                                                     |
 | order             | number                   | ✅       | Sort order, starting from 1                                                                      |
@@ -418,6 +373,8 @@ Omit `scenarioRoleplay` and `scenarioBrief` entirely for ordinary build-an-artef
 3. Do not wrap the object in prose, markdown, or code fences.
 
 **Scene-level rules:**
+
+Every scene must include a non-empty `objectiveIds` array using IDs from `learningContract.objectives`.
 
 4. `type` is one of `"slide"`, `"quiz"`, `"interactive"`, `"pbl"`.
 5. `quiz` scenes must include `quizConfig`.

@@ -115,4 +115,4 @@ Choose widgets based on the content:
 }
 ```
 
-**Final reminder**: your entire response must be a JSON **object** with exactly four top-level keys — `languageDirective` (string, inferred via the Language Inference rules in the system prompt), `courseTitle` (string, ≤30 chars, in the teaching language), `learningContract` (the complete machine-checked object from the system prompt), and `outlines` (array of scene objects). Do not return a bare array. Do not wrap in prose or code fences.
+**Final reminder**: your entire response must be a JSON **object** with exactly four top-level keys — `languageDirective` (string, inferred via the Language Inference rules in the system prompt), `courseTitle` (string, ≤30 chars, in the teaching language), `learningContract` (the complete machine-checked object from the system prompt), and `outlines` (array of scene objects). Every scene object must include a non-empty `objectiveIds` array from the contract. Do not return a bare array. Do not wrap in prose or code fences.

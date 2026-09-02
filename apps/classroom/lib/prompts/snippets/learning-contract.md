@@ -91,6 +91,10 @@ For Feynman, the first three IDs must be interactive or PBL scenes that collect 
 
 Hard rules:
 
+- Plan in this order: objectives -> outlines with `objectiveIds` -> phase arrays -> assessment map.
+  Derive each phase array from the mapped outlines; never invent the phase references first and try
+  to attach objectives afterwards. Prefer 1-3 objectives so each one receives a complete learning
+  loop rather than a shallow mention.
 - Every objective has all four fields. `action` must be observable; `condition` and
   `successCriterion` make it measurable.
 - Every phase array is non-empty and references an ID that exists in `outlines`. A compact course may
@@ -113,6 +117,85 @@ Hard rules:
 - Every objective ID appears in `assessmentMap`; assessment evidence must come from a quiz or PBL
   rather than a display-oriented interactive or self-reported understanding.
 - Do not invent source titles or URLs. Copy only route-provided grounding identifiers.
+
+{{#if groundingRefs}}
+### Complete cross-reference example
+
+This compact example is complete because the same objective is explicitly carried through prior
+knowledge, demonstration, learner action, visible feedback/retry, and an unseen assessment. Use the
+same cross-reference pattern for every objective in a larger course.
+
+```json
+{
+  "languageDirective": "Teach in clear English and explain technical terms when first used.",
+  "courseTitle": "Projectile Motion Practice",
+  "learningContract": {
+    "teachingStrategy": "standard",
+    "objectives": [
+      {
+        "id": "O1",
+        "action": "select and justify launch settings",
+        "condition": "given a target distance and initial speed",
+        "successCriterion": "the predicted landing error is within 5 percent"
+      }
+    ],
+    "prerequisiteActivation": ["scene_1"],
+    "demonstration": ["scene_1"],
+    "learnerPractice": ["scene_2"],
+    "feedbackRetry": ["scene_3"],
+    "transferApplication": ["scene_4"],
+    "assessmentMap": [{ "sceneId": "scene_4", "objectiveIds": ["O1"] }],
+    "grounding": {
+      "sourceRefs": {{groundingRefs}},
+      "claimPolicy": "cite-or-mark-uncertain"
+    }
+  },
+  "outlines": [
+    {
+      "id": "scene_1",
+      "type": "slide",
+      "title": "From Prior Knowledge to a Worked Launch",
+      "description": "Elicit the learner's current prediction, then demonstrate how to select and justify settings for one worked target.",
+      "keyPoints": ["State the prior prediction", "Work one launch calculation", "Check the 5 percent criterion"],
+      "objectiveIds": ["O1"],
+      "order": 1
+    },
+    {
+      "id": "scene_2",
+      "type": "interactive",
+      "title": "Choose the Launch Settings",
+      "description": "The learner changes angle and speed, submits a prediction, and sees the resulting trajectory.",
+      "keyPoints": ["Manipulate both inputs", "Submit a prediction", "Compare landing error with the criterion"],
+      "objectiveIds": ["O1"],
+      "order": 2,
+      "widgetType": "simulation",
+      "widgetOutline": { "concept": "projectile_motion", "keyVariables": ["angle", "speed"] }
+    },
+    {
+      "id": "scene_3",
+      "type": "interactive",
+      "title": "Read the Error and Retry",
+      "description": "Visible error feedback identifies which setting caused the miss; the learner revises it and retries the same objective.",
+      "keyPoints": ["Read actionable error feedback", "Revise one setting", "Retry until the criterion is met"],
+      "objectiveIds": ["O1"],
+      "order": 3,
+      "widgetType": "game",
+      "widgetOutline": { "gameType": "strategy", "challenge": "Correct a missed launch using visible error feedback" }
+    },
+    {
+      "id": "scene_4",
+      "type": "quiz",
+      "title": "Transfer to a New Target",
+      "description": "Apply the same action and criterion to an unseen target distance and justify the selected settings.",
+      "keyPoints": ["New target situation", "Select settings", "Justify against the 5 percent criterion"],
+      "objectiveIds": ["O1"],
+      "order": 4,
+      "quizConfig": { "questionCount": 2, "difficulty": "medium", "questionTypes": ["single", "text"] }
+    }
+  ]
+}
+```
+{{/if}}
 
 {{#if groundingRefs}}
 Allowed grounding refs for this request (copy identifiers exactly): {{groundingRefs}}
