@@ -650,7 +650,7 @@ function HomePage() {
 
           {/* ── ① 造课卡 ── */}
           <section className={cn('overflow-hidden lg:col-span-2', CARD_RECIPE_STATIC)}>
-            <div className="h-1 w-full bg-primary/60" />
+            <div className="h-0.5 w-full bg-primary/60" />
             <EngineBridgeBanner />
             {/* ── Greeting + Profile ── */}
             <div className="relative z-20">
@@ -747,7 +747,7 @@ function HomePage() {
                 CARD_RECIPE_STATIC,
               )}
             >
-              <div className="h-1 w-full bg-green-deep/50" />
+              <div className="h-0.5 w-full bg-green-deep/50" />
               <div className="space-y-3 p-5">
                 <div className="flex items-center justify-between">
                   <p className="text-lg font-medium">学习者画像</p>
@@ -815,7 +815,7 @@ function HomePage() {
           {/* ── ③ 最近学习卡（原折叠列表原样迁入） ── */}
           {domainScoped.length > 0 && (
             <section className={cn('overflow-hidden lg:col-span-3', CARD_RECIPE_STATIC)}>
-              <div className="h-1 w-full bg-blue-deep/40" />
+              <div className="h-0.5 w-full bg-blue-deep/40" />
               <div className="flex w-full flex-col px-5 pb-4 pt-1">
                 {/* Trigger — divider-line with centered text */}
                 <div className="group w-full flex items-center gap-4 py-2">

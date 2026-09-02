@@ -19,6 +19,7 @@ import {
   modelDetailRows,
 } from '@/components/agents/judge-labels';
 import { domainLabel } from '@/lib/knowledge/domain-labels';
+import type { VerificationMeta } from '@/lib/generation/content-verify';
 import type { SceneAudit } from '@/lib/generation/hallucination-audit';
 
 const VERDICT_STYLE: Record<
@@ -169,7 +170,42 @@ function RescuePanel({ audit }: { audit: SceneAudit }) {
   );
 }
 
-export function SceneAuditBadge({ audit }: { audit?: SceneAudit }) {
+function VerificationPanel({ verification }: { verification?: VerificationMeta }) {
+  if (!verification) return null;
+  const codeTotal =
+    verification.codePassed + verification.codeFailed + verification.codeUnverifiable;
+  const unknown = verification.codeUnverifiable + (verification.arithmeticUnverifiable ?? 0);
+  const failed =
+    verification.codeFailed + verification.arithmeticChecked - verification.arithmeticPassed;
+  return (
+    <div
+      data-testid="scene-verification-summary"
+      className={cn(
+        'mb-2 rounded-md border px-2 py-1.5 text-[10px]',
+        failed > 0
+          ? 'border-red-300/60 bg-red-50/70 text-red-700 dark:border-red-800/50 dark:bg-red-950/30 dark:text-red-300'
+          : unknown > 0
+            ? 'border-amber-300/60 bg-amber-50/70 text-amber-700 dark:border-amber-800/50 dark:bg-amber-950/30 dark:text-amber-300'
+            : 'border-emerald-300/60 bg-emerald-50/70 text-emerald-700 dark:border-emerald-800/50 dark:bg-emerald-950/30 dark:text-emerald-300',
+      )}
+    >
+      <p className="font-bold">机械验算</p>
+      <p>
+        {codeTotal > 0 ? `代码 ${verification.codePassed}/${codeTotal} 已验证` : '无代码候选'}
+        {' · '}数值 {verification.arithmeticPassed}/{verification.arithmeticChecked} 复核通过
+        {unknown > 0 ? ` · ${unknown} 项未执行或不可安全解析` : ''}
+      </p>
+    </div>
+  );
+}
+
+export function SceneAuditBadge({
+  audit,
+  verification,
+}: {
+  audit?: SceneAudit;
+  verification?: VerificationMeta;
+}) {
   const [open, setOpen] = useState(false);
   if (!audit) return null;
   const style = VERDICT_STYLE[audit.verdict];
@@ -256,6 +292,7 @@ export function SceneAuditBadge({ audit }: { audit?: SceneAudit }) {
 
           <DebatePanel audit={audit} />
           <RescuePanel audit={audit} />
+          <VerificationPanel verification={verification} />
 
           <p className="text-[10px] text-gray-500 dark:text-gray-400 mb-2">
             {judgeModels.length > 1

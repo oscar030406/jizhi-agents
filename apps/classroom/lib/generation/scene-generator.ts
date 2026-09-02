@@ -160,13 +160,32 @@ export async function generateSceneContent(
       return generateWidgetContent(outline, aiCall, languageDirective, { allowProceduralSkill });
     }
 
-    const fromTemplate = await generateTemplateWidgetContent(
-      outline,
-      aiCall,
-      languageDirective,
-      usedTemplateIds,
+    // 承担练习 / 反馈重试职责的屏必须能收作答并给对错反馈——模板池八个模板全是探索型控件，
+    // 一个都收不了答案（2026-09-02 双域实测：模板被派去当练习屏，发布门与两位语义判官一致判死）。
+    // 这类屏直接走自由 HTML 教具生成（simulation/game 等提示词本就要求输入控件与反馈），
+    // 不进模板池；其余交互屏仍先走模板池（质量下限）。
+    const practiceRole = (outline.learningPhaseRoles ?? []).some(
+      (phase) => phase === 'learnerPractice' || phase === 'feedbackRetry',
     );
-    if (fromTemplate) return fromTemplate;
+    if (practiceRole) {
+      log.info(
+        `"${outline.title}" carries a practice/feedback role; skipping template pool for an input-collecting widget`,
+      );
+      const handsOn = await generateWidgetContent(outline, aiCall, languageDirective, {
+        allowProceduralSkill,
+      });
+      if (handsOn) return handsOn;
+    }
+
+    if (!practiceRole) {
+      const fromTemplate = await generateTemplateWidgetContent(
+        outline,
+        aiCall,
+        languageDirective,
+        usedTemplateIds,
+      );
+      if (fromTemplate) return fromTemplate;
+    }
 
     // 二层：按大纲的 widgetType 走六类专用提示词自由生成 HTML
     log.warn(
@@ -525,8 +544,41 @@ function objectiveAwareDescription(outline: SceneOutline): string {
         `达标：${objective.successCriterion}`,
     )
     .join('\n');
-  return `${outline.description}\n\n【本场景必须履约的学习目标】\n${contracts}\n` +
-    '正文与活动必须给出服务这些目标的真实证据，不能只复述目标词语。';
+  const phaseDuties = outline.learningPhaseRoles
+    ?.map((phase) => {
+      switch (phase) {
+        case 'prerequisiteActivation':
+          return (
+            '- 以 2-3 个面向学习者的回想/自测问题开场（「回想你上次……」「你是否曾……」「先判断：……」），' +
+            '问的正是目标动作所依赖的那段先备经验；不能只做课程概述或讲背景。'
+          );
+        case 'demonstration':
+          return '- 给出一次完整示范，明确呈现条件、动作步骤、判断依据和达标标准。';
+        case 'learnerPractice':
+          return (
+            '- 让学习者实际输入、选择、排序、操作或提交并得到对错反馈，不能只阅读或点击观看示例。' +
+            '目标动作是解释/说明/描述/比较/画出类时，必须含至少一道 short_answer 题让学习者真正执行该动作，评分 rubric 对应达标标准。'
+          );
+        case 'feedbackRetry':
+          return (
+            '- 呈现一次典型的错误作答或常见误解，依据达标标准指出差距，并让学习者修改后重新作答；' +
+            '不能只重放演示。'
+          );
+        case 'transferApplication':
+          return (
+            '- 题干先明确写出一个示范和练习中未出现的新情境，再要求学习者在其中完成同一目标动作、按同一达标标准判定；' +
+            '目标动作是解释/说明/描述类时不能只出「认名字」的选择题，须含 short_answer 题。'
+          );
+        case 'assessment':
+          return '- 提出可观察、可判定的验收任务，并按目标的达标标准判定结果。';
+      }
+    })
+    .join('\n');
+  return (
+    `${outline.description}\n\n【本场景必须履约的学习目标】\n${contracts}\n` +
+    `${phaseDuties ? `\n【本场景承担的教学职责】\n${phaseDuties}\n` : ''}` +
+    '正文与活动必须给出服务这些目标与职责的真实证据，不能只复述目标词语。'
+  );
 }
 
 export function buildLecturePrompts(

@@ -8,7 +8,10 @@ import {
   type CourseAuditScene,
   type SceneAudit,
 } from '@/lib/generation/hallucination-audit';
-import { buildLearningContractPlan, type LearningContract } from '@/lib/generation/learning-contract';
+import {
+  buildLearningContractPlan,
+  type LearningContract,
+} from '@/lib/generation/learning-contract';
 import type { SceneOutline } from '@/lib/types/generation';
 
 const issue = (claim: string, verdict: AuditClaim['verdict'], reason: string): AuditClaim => ({
@@ -97,7 +100,9 @@ const alignmentContract: LearningContract = {
 };
 const alignmentPlan = buildLearningContractPlan(alignmentContract, alignmentOutlines);
 
-function alignmentScenes(demoText = '教师逐项读取巡检记录，标出异常证据，再依据证据示范放行判断。') {
+function alignmentScenes(
+  demoText = '教师逐项读取巡检记录，标出异常证据，再依据证据示范放行判断。',
+) {
   const texts: Record<string, string> = {
     prior: '学习者先回忆温度、振动和联锁状态分别怎样影响设备放行。',
     demo: demoText,
@@ -221,6 +226,35 @@ describe('全课程事实终审', () => {
       },
     });
     expect(audit.learningAlignment?.judges).toHaveLength(2);
+  });
+
+  it('单个判官首份 JSON 不完整时只重取该判词，第二份合法判词仍必需', async () => {
+    const demoText = '教师逐项读取巡检记录，标出异常证据，再依据证据示范放行判断。';
+    let alignmentAttempts = 0;
+    const judgeA = async (system: string) => {
+      if (!system.includes('教学履约终审员')) return JSON.stringify({ claims: [] });
+      alignmentAttempts += 1;
+      return alignmentAttempts === 1
+        ? JSON.stringify({ verdict: 'aligned', rationale: '遗漏 items。' })
+        : JSON.stringify({
+            verdict: 'aligned',
+            rationale: '五阶段均有目标对齐证据。',
+            items: alignmentItems(demoText),
+          });
+    };
+
+    const audit = await auditCourseContent({
+      courseTitle: '设备放行判断',
+      scenes: alignmentScenes(demoText),
+      learningContract: alignmentPlan,
+      judgeCalls: [judgeA, courseJudge(demoText)],
+      judgeModel: 'judge-a',
+      judgeModels: ['judge-a', 'judge-b'],
+    });
+
+    expect(alignmentAttempts).toBe(2);
+    expect(audit.learningAlignment).toMatchObject({ complete: true, aligned: true });
+    expect(audit.decision).toBe('publish');
   });
 
   it('内容有出处但与目标无关时，事实终审全绿也必须 fail-closed', async () => {

@@ -86,6 +86,30 @@ export interface CourseLearnerReleaseDecision {
   courseReasons: CourseLearnerReleaseBlockReason[];
   contractViolations: string[];
   blockedScenes: Array<{ sceneId: string; reasons: LearnerReleaseBlockReason[] }>;
+  /**
+   * 判定走的哪套协议：
+   * - `learning-contract`：课程带教学合同（2026-09 起生成的课），屏级 + 课程级 + 履约终审全门禁；
+   * - `scene-audit-legacy`：合同门禁上线前生成、没有合同的旧课，按它们生成时的屏级审核协议判定——
+   *   仲裁三出口里「放行」「标记风险放行」可见，「拦截转人工」与审核缺失不可见。
+   *   不这样做的后果实测过（2026-09-02）：线上 52 门课全部消失，公开列表为空。
+   */
+  protocol: 'learning-contract' | 'scene-audit-legacy';
+}
+
+/** 旧协议：一屏能否给学习者看——审核在、没被拦截转人工、不是审核基础设施失败。 */
+function legacySceneBlockReasons(scene: LearnerReleaseScene): LearnerReleaseBlockReason[] {
+  const audit = scene.audit;
+  if (!audit) return ['audit_missing'];
+  const reasons: LearnerReleaseBlockReason[] = [];
+  const claims = Array.isArray(audit.claims) ? audit.claims : [];
+  if (audit.verdict === 'flagged' && claims.length === 0 && (audit.totalClaims ?? 0) === 0) {
+    reasons.push('audit_failed');
+  }
+  if (audit.decision === 'block_pending_review') reasons.push('pending_review');
+  if (scene.verification && verificationHasFailures(scene.verification)) {
+    reasons.push('verification_failed');
+  }
+  return reasons;
 }
 
 export function decideCourseLearnerRelease(course: {
@@ -100,6 +124,24 @@ export function decideCourseLearnerRelease(course: {
 
   const courseAudit = course.stage?.courseAudit;
   const contract = course.stage?.learningContract;
+
+  // 旧协议课程：没有教学合同就按屏级审核协议判定，不套用合同门禁。
+  if (!contract) {
+    const blockedScenes = scenes.flatMap((scene, index) => {
+      const reasons = legacySceneBlockReasons(scene);
+      return reasons.length === 0
+        ? []
+        : [{ sceneId: scene.id?.trim() || `scene-${index + 1}`, reasons }];
+    });
+    return {
+      eligible: courseReasons.length === 0 && blockedScenes.length === 0,
+      courseReasons,
+      contractViolations: [],
+      blockedScenes,
+      protocol: 'scene-audit-legacy',
+    };
+  }
+
   const contractV2 =
     !!contract && typeof contract === 'object' && (contract as { version?: unknown }).version === 2;
   const hashMismatch = Boolean(
@@ -117,19 +159,14 @@ export function decideCourseLearnerRelease(course: {
     courseReasons.push('course_fact_review_failed');
   }
 
-  let contractViolations: string[] = [];
-  if (!course.stage?.learningContract) {
-    courseReasons.push('learning_contract_missing');
-  } else {
-    const fulfillment = validateLearningContractFulfillment(course.stage.learningContract, scenes, {
-      requireSemanticAlignment: contractV2,
-      alignment: courseAudit?.learningAlignment,
-      currentCourseContentHash: hashCourseScenes(scenes),
-      currentLearningContractHash: hashLearningContractPlan(course.stage.learningContract),
-    });
-    contractViolations = fulfillment.violations;
-    if (!fulfillment.fulfilled) courseReasons.push('learning_contract_unfulfilled');
-  }
+  const fulfillment = validateLearningContractFulfillment(contract, scenes, {
+    requireSemanticAlignment: contractV2,
+    alignment: courseAudit?.learningAlignment,
+    currentCourseContentHash: hashCourseScenes(scenes),
+    currentLearningContractHash: hashLearningContractPlan(contract),
+  });
+  const contractViolations = fulfillment.violations;
+  if (!fulfillment.fulfilled) courseReasons.push('learning_contract_unfulfilled');
 
   const blockedScenes = scenes.flatMap((scene, index) => {
     const decision = decideSceneLearnerRelease(scene);
@@ -148,6 +185,7 @@ export function decideCourseLearnerRelease(course: {
     courseReasons,
     contractViolations,
     blockedScenes,
+    protocol: 'learning-contract',
   };
 }
 

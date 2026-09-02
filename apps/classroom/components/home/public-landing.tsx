@@ -33,6 +33,7 @@ import { GenerativeCover } from '@/components/home/generative-cover';
 import { KeyMetrics } from '@/components/home/key-metrics';
 import { PathOrDomainCard } from '@/components/home/learning-overview';
 import { MechanismCards } from '@/components/home/mechanism-cards';
+import publicMetrics from '@/components/home/public-metrics.json';
 import { PracticeHighlights } from '@/components/home/practice-highlights';
 import { SectionAnchor } from '@/components/home/section-anchor';
 import {
@@ -46,6 +47,30 @@ import { createLogger } from '@/lib/logger';
 import { cn } from '@/lib/utils';
 
 const log = createLogger('PublicLanding');
+
+/**
+ * 首屏那条数字。三个数与口径都取自 `public-metrics.json`——那份文件是
+ * `scripts/sync-public-metrics.mjs` 从 `apps/agent-engine/data/metrics.json` 生成的产物，
+ * 与页面下方「相关指标」三张卡同源。这里一个数都不许手写：数字散在两处迟早对不上。
+ * 口径只留一句最短的，完整口径在下方那三张卡和 /evidence 里，不在首屏重复。
+ */
+const HERO_FIGURES = [
+  {
+    label: '生成端幻觉率',
+    value: publicMetrics.hallucination.percent,
+    note: `${publicMetrics.hallucination.claims} 条可核陈述逐条对教材`,
+  },
+  {
+    label: '画像适配准确率',
+    value: publicMetrics.adaptation.percent,
+    note: `${publicMetrics.adaptation.n} 组盲评`,
+  },
+  {
+    label: '核心知识点覆盖率',
+    value: publicMetrics.kcCoverage.percent,
+    note: `${publicMetrics.kcCoverage.courses} 门金标课点名 ${publicMetrics.kcCoverage.total} 个点`,
+  },
+] as const;
 
 export interface ClassroomSummary {
   id: string;
@@ -352,16 +377,9 @@ export function PublicLanding() {
           参考站的「感觉」住在骨架里（Brilliant 76px / NotebookLM 88px、单栏、巨量留白），
           所以这一版把栏拆了：整幅宽度给标题，回放面板下移成独立区块。） */}
       <section className="relative overflow-hidden">
-        {/* Gamma 式 hero 背景：一条干净的纵向渐变（天蓝偏紫 → 白），不做糊雾 blob。
-            实拔：Gamma linear-gradient(to top, #fff, rgb(198,230,250))；
-            我们把色相从 200 挪到 235 偏紫，与主色紫连成一族。 */}
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-0 dark:opacity-30"
-          style={{
-            background: 'linear-gradient(to bottom, rgb(224,234,254), rgba(255,255,255,0) 82%)',
-          }}
-        />
+        {/* 原来这里垫了一条 Gamma 式的天蓝→白纵向渐变。撤掉：它是纯装饰，
+            冷蓝压在全站暖白底上本身就是两套灰，而且把「营销落地页」的味道带进了
+            一个学校和企业要天天用的工具页。首屏的重心交给标题和输入框，底不说话。 */}
         <div className={`${CONTAINER} relative flex flex-col items-center pb-24 pt-16 text-center`}>
           {/* hero kicker：朱批色细下划线呼应评点本视觉 */}
           <p className="mb-5 text-sm font-semibold tracking-wide text-annot-zhu">
@@ -380,6 +398,11 @@ export function PublicLanding() {
             <br />
             生成一整门<RoughCircle>带出处</RoughCircle>的课
           </h1>
+          {/* 副标：标题只说做什么，这一行说给谁做。访客第一屏看不出对象是机构还是个人，
+              就会按个人订阅工具来读我们。一行讲完，不展开。 */}
+          <p className="mt-5 max-w-xl text-base leading-relaxed text-muted-foreground">
+            给学校和企业培训部门用的课程生产线
+          </p>
 
           {/* 输入框改成「作曲器」形态：框内左下口径小字 + 右下 CTA，
               参考 Kimi/NotebookLM 的产品即输入框。全首屏只有这一个交互主体。 */}
@@ -410,7 +433,10 @@ export function PublicLanding() {
                   type="button"
                   onClick={submit}
                   disabled={!requirement.trim() || listState !== 'ready'}
-                  className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-gradient-to-r from-[oklch(0.54_0.22_290)] to-[oklch(0.6_0.19_250)] px-5 py-2.5 text-base font-medium text-white shadow-card transition-opacity disabled:cursor-not-allowed disabled:opacity-75"
+                  /* 原来是紫→蓝渐变的胶囊。渐变纯装饰，而且这颗按钮是全站唯一
+                     不走 --primary 的实心按钮，同一个动作在登录前后两个样子。
+                     换成主色实心 + 与站内按钮同一档圆角，重量不变，只是不再自成一派。 */
+                  className="bg-primary text-primary-foreground inline-flex shrink-0 items-center gap-1.5 rounded-lg px-5 py-2.5 text-base font-medium shadow-card transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-75"
                 >
                   找这门课 <ArrowUp className="size-4 rotate-90" aria-hidden />
                 </button>
@@ -431,6 +457,38 @@ export function PublicLanding() {
                 ))}
               </div>
             )}
+
+            {/* 首屏数字条 + 一个免登录的旁路入口。
+                访客第一屏现在只能选「输入点什么」，输不出来就走了；这条给两样东西：
+                这套东西被量过（三个数），以及不想输入也能先看一门成品（右侧链接）。
+                做法上刻意压重量——小字、单行、竖线分隔、无卡片无色块，
+                重心留给上面那个输入框。数字全部来自 public-metrics.json，见上方常量。 */}
+            <div className="border-border/60 mt-6 border-t pt-4">
+              <dl className="grid grid-cols-3">
+                {HERO_FIGURES.map((f, i) => (
+                  <div
+                    key={f.label}
+                    className={cn('px-4 first:pl-0 last:pr-0', i > 0 && 'border-border border-l')}
+                  >
+                    <dt className="text-muted-foreground text-xs">
+                      <span className="text-foreground mr-1 text-sm font-medium tabular-nums">
+                        {f.value}
+                      </span>
+                      {f.label}
+                    </dt>
+                    <dd className="text-muted-foreground/70 mt-0.5 text-[11px] leading-snug">
+                      {f.note}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+              <a
+                href="#courses"
+                className="text-muted-foreground hover:text-foreground mt-3 inline-block text-xs underline-offset-4 transition-colors hover:underline"
+              >
+                先看一门已生成的课 →
+              </a>
+            </div>
 
             {/* 没命中的诚实空态：不假装跳对了，把最接近的三门摆出来让人自己挑 */}
             {missed && (

@@ -259,6 +259,15 @@ export interface SceneOutline {
     condition: string;
     successCriterion: string;
   }>;
+  /** Validator-approved teaching duties for this scene. */
+  learningPhaseRoles?: Array<
+    | 'prerequisiteActivation'
+    | 'demonstration'
+    | 'learnerPractice'
+    | 'feedbackRetry'
+    | 'transferApplication'
+    | 'assessment'
+  >;
   estimatedDuration?: number; // seconds
   order: number;
   languageNote?: string; // LLM-inferred language note for this scene

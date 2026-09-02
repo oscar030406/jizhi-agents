@@ -25,9 +25,12 @@ type ResolvedModel = Awaited<ReturnType<typeof resolveModel>>;
 // 判官链延迟根治（2026-08-03 实测：思考型判官非流式整包缓冲，首字节挂
 // 12-18min 吃满 undici 上限；同时段直连同模型秒回）。三板斧：
 // ① 判官/仲裁关思考——核对事实清单不需要长推理；修订仍是生成器、保留思考。
-// ② 每次调用 180s 硬超时（AbortSignal），不再依赖 15min undici 兜底。
-// ③ 超时/失败重试一次——偶发冷启动从拖垮整单变成一次 3min 重试。
-const CALL_TIMEOUT_MS = 180_000;
+// ② 每次调用硬超时（AbortSignal），不再依赖 15min undici 兜底。原 180s；课程级终审
+//    （全课事实终审、教学履约终审）吃的是整门课文本，2026-09-02 实测两位判官在 180s 内
+//    双双超时是常态而非偶发，整课因此定草稿。放到 300s：屏级审核极少超过 180s，代价只是
+//    真失败时晚 2 分钟报出来。
+// ③ 超时/失败重试一次——偶发冷启动从拖垮整单变成一次重试。
+const CALL_TIMEOUT_MS = 300_000;
 const NO_THINKING = { mode: 'disabled', enabled: false } as const;
 
 export function makeAuditCall(

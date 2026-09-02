@@ -176,6 +176,8 @@ describe('增量复审（INCREMENTAL_REAUDIT=1）', () => {
 
 describe('开关关着时（默认）', () => {
   it('第二轮仍把整页重喂给判官，即旧行为一字不差', async () => {
+    // .env.local 可能已开增量复审（2026-09-02 起本地默认开）；这条测的是关着时的基线
+    vi.stubEnv('INCREMENTAL_REAUDIT', '0');
     const sink: string[] = [];
     const { audit } = await auditSceneContent({ ...panel(sink), content: ORIGINAL });
     expect(audit.rounds).toBe(2);

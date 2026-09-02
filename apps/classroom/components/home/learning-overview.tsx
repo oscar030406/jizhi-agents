@@ -86,7 +86,7 @@ export function PathOrDomainCard({ corpus, className }: { corpus?: string; class
         className,
       )}
     >
-      <div className="h-1 w-full bg-purple-deep/50" />
+      <div className="h-0.5 w-full bg-purple-deep/50" />
       <div className="space-y-3 p-5">
         <div className="flex items-center justify-between gap-3">
           <p className="flex items-center gap-2 text-lg font-medium">
@@ -175,7 +175,7 @@ export function MasterySummaryCard({
         className,
       )}
     >
-      <div className="h-1 w-full bg-blue-deep/40" />
+      <div className="h-0.5 w-full bg-blue-deep/40" />
       <div className="space-y-3 p-5">
         <p className="flex items-center gap-2 text-lg font-medium">
           <BarChart3 className="size-4 text-blue-deep" />

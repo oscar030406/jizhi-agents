@@ -20,6 +20,7 @@ import {
   isVocationalTaskEngineEnabled,
 } from '@/lib/config/feature-flags';
 import { createLogger } from '@/lib/logger';
+import { persistAlignmentJudgeReject } from '@/lib/server/alignment-judge-debug';
 import { isProviderKeyRequired } from '@/lib/ai/providers';
 import { resolveClassroomWebSearchConfig } from '@/lib/server/web-search-config';
 import { resolveModel } from '@/lib/server/resolve-model';
@@ -63,6 +64,8 @@ import { sceneConceptsFromChunks } from '@/lib/evidence/scene-concepts';
 import type { CourseGenerationMeta } from '@/lib/server/classroom-storage';
 import {
   auditCourseContent,
+  claimSimilarity,
+  reviseContentForClaims,
   auditSceneContent,
   extractTeachingText,
   hashCourseScenes,
@@ -450,6 +453,30 @@ async function generateClassroomInner(
     }
   }
 
+  // 大纲阶段先看一眼库里怎么叫：学习目标/达标标准里的术语若跟教材不一致
+  // （合同写「感知、决策、执行」、教材写「感知、思考、行动」），全课事实终审会把
+  // 每一处沿用合同术语的句子判错，一门课因此永远草稿（2026-09-02 实测）。
+  // 把需求命中的前几块摘录当术语基准喂给大纲生成；探针失败就不喂，不拦车。
+  try {
+    const termEvidence = await fetchEvidence(requirement, effectiveCorpus);
+    if (termEvidence.status === 'ok' && termEvidence.bundle.chunks.length > 0) {
+      const termBlock =
+        '## 知识库术语基准（学习目标、达标标准与场景文案中的领域术语必须与以下摘录保持一致，不得改写）\n' +
+        termEvidence.bundle.chunks
+          .slice(0, 6)
+          .map(
+            (chunk) =>
+              `- [${chunk.source_id}] ${chunk.title}：${String(chunk.content ?? '')
+                .replace(/\s+/g, ' ')
+                .slice(0, 160)}`,
+          )
+          .join('\n');
+      researchContext = [researchContext, termBlock].filter(Boolean).join('\n\n');
+    }
+  } catch (error) {
+    log.warn('Terminology evidence probe failed, outline continues without it:', error);
+  }
+
   await options.onProgress?.({
     step: 'generating_outlines',
     progress: 15,
@@ -470,6 +497,19 @@ async function generateClassroomInner(
       outlineEngine: outlineRouting.engine,
       ...(courseBlueprint ? { learnerBlueprint: courseBlueprint } : {}),
       enforceLearningContract: true,
+      // 与屏级检索同一条查询、同一组难度/代码形态上限——预检看到的必须就是生成时会看到的。
+      sceneEvidenceProbe: async (outline, title) => {
+        const probe = await fetchEvidence(
+          `${title} ${outline.title} ${outline.description ?? ''}`.trim(),
+          effectiveCorpus,
+          undefined,
+          undefined,
+          requirements.learnerProfile ? excerptDifficultyCap(requirements.learnerProfile) : undefined,
+          requirements.learnerProfile ? excerptCodeLineCap(requirements.learnerProfile) : undefined,
+        );
+        // 桥不可达/未配置按覆盖处理（不拦车）；只有引擎明确回「空」才算未覆盖。
+        return probe.status !== 'empty';
+      },
     },
   );
 
@@ -1202,6 +1242,7 @@ async function generateClassroomInner(
         audit: scene.audit,
       })),
       learningContract: stage.learningContract!,
+      onAlignmentJudgeReject: persistAlignmentJudgeReject,
       judgeCalls: auditPanel.judgeCalls,
       ...(auditPanel.arbiterCall ? { arbiterCall: auditPanel.arbiterCall } : {}),
       defendCall: auditPanel.defendCall,
@@ -1225,6 +1266,109 @@ async function generateClassroomInner(
       `Course fact review: ${courseAudit.verdict} / ${courseAudit.decision} ` +
         `(${courseAudit.totalClaims} cross-scene issues)`,
     );
+
+    // 课程级定向修订（一轮，有界）：全课终审判错且仲裁给了 fix 的断言，找到它落在哪一屏，
+    // 只改那几句，然后重审那一屏、再跑一次全课终审。原来这里没有修订入口，一条术语
+    // 抖动就把整门课永久钉在草稿（2026-09-02 AI 域实测：10 条跨页断言 1 条术语不一致）。
+    // 修坏了（结构守卫不过）保留原稿；第二次终审仍判错就按草稿落盘，不放宽门禁。
+    const fixable = (courseAudit.claims ?? []).filter(
+      (claim) => claim.verdict === 'incorrect' && claim.fix,
+    );
+    if (fixable.length > 0 && auditPanel.reviseCall) {
+      const bySceneIndex = new Map<number, typeof fixable>();
+      for (const claim of fixable) {
+        let best = -1;
+        let bestScore = 0;
+        scenes.forEach((scene, index) => {
+          for (const line of extractTeachingText(scene.content).split('\n')) {
+            const score = claimSimilarity(claim.claim, line);
+            if (score > bestScore) {
+              bestScore = score;
+              best = index;
+            }
+          }
+        });
+        if (best >= 0) bySceneIndex.set(best, [...(bySceneIndex.get(best) ?? []), claim]);
+      }
+      const courseEvidenceText = chunks.length
+        ? evidenceForJudge({ chunks, matchedConcepts: [], summary: '' })
+        : undefined;
+      let revisedAny = false;
+      for (const [index, sceneClaims] of bySceneIndex) {
+        const scene = scenes[index];
+        const revised = await reviseContentForClaims(
+          scene.content,
+          sceneClaims,
+          courseEvidenceText,
+          auditPanel.reviseCall,
+        );
+        if (!revised) {
+          log.warn(`Course-level revision rejected by structure guard for scene ${scene.id}`);
+          continue;
+        }
+        scene.content = revised as typeof scene.content;
+        revisedAny = true;
+        // 改过的屏重审一次（不再修订），审核记录随内容走，不留过期判词。
+        const { audit } = await auditSceneContent({
+          sceneTitle: scene.title?.trim() || `场景 ${index + 1}`,
+          content: revised,
+          judgeCalls: auditPanel.judgeCalls,
+          ...(auditPanel.arbiterCall ? { arbiterCall: auditPanel.arbiterCall } : {}),
+          defendCall: auditPanel.defendCall,
+          judgeModel: auditPanel.judgeModel,
+          judgeModels: auditPanel.judgeModels,
+          ...(auditPanel.arbiterModel ? { arbiterModel: auditPanel.arbiterModel } : {}),
+          sceneType: scene.type,
+          ...(courseEvidenceText
+            ? {
+                evidence: courseEvidenceText,
+                evidenceCount: chunks.length,
+                ...(stage.origin?.corpus ? { corpus: stage.origin.corpus } : {}),
+                sources: chunks.map((chunk) => ({ source_id: chunk.source_id, title: chunk.title })),
+              }
+            : {}),
+        });
+        scene.audit = audit;
+        log.info(
+          `Course-level revision applied to scene ${scene.id}: ${sceneClaims.length} claim(s), re-audit ${audit.verdict}`,
+        );
+      }
+      if (revisedAny) {
+        const reaudit = await auditCourseContent({
+          courseTitle: stage.name,
+          scenes: scenes.map((scene, index) => ({
+            id: scene.id,
+            outlineId: scene.outlineId,
+            title: scene.title?.trim() || `场景 ${index + 1}`,
+            type: scene.type,
+            content: scene.content,
+            actions: scene.actions,
+            audit: scene.audit,
+          })),
+          learningContract: stage.learningContract!,
+          onAlignmentJudgeReject: persistAlignmentJudgeReject,
+          judgeCalls: auditPanel.judgeCalls,
+          ...(auditPanel.arbiterCall ? { arbiterCall: auditPanel.arbiterCall } : {}),
+          defendCall: auditPanel.defendCall,
+          judgeModel: auditPanel.judgeModel,
+          judgeModels: auditPanel.judgeModels,
+          ...(auditPanel.arbiterModel ? { arbiterModel: auditPanel.arbiterModel } : {}),
+          ...(chunks.length
+            ? {
+                evidence: courseEvidenceText!,
+                evidenceCount: chunks.length,
+                sources: chunks.map((chunk) => ({ source_id: chunk.source_id, title: chunk.title })),
+                ...(stage.origin?.corpus ? { corpus: stage.origin.corpus } : {}),
+              }
+            : { evidenceCount: 0 }),
+        });
+        stage.courseAudit = reaudit;
+        log.info(
+          `Course fact re-review after targeted revision: ${reaudit.verdict} / ${reaudit.decision} ` +
+            `(${reaudit.totalClaims} cross-scene issues)`,
+        );
+      }
+    }
   }
 
   // Recheck the exact final scene payload immediately before persistence. A failed scene stays

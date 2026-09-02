@@ -223,11 +223,16 @@ describe('verificationHasFailures', () => {
     warnings: [],
   };
 
-  test('failed、unverifiable 或 warning 都不能被判为通过', () => {
+  test('只把机械复核出的确定错误判为失败', () => {
     expect(verificationHasFailures({ ...clean, codeFailed: 1 })).toBe(true);
-    expect(verificationHasFailures({ ...clean, codeUnverifiable: 1 })).toBe(true);
-    expect(verificationHasFailures({ ...clean, arithmeticUnverifiable: 1 })).toBe(true);
-    expect(verificationHasFailures({ ...clean, warnings: ['未能安全验算'] })).toBe(true);
+    expect(verificationHasFailures({ ...clean, arithmeticPassed: 0 })).toBe(true);
+    expect(verificationHasFailures({ ...clean, failures: ['数值不一致'] })).toBe(true);
+  });
+
+  test('不可验证项保留未知状态，但不冒充确定错误阻断课程', () => {
+    expect(verificationHasFailures({ ...clean, codeUnverifiable: 1 })).toBe(false);
+    expect(verificationHasFailures({ ...clean, arithmeticUnverifiable: 1 })).toBe(false);
+    expect(verificationHasFailures({ ...clean, warnings: ['未能安全验算'] })).toBe(false);
   });
 
   test('全部候选通过或根本没有候选时不误伤', () => {

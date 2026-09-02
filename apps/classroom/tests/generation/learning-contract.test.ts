@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   TEACHING_STRATEGIES,
+  bindLearningObjectivesToOutlines,
   buildLearningContractPlan,
   resolveOutlineEngine,
   validateAndRepairLearningContract,
@@ -256,6 +257,20 @@ function generatedScenes(outlines: readonly SceneOutline[] = genericAiOutlines) 
 }
 
 describe('LearningContract', () => {
+  it('把审核通过的目标和逐场景教学职责一起绑定给内容生成器', () => {
+    const bound = bindLearningObjectivesToOutlines(genericAiContract, genericAiOutlines);
+
+    expect(bound.find((outline) => outline.id === 'scene_1')).toMatchObject({
+      learningPhaseRoles: ['prerequisiteActivation'],
+    });
+    expect(bound.find((outline) => outline.id === 'scene_3')).toMatchObject({
+      learningPhaseRoles: ['learnerPractice'],
+    });
+    expect(bound.find((outline) => outline.id === 'scene_6')).toMatchObject({
+      learningPhaseRoles: ['assessment'],
+    });
+  });
+
   it('只接受 standard、ubd、feynman 三种互斥教学策略', () => {
     expect(TEACHING_STRATEGIES).toEqual(['standard', 'ubd', 'feynman']);
 
@@ -740,7 +755,7 @@ describe('LearningContract', () => {
     );
   });
 
-  it('模板教具必须通过现有生产参数校验，配置对象本身不算交互', () => {
+  it('模板教具不承担练习职责：现有模板不收作答，合法配置也判不可操作', () => {
     const outlines = genericAiOutlines;
     const plan = buildLearningContractPlan(genericAiContract, outlines);
     const config = {
@@ -769,10 +784,12 @@ describe('LearningContract', () => {
         : scene,
     );
 
-    expect(validateLearningContractFulfillment(plan, scenes)).toEqual({
-      fulfilled: true,
-      violations: [],
-    });
+    // 2026-09-02 双域实测：process_stepper 被派去当练习/重试屏，机械检查放行、
+    // 两位语义判官一致判「只是点击看演示」。八个模板全是探索型控件，没有一个带答案
+    // 判定，所以模板控件不算练习——哪怕参数完全合法。练习要落到 quiz/pbl 上。
+    expect(validateLearningContractFulfillment(plan, scenes).violations).toContain(
+      'interactive scene is not learner-operable with visible feedback: scene_3',
+    );
 
     const invalid = scenes.map((scene) =>
       scene.outlineId === 'scene_3'

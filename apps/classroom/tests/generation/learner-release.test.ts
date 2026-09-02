@@ -253,6 +253,24 @@ describe('学习者发布资格纯函数', () => {
     ).toBe(true);
   });
 
+  it('已有验算记录但代码受沙箱能力限制时保留未知标记，不误判为执行失败', () => {
+    expect(
+      decideSceneLearnerRelease({
+        id: 'scene-code-example',
+        audit: audit(),
+        content: {
+          type: 'interactive',
+          html: '<p>运行示例并观察输出。</p><script>function runExample(){ return 1; }</script>',
+        },
+        verification: {
+          ...passedVerification,
+          codeUnverifiable: 1,
+          warnings: ['代码：未配置系统级隔离执行环境；一般代码未执行'],
+        },
+      }).eligible,
+    ).toBe(true);
+  });
+
   it('没有审核记录视为审核未完成，不允许 fail-open', () => {
     expect(decideSceneLearnerRelease({ id: 'scene-missing' })).toEqual({
       eligible: false,
@@ -344,9 +362,23 @@ describe('学习者发布资格纯函数', () => {
     expect(result.courseReasons).toContain('course_incomplete');
   });
 
-  it('没有落盘教学契约的旧课保持草稿', () => {
+  it('没有教学契约的旧课按屏级审核协议判定：审核在且未拦截即可见，并标明协议', () => {
     const result = decideCourseLearnerRelease({ scenes: releasedScenes });
-    expect(result.courseReasons).toContain('learning_contract_missing');
+    expect(result.protocol).toBe('scene-audit-legacy');
+    expect(result.courseReasons).not.toContain('learning_contract_missing');
+    expect(result.eligible).toBe(true);
+  });
+
+  it('旧课里有被拦截转人工或审核缺失的屏，仍不可见', () => {
+    const blocked = decideCourseLearnerRelease({
+      scenes: [
+        ...releasedScenes,
+        { id: 'legacy-pending', audit: { ...releasedScenes[0].audit!, decision: 'block_pending_review' } },
+        { id: 'legacy-noaudit', audit: null },
+      ],
+    });
+    expect(blocked.eligible).toBe(false);
+    expect(blocked.blockedScenes.map((b) => b.sceneId)).toEqual(['legacy-pending', 'legacy-noaudit']);
   });
 
   it('任一计划场景生成失败时，剩余场景不能发布', () => {

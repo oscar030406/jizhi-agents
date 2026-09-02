@@ -4,6 +4,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { SceneAuditBadge } from '@/components/stage/scene-audit-badge';
+import type { VerificationMeta } from '@/lib/generation/content-verify';
 import type { SceneAudit } from '@/lib/generation/hallucination-audit';
 
 /**
@@ -46,12 +47,12 @@ const AUDIT: SceneAudit = {
   ],
 };
 
-function renderOpenPanel(audit: SceneAudit): HTMLElement {
+function renderOpenPanel(audit: SceneAudit, verification?: VerificationMeta): HTMLElement {
   const host = document.createElement('div');
   document.body.appendChild(host);
   const root = createRoot(host);
   act(() => {
-    root.render(<SceneAuditBadge audit={audit} />);
+    root.render(<SceneAuditBadge audit={audit} verification={verification} />);
   });
   const button = host.querySelector<HTMLButtonElement>('[data-testid="scene-audit-badge"]');
   expect(button).not.toBeNull();
@@ -109,5 +110,22 @@ describe('SceneAuditBadge 弹层模型口径', () => {
     const { judgeModels: _drop, arbiterModel: _drop2, debate: _drop3, ...single } = AUDIT;
     const panel = renderOpenPanel(single);
     expect(panel.textContent).toContain('独立审核 · 审核智能体甲（通义系）');
+  });
+
+  it('持久展示机械验算三态，不把未执行代码写成失败或通过', () => {
+    const panel = renderOpenPanel(AUDIT, {
+      codePassed: 0,
+      codeFailed: 0,
+      codeUnverifiable: 1,
+      arithmeticChecked: 1,
+      arithmeticPassed: 1,
+      arithmeticUnverifiable: 0,
+      failures: [],
+      warnings: ['代码未执行'],
+    });
+
+    expect(panel.textContent).toContain('机械验算');
+    expect(panel.textContent).toContain('代码 0/1 已验证');
+    expect(panel.textContent).toContain('1 项未执行或不可安全解析');
   });
 });

@@ -110,15 +110,14 @@ export function reportPipeline(sceneTitle: string, pipeline: ScenePipelineMeta |
     push(sceneTitle, line, 'purple');
   }
   push(sceneTitle, '✍️ 生成：版面内容就绪', 'neutral');
-  // 可执行验证（KR2）：代码沙箱真跑 + 数值等式复核。有失败必须红行点名——
-  // 「课件里的数字被机器验算过」是这条流水线区别于纯文本审核的地方。
+  // 可执行验证（KR2）：代码保持三态，数值等式机械复核；确定错误必须红行点名。
   const vr = pipeline?.verification;
   if (vr) {
     const parts: string[] = [];
     const codeTotal = vr.codePassed + vr.codeFailed + vr.codeUnverifiable;
     if (codeTotal > 0) {
-      let seg = `代码 ${vr.codePassed}/${codeTotal} 沙箱通过`;
-      if (vr.codeUnverifiable > 0) seg += `（${vr.codeUnverifiable} 块未判为通过）`;
+      let seg = `代码 ${vr.codePassed}/${codeTotal} 已验证`;
+      if (vr.codeUnverifiable > 0) seg += `（${vr.codeUnverifiable} 块未执行）`;
       parts.push(seg);
     }
     if (vr.arithmeticChecked > 0)

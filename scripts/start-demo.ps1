@@ -48,7 +48,12 @@ if (Test-Path $envFile) {
 $env:AGENT_GENERATION_MODE = 'api'
 $env:LLM_TIMEOUT_SECONDS = '10'
 $env:AI_SERVICE_TOKEN = 'demo-internal-token'
-Start-Svc '多智能体引擎 ai-service' 'python' `
+$enginePython = Join-Path $root 'apps\agent-engine\.venv\Scripts\python.exe'
+if (-not (Test-Path $enginePython)) {
+    Write-Host "[错误] 引擎虚拟环境不存在：$enginePython" -ForegroundColor Red
+    exit 1
+}
+Start-Svc '多智能体引擎 ai-service' $enginePython `
     @('-m', 'uvicorn', 'app.main:app', '--port', '8001', '--host', '127.0.0.1') `
     (Join-Path $root 'apps\agent-engine') 8001
 
@@ -95,7 +100,7 @@ foreach ($c in $checks) {
 # 裸生成（评分表最低档）且页面看不出异常——彩排忘起引擎就是这么翻车的。这里当场戳破。
 Write-Host "`n=== 引擎桥自检 ===" -ForegroundColor Cyan
 try {
-    $probe = Invoke-WebRequest -Uri 'http://127.0.0.1:8001/internal/v1/personalize/skill-map' `
+    $probe = Invoke-WebRequest -Uri 'http://127.0.0.1:8001/internal/v1/personalize/learning-modes' `
         -Headers @{ 'x-internal-token' = $env:AI_SERVICE_TOKEN } -TimeoutSec 8 -UseBasicParsing
     if ($probe.StatusCode -eq 200) {
         Write-Host "  OK   personalize 桥可用（画像/接地/反馈决策都走它）" -ForegroundColor Green
@@ -130,7 +135,7 @@ try {
 # （评分表最低档），页面看不出异常。/api/health 的 engineBridge 字段是真探针。
 try {
     $health = Invoke-RestMethod -Uri 'http://127.0.0.1:3210/api/health' -TimeoutSec 10
-    $bridge = $health.data.engineBridge
+    $bridge = $health.engineBridge
     if ($bridge -eq 'ok') {
         Write-Host "  OK   引擎桥            四桥可用（画像/接地/审核/反馈）" -ForegroundColor Green
     } elseif ($bridge -eq 'unconfigured') {

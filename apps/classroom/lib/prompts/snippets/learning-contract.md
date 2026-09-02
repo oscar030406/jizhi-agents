@@ -19,7 +19,7 @@ Use this exact shape:
   ],
   "prerequisiteActivation": ["scene id that elicits relevant prior knowledge"],
   "demonstration": ["scene id containing a worked example or demonstration"],
-  "learnerPractice": ["interactive or pbl scene id where the learner performs"],
+  "learnerPractice": ["quiz or pbl scene id where the learner answers/performs and gets graded feedback"],
   "feedbackRetry": ["scene id with actionable feedback and another attempt"],
   "transferApplication": ["scene id applying learning in a new situation"],
   "assessmentMap": [
@@ -97,9 +97,45 @@ Hard rules:
   loop rather than a shallow mention.
 - Every objective has all four fields. `action` must be observable; `condition` and
   `successCriterion` make it measurable.
+- Vocational / task-engine courses that contain `procedural-skill` interactive scenes must map
+  `learnerPractice` (and preferably `feedbackRetry`) to those hands-on scenes — that is where the learner
+  performs the procedure; keep quizzes for transfer and assessment. Do not list a procedural-skill scene
+  only under `demonstration`.
+- Every objective must be assessable with the scene types this course actually contains. Without a
+  `pbl` scene there is no code runner, so do not write actions such as "运行代码" / "修改代码并输出结果";
+  prefer observable actions a quiz can grade — explain, identify, order the steps, complete the key
+  line of code in a `short_answer`, design a call plan — and phrase `successCriterion` the same way.
+- `prerequisiteActivation` is not a course overview. The mapped scene's description and keyPoints must
+  contain 2–3 recall prompts addressed to the learner ("回想你上次……", "你是否曾……", "先判断：……")
+  that elicit the exact prior experience the objective's `action` builds on; a slide that only
+  introduces the topic or lists the agenda is misaligned.
+- `transferApplication` items must open by stating a concrete new situation that never appeared in the
+  demonstration or practice, then ask the learner to perform the same objective `action` there; a
+  recognition question about the old example is not transfer.
+- When several objectives share one `feedbackRetry` (or `transferApplication`) quiz, that quiz must
+  contain at least one item per mapped objective, in objective order, and each item's stem must name
+  the objective it serves (e.g. 「O2 · 重试」); a quiz that only covers one of the mapped objectives is
+  misaligned for the others.
+- A `feedbackRetry` quiz is not a fresh test. Each item must name the common wrong answer or misconception
+  from the paired practice, state the gap against the objective's `successCriterion`, then re-ask an
+  item on the same objective so the learner can retry; write this into the item stem and `analysis`.
 - Every phase array is non-empty and references an ID that exists in `outlines`. A compact course may
   reuse a scene when it genuinely performs more than one role.
-- Practice requires learner action, not another explanation slide.
+- Practice requires learner action that is graded, not another explanation slide. Map `learnerPractice`
+  and `feedbackRetry` to **quiz or pbl** scenes: a quiz collects answers, shows `analysis` feedback and
+  lets the learner retry. None of the prebuilt interactive widget templates grades learner input (they
+  are exploration widgets), so an interactive scene may serve demonstration or prerequisite activation
+  but must NOT be mapped to `learnerPractice` or `feedbackRetry`.
+- When an objective's `action` is explanatory (解释 / 说明 / 描述 / 比较 / 画出 / 设计), its practice,
+  feedbackRetry and transfer quizzes must include at least one `short_answer` question that asks the
+  learner to perform that action, with a grading rubric mirroring the `successCriterion`. Recognition
+  items alone (pick the right name) do not exercise an explanatory action.
+- Objective wording, especially `successCriterion`, must reuse the terminology of the reference
+  materials / knowledge-base excerpts verbatim (e.g. use the material's own names for stages or steps);
+  do not paraphrase domain terms — the whole-course fact review treats term drift as an error.
+- `learnerPractice` is a minimal contract map, not a list of every interactive scene. For every listed
+  practice, keep the same-objective order `practice.order < feedbackRetry.order < assessment.order`.
+  If a late interactive is not part of that loop, leave it out of `learnerPractice`.
 - Every outline sets `objectiveIds` to one or more IDs from `learningContract.objectives`; use all
   relevant IDs when one scene genuinely serves more than one objective. Each objective must have
   mapped prerequisite activation, demonstration, learner practice, feedback/retry, transfer, and

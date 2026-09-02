@@ -28,7 +28,9 @@ import {
 } from './learning-contract';
 import { blueprintDirective, type LearnerBlueprint } from './learner-profile';
 const log = createLogger('Generation');
-const MAX_OUTLINE_QUALITY_REVISIONS = 2;
+// 每轮修订 1-2 分钟，一门课 45 分钟；模型在严格合同上单条规则的掉落是随机的，
+// 两轮不够（2026-09-02 智造域：迁移屏漏挂 O1/O2 两轮都没补上）。三轮仍不合格照旧拒绝。
+const MAX_OUTLINE_QUALITY_REVISIONS = 3;
 const STANDARD_WIDGET_TYPES = new Set(['simulation', 'diagram', 'code', 'game', 'visualization3d']);
 
 type OutlineGenerationData = {
@@ -42,8 +44,12 @@ const OUTLINE_QUALITY_REVISION_SYSTEM = `You are the course-outline quality revi
 Return one complete JSON object with exactly languageDirective, courseTitle, learningContract, and outlines. Do not return prose or markdown.
 Repair the rejected draft pedagogically: keep sound domain content and learner adaptation, but change objectives, scene mappings, scene types, ordering, descriptions, or phase references when the validator proves they are inconsistent.
 Every objective must have a genuine prerequisite, demonstration, learner action, later actionable feedback and retry, and later unseen quiz or PBL assessment. Do not mechanically attach every objective to every scene; a scene may name an objective only when its description and keyPoints actually serve that objective.
-Every learnerPractice ID must be an interactive or PBL scene. Every transferApplication ID and assessmentMap sceneId must be a quiz or PBL scene after feedback; in task-engine outlines this means quiz because PBL is not allowed.
+Every learnerPractice and feedbackRetry ID must be a quiz or PBL scene (a quiz collects answers, shows analysis and allows retry); the prebuilt interactive widget templates do not grade learner input, so never map a template interactive to learnerPractice or feedbackRetry. Every transferApplication ID and assessmentMap sceneId must be a quiz or PBL scene after feedback; in task-engine outlines this means quiz because PBL is not allowed.
+If the validator rejects strategyEvidence (ubd/feynman ordering or scene-type rules) and the course cannot honestly satisfy that cycle, set teachingStrategy to "standard" and omit strategyEvidence instead of forcing an impossible ordering; the six-phase contract still applies in full.
+learnerPractice is a minimal contract map, not an inventory of every interactive scene. For every listed practice, verify the strict same-objective order practice.order < feedbackRetry.order < assessment.order. Remove a redundant late practice reference instead of keeping an impossible loop.
+For task-engine outlines, the first item in the outlines array must be a slide with no widgetType. Use only slide, quiz, and interactive scenes; include at least three interactive scenes, at least one quiz, no more than three slides, and at least one complete procedural-skill scene.
 Interactive scenes must use a supported widgetType and a widgetOutline. PBL scenes must contain a complete pblConfig and must not contain widgetType. Non-interactive scenes must not contain widgetType.
+A scene reported as having no supporting evidence in the knowledge base must be reworked to teach content the reference materials cover (reuse their terms and topics from the 知识库术语基准 block), or merged into a covered scene; never keep or rename a scene whose subject the knowledge base does not contain.
 Use only the allowed grounding refs. Recheck every listed violation before returning the full corrected JSON.`;
 
 function outlineGenerationViolations(
@@ -132,6 +138,13 @@ export async function generateSceneOutlinesFromRequirements(
     learnerBlueprint?: LearnerBlueprint;
     /** Production callers enable this to block structurally incomplete courses. */
     enforceLearningContract?: boolean;
+    /**
+     * 逐屏证据覆盖预检：给每个 outline 回答「知识库里有没有能支撑这一屏的材料」。
+     * 返回 false 的屏作为 validator violation 进入同一套两轮修订循环——大纲编出语料不覆盖的屏
+     * （需求点名「安全前置」而库里只有 ROS2/PLC 文档）以前要到 40% 才被屏级证据闸击杀。
+     * 探针自身异常按「覆盖」处理，不拦车（与 zeroEvidenceReason 同口径）。
+     */
+    sceneEvidenceProbe?: (outline: SceneOutline, courseTitle: string) => Promise<boolean>;
   },
 ): Promise<GenerationResult<OutlineGenerationData>> {
   // Build available images description for the prompt
@@ -283,9 +296,37 @@ export async function generateSceneOutlinesFromRequirements(
         );
       }
 
-      const contractResult = validateAndRepairLearningContract(rawLearningContract, result, {
+      let contractResult = validateAndRepairLearningContract(rawLearningContract, result, {
         allowedGroundingRefs: groundingRefs,
       });
+      // 策略证据（UbD/Feynman 的 strategyEvidence）是规划元数据，不是学生可见内容，也不是
+      // 六阶段门禁的一部分。模型常常选了 ubd 却排不出 performanceEvidence → reflectionRevision
+      // → transfer 的严格顺序，两轮修订仍栽在同一条上，整门课因此拒绝生成（2026-09-02 AI 域实测）。
+      // 当**仅剩**策略证据违规时，确定性降级到 standard 并重新校验：六阶段、练习/反馈/迁移/
+      // 评价的全部规则一条不减；降级如实写日志。其他任何违规照旧拒绝。
+      const onlyStrategyViolations =
+        contractResult.violations.length > 0 &&
+        contractResult.violations.every((v) => /^(ubd|feynman) /.test(v)) &&
+        rawLearningContract !== null &&
+        typeof rawLearningContract === 'object' &&
+        !Array.isArray(rawLearningContract);
+      if (onlyStrategyViolations) {
+        const { strategyEvidence: _dropped, ...rest } = rawLearningContract as Record<
+          string,
+          unknown
+        >;
+        const downgraded = validateAndRepairLearningContract(
+          { ...rest, teachingStrategy: 'standard' },
+          result,
+          { allowedGroundingRefs: groundingRefs },
+        );
+        if (downgraded.publishable && downgraded.contract && downgraded.violations.length === 0) {
+          log.info(
+            `Learning contract strategy downgraded to standard (strategy evidence rejected: ${contractResult.violations.join('; ')})`,
+          );
+          contractResult = downgraded;
+        }
+      }
       const violations = [
         ...contractResult.violations,
         ...outlineGenerationViolations(result, outlineEngine),
@@ -319,9 +360,43 @@ export async function generateSceneOutlinesFromRequirements(
     };
   };
 
+  // 结构校验通过后再问证据：每屏探一次，零命中的屏变成 violation 走同一条修订路。
+  const evaluateWithEvidence = async (
+    response: string,
+  ): Promise<{ result: GenerationResult<OutlineGenerationData>; violations?: string[] }> => {
+    const evaluated = evaluateResponse(response);
+    const probe = options?.sceneEvidenceProbe;
+    if (!probe || !evaluated.result.success || !evaluated.result.data) return evaluated;
+    const { outlines: drafted, courseTitle: title } = evaluated.result.data;
+    const uncovered: string[] = [];
+    for (const outline of drafted) {
+      let covered = true;
+      try {
+        covered = await probe(outline, title ?? '');
+      } catch {
+        covered = true;
+      }
+      if (!covered) {
+        uncovered.push(
+          `${outline.id} 「${outline.title}」 has no supporting evidence in the knowledge base (0 chunks). ` +
+            'Rework this scene so it teaches something the reference materials actually cover, or merge it into a covered scene; ' +
+            'do not invent content the knowledge base lacks.',
+        );
+      }
+    }
+    if (uncovered.length === 0) return evaluated;
+    return {
+      result: {
+        success: false,
+        error: `Teaching-quality contract rejected: ${uncovered.join('; ')}`,
+      },
+      violations: uncovered,
+    };
+  };
+
   try {
     let response = await aiCall(prompts.system, prompts.user, visionImages);
-    let evaluated = evaluateResponse(response);
+    let evaluated = await evaluateWithEvidence(response);
     for (let revision = 0; revision < MAX_OUTLINE_QUALITY_REVISIONS; revision += 1) {
       if (evaluated.result.success || !evaluated.violations?.length) return evaluated.result;
       const revisionPrompt = [
@@ -334,12 +409,12 @@ export async function generateSceneOutlinesFromRequirements(
         response,
       ].join('\n');
       response = await aiCall(OUTLINE_QUALITY_REVISION_SYSTEM, revisionPrompt);
-      evaluated = evaluateResponse(response);
+      evaluated = await evaluateWithEvidence(response);
     }
     if (!evaluated.result.success && evaluated.violations?.length) {
       return {
         success: false,
-        error: `Teaching-quality contract rejected after two quality revisions: ${evaluated.violations.join('; ')}`,
+        error: `Teaching-quality contract rejected after ${MAX_OUTLINE_QUALITY_REVISIONS} quality revisions: ${evaluated.violations.join('; ')}`,
       };
     }
     return evaluated.result;

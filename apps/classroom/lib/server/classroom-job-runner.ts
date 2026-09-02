@@ -22,13 +22,18 @@ export function runClassroomGenerationJob(
   }
 
   const jobPromise = (async () => {
+    let reportedProgress = 0;
     try {
       await markClassroomGenerationJobRunning(jobId);
 
       const result = await generateClassroom(input, {
         baseUrl,
         onProgress: async (progress) => {
-          await updateClassroomGenerationJobProgress(jobId, progress);
+          reportedProgress = Math.max(reportedProgress, progress.progress);
+          await updateClassroomGenerationJobProgress(jobId, {
+            ...progress,
+            progress: reportedProgress,
+          });
         },
       });
 

@@ -69,6 +69,29 @@ describe('scene-generator language directive threading (issue #472)', () => {
       expect(lastUser()).not.toContain('{{languageDirective}}');
     });
 
+    it('tells scene generation the validated teaching duty, not only the objective', async () => {
+      const { aiCall, lastUser } = makeCapturingAiCall('### 示范\n\n完整示范正文');
+
+      await generateSceneContent(
+        baseOutline({
+          learningObjectives: [
+            {
+              id: 'O1',
+              action: '判断设备是否可以放行',
+              condition: '给定一份巡检记录',
+              successCriterion: '列出异常证据并给出一致结论',
+            },
+          ],
+          learningPhaseRoles: ['demonstration'],
+        }),
+        aiCall,
+      );
+
+      expect(lastUser()).toContain('【本场景承担的教学职责】');
+      expect(lastUser()).toContain('给出一次完整示范');
+      expect(lastUser()).toContain('动作步骤、判断依据和达标标准');
+    });
+
     it('threads languageDirective into quiz content prompt', async () => {
       const { aiCall, lastUser } = makeCapturingAiCall(JSON.stringify([]));
 

@@ -4,8 +4,8 @@ import { useState, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   PanelLeftClose,
-  PieChart,
-  Cpu,
+  ClipboardCheck,
+  Hammer,
   MousePointer2,
   BookOpen,
   Globe,
@@ -182,9 +182,9 @@ export function SceneSidebar({
   const getSceneTypeIcon = (type: SceneType) => {
     const icons = {
       slide: BookOpen,
-      quiz: PieChart,
+      quiz: ClipboardCheck,
       interactive: MousePointer2,
-      pbl: Cpu,
+      pbl: Hammer,
     };
     return icons[type] || BookOpen;
   };
@@ -335,7 +335,7 @@ export function SceneSidebar({
                         {formBadge(scene)}
                       </span>
                     )}
-                    <SceneAuditBadge audit={scene.audit} />
+                    <SceneAuditBadge audit={scene.audit} verification={scene.verification} />
                   </div>
                 </div>
 

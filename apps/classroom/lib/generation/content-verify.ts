@@ -321,15 +321,12 @@ export function hasVerifiableContent(codeBlocks: string[], texts: string[]): boo
   );
 }
 
-/** 发布门禁与生成日志共用的失败口径：failed / unverifiable / warning 均不算通过。 */
+/** 只有机械复核出的确定错误阻断发布；不可验证项保留 warning，不冒充失败或通过。 */
 export function verificationHasFailures(meta: VerificationMeta): boolean {
   return (
     meta.codeFailed > 0 ||
-    meta.codeUnverifiable > 0 ||
     meta.arithmeticPassed < meta.arithmeticChecked ||
-    (meta.arithmeticUnverifiable ?? 0) > 0 ||
-    meta.failures.length > 0 ||
-    (meta.warnings?.length ?? 0) > 0
+    meta.failures.length > 0
   );
 }
 

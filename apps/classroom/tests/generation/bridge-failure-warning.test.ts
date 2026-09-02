@@ -116,14 +116,36 @@ describe('bridge onFailure semantics', () => {
     expect(onFailure).not.toHaveBeenCalled();
   });
 
-  test('200 但零命中：显式 empty 并阻断整课', async () => {
-    global.fetch = vi
+  test('200 但零命中：复查一次仍空才显式 empty 并阻断整课', async () => {
+    // Response body 只能读一次，mock 必须每次调用给新实例（生产端每次 attempt 都是新 fetch）
+    const mock = vi
       .fn()
-      .mockResolvedValue(new Response(JSON.stringify({ data: { chunks: [] } }), { status: 200 }));
+      .mockImplementation(async () => new Response(JSON.stringify({ data: { chunks: [] } }), { status: 200 }));
+    global.fetch = mock;
     const onFailure = vi.fn();
     const result = await fetchEvidence('q', undefined, undefined, onFailure);
     expect(result).toMatchObject({ status: 'empty' });
+    // 空结果要隔 3 秒复查一次（引擎 embedding 瞬态降级会假报 0 命中）
+    expect(mock).toHaveBeenCalledTimes(2);
     expect(() => requireEvidenceWhenConfigured(result)).toThrow('未命中可用于本课的证据');
     expect(onFailure).not.toHaveBeenCalled();
+  });
+
+  test('200 零命中但复查命中：返回证据，不误杀', async () => {
+    const hit = {
+      data: {
+        chunks: [{ source_id: 'x#s1', title: 't', content: 'c'.repeat(100), concept_tags: [] }],
+      },
+    };
+    const mock = vi
+      .fn()
+      .mockImplementationOnce(
+        async () => new Response(JSON.stringify({ data: { chunks: [] } }), { status: 200 }),
+      )
+      .mockImplementation(async () => new Response(JSON.stringify(hit), { status: 200 }));
+    global.fetch = mock;
+    const result = await fetchEvidence('q', undefined, undefined, vi.fn());
+    expect(requireEvidenceWhenConfigured(result)?.chunks).toHaveLength(1);
+    expect(mock).toHaveBeenCalledTimes(2);
   });
 });

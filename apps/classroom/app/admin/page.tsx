@@ -11,7 +11,7 @@
  *   B 全局口径数字 + 课程墙实时汇总
  *   C 课程审核账单表，按判错数降序，点行下钻
  *   D 资源体检：覆盖缺口 + 难度供给
- *   E 学习路径规划图
+ *   E 学习路径入口（概念级规划图已下线，全景路径在 /path，与首页/报告同源）
  *
  * 数字纪律：只有 metrics.json（带口径原文）与课程文件实时计算两个来源，
  * 读不到显示「—」。这一页不受 check_metrics.py 管辖，更不许硬编码。
@@ -57,13 +57,12 @@ import {
   readHeadlineMetrics,
   rollup,
 } from '@/lib/server/admin-overview';
-import { readCoverageRuns, readDifficultySupply, readDomainMaps } from '@/lib/server/knowledge-map';
+import { readCoverageRuns, readDifficultySupply } from '@/lib/server/knowledge-map';
 import { Caliber } from '@/components/admin/caliber';
 import { AdminCourseTable } from '@/components/admin/course-table';
 import { CoveragePanel, DifficultySupply } from '@/components/admin/coverage-panel';
 import { DomainIntakeSummary } from '@/components/admin/domain-intake-summary';
 import { DomainIntakeTable } from '@/components/admin/domain-intake-table';
-import { KnowledgeMap } from '@/components/admin/knowledge-map';
 import { MetricBand } from '@/components/admin/metric-band';
 import { SectionAnchor } from '@/components/home/section-anchor';
 import { SiteHeader } from '@/components/site-header';
@@ -71,9 +70,15 @@ import { cn } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
 
-/** 公共页实拔出来的两条段落带（天蓝，chroma ≥0.1）。暗色下退回主题底色，不做二次调色。 */
-const BAND_WARM = 'bg-[rgb(240,245,253)] dark:bg-background';
-const BAND_SOFT = 'bg-[rgb(228,238,253)] dark:bg-blue-soft';
+/**
+ * 两条段落带。原来是公共页实拔的天蓝（chroma ≥0.1），问题有两个：
+ * 一是全站中性色是暖的（--muted 245,243,238），一条冷蓝色带压在暖白上是两套灰；
+ * 二是整幅换底的高饱和色块在管理端这种信息密集页上抢视觉中心，把注意力从
+ * 数字和表格上拉走。改用主题自带的中性档，段落分隔照旧（白 / muted 两级明度差
+ * 仍然看得出来），只是不再喊。暗色沿用同一组 token，不做二次调色。
+ */
+const BAND_WARM = 'bg-muted/50 dark:bg-background';
+const BAND_SOFT = 'bg-muted dark:bg-muted/40';
 const CONTAINER = 'mx-auto w-full max-w-6xl px-4 sm:px-6';
 
 function Denied({ reason }: { readonly reason: string }) {
@@ -144,11 +149,10 @@ export default async function AdminPage() {
   const { readDomainRegistry } = await import('@/lib/server/domain-registry');
   await readDomainRegistry().catch(() => null);
 
-  const [metrics, courses, intakes, maps, coverage, tiers] = await Promise.all([
+  const [metrics, courses, intakes, coverage, tiers] = await Promise.all([
     readHeadlineMetrics(),
     readAllCourseAudits(),
     readDomainIntakes(),
-    readDomainMaps(),
     readCoverageRuns(),
     readDifficultySupply(),
   ]);
@@ -330,34 +334,15 @@ export default async function AdminPage() {
           </Caliber>
         </Section>
 
-        <Section icon={Route} title="学习路径规划图">
-          {maps.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-xs leading-relaxed text-muted-foreground">
-              系统暂时无法读取学习路径图所需的领域数据，因此不展示旧图。
-              请刷新页面重试；反复出现请联系平台维护人员。
-            </p>
-          ) : (
-            <div className="space-y-8">
-              {maps.map((m) => (
-                <div key={m.domain}>
-                  <p className="mb-2.5 text-base font-medium">
-                    {domainLabel(m.domain)}
-                    <span className="ml-2.5 text-xs font-normal text-muted-foreground">
-                      {m.nodes.length} 个概念 · {m.edges.length} 条前置边 · {m.layerCount} 层
-                    </span>
-                  </p>
-                  <KnowledgeMap map={m} />
-                </div>
-              ))}
-            </div>
-          )}
-          <Caliber summary="展开口径：这张图为什么是「换领域」的判据">
-            <p>
-              概念前置图按拓扑层级排开，学习者侧的选点就走这张图。
-              接入新语料后这张图出不来，就说明那个领域只能按书序排课——
-              前置图是「换个领域还教不教得动」的判据，不是装饰。
-            </p>
-          </Caliber>
+        <Section icon={Route} title="学习路径">
+          <p className="rounded-xl border border-border bg-card px-4 py-4 text-sm leading-relaxed text-muted-foreground">
+            各领域的全景学习路径由引擎按概念前置图拓扑生成，学习者首页、学情报告与路径页读同一份产物。
+            管理者可在
+            <Link href="/path" className="mx-1 underline underline-offset-2">
+              路径页
+            </Link>
+            按当前有效领域查看；接入新语料后若前置图出不来，说明该领域暂时只能按书序排课。
+          </p>
         </Section>
       </main>
     </>

@@ -120,6 +120,9 @@ const OPERATION_ACTION =
 const WORKFLOW_OR_JUDGMENT =
   /(?:步骤|流程|工单|工具|设备|仪器|防护|风险|阈值|异常|合格|不合格|继续|停止|安全|复查|交接|GO\s*\/?\s*STOP|\b(?:procedure|workflow|tool|equipment|PPE|risk|threshold|pass|fail|safe|unsafe|recheck)\b)/iu;
 
+// 程序性/动手类动作动词：只在课程没有 pbl 场景时视为不可评（见目标校验处注释）
+const PROCEDURAL_ACTION =
+  /(执行|配置|操作|标定|安装|调试|上电|部署|搭建|接线|维修|更换|校准|停机|编写|写出.{0,8}代码|写代码|运行代码|调用.{0,6}工具完成|perform|configure|operate|install|calibrate|deploy|set up|write (the )?code|run (the )?code)/iu;
 const NON_MEASURABLE_ACTION =
   /^(?:(?:理解|了解|掌握|熟悉|知道|认识|学习)(?:.+)?|(?:understand|know|learn|be familiar with|appreciate)(?:\s+.+)?)$/iu;
 const OBSERVABLE_ACTION =
@@ -361,6 +364,13 @@ export function bindLearningObjectivesToOutlines(
     ]);
   }
   const validIds = new Set(objectiveById.keys());
+  const phaseScenes = {
+    prerequisiteActivation: new Set(contract.prerequisiteActivation),
+    demonstration: new Set(contract.demonstration),
+    learnerPractice: new Set(contract.learnerPractice),
+    feedbackRetry: new Set(contract.feedbackRetry),
+    transferApplication: new Set(contract.transferApplication),
+  };
 
   return outlines.map((outline) => {
     const objectiveIds = objectiveIdsForOutline(
@@ -373,6 +383,18 @@ export function bindLearningObjectivesToOutlines(
       objectiveIds,
       ...(objectiveIds[0] ? { teachingObjective: objectiveIds[0] } : {}),
       learningObjectives: objectiveIds.map((id) => objectiveById.get(id)!),
+      learningPhaseRoles: [
+        ...(phaseScenes.prerequisiteActivation.has(outline.id)
+          ? (['prerequisiteActivation'] as const)
+          : []),
+        ...(phaseScenes.demonstration.has(outline.id) ? (['demonstration'] as const) : []),
+        ...(phaseScenes.learnerPractice.has(outline.id) ? (['learnerPractice'] as const) : []),
+        ...(phaseScenes.feedbackRetry.has(outline.id) ? (['feedbackRetry'] as const) : []),
+        ...(phaseScenes.transferApplication.has(outline.id)
+          ? (['transferApplication'] as const)
+          : []),
+        ...(assessmentByScene.has(outline.id) ? (['assessment'] as const) : []),
+      ],
     };
   });
 }
@@ -477,8 +499,17 @@ function templateWidgetIsProductionReady(value: unknown): boolean {
   }).ok;
 }
 
+// 能承担「练习/反馈重试」的模板：必须收学习者作答并按对错给反馈。现有八个模板全是
+// 探索型（滑杆/步进/矩阵/图），没有一个带答案判定——2026-09-02 双域真实生成里，
+// process_stepper 被派去当练习屏和重试屏，机械检查放行、两位语义判官一致判「只是
+// 点击看演示」。所以模板控件默认不算练习；日后加了带判定的模板再登记进来。
+const PRACTICE_CAPABLE_TEMPLATES = new Set<string>([]);
+
 function interactiveHasInputAndFeedback(content: Record<string, unknown>): boolean {
-  if (templateWidgetIsProductionReady(content.widgetConfig)) return true;
+  if (templateWidgetIsProductionReady(content.widgetConfig)) {
+    const cfg = content.widgetConfig as Record<string, unknown>;
+    return PRACTICE_CAPABLE_TEMPLATES.has(normalizedString(cfg.templateId));
+  }
   const html = normalizedString(content.html);
   if (!html) return false;
   return (
@@ -492,6 +523,7 @@ function interactiveHasInputAndFeedback(content: Record<string, unknown>): boole
 function actualActivityContentViolation(
   sceneId: string,
   scene: LearningContractActualScene,
+  requiresLearnerInput: boolean,
 ): string | null {
   if (!isRecord(scene.content)) {
     return `${scene.type} scene has no content: ${sceneId}`;
@@ -502,6 +534,14 @@ function actualActivityContentViolation(
       : `quiz scene has no questions: ${sceneId}`;
   }
   if (scene.type === 'interactive') {
+    // 只有承担练习/反馈重试职责的 interactive 才必须收作答给反馈；示范/前置激活用的
+    // 探索型模板控件，参数校验合法即可（否则模板控件在合同里就无处可用）。
+    if (!requiresLearnerInput) {
+      return templateWidgetIsProductionReady(scene.content.widgetConfig) ||
+        normalizedString(scene.content.html).length > 0
+        ? null
+        : `interactive scene has no renderable widget: ${sceneId}`;
+    }
     return interactiveHasInputAndFeedback(scene.content)
       ? null
       : `interactive scene is not learner-operable with visible feedback: ${sceneId}`;
@@ -520,7 +560,9 @@ function actualSceneMatchesPhase(
   scene: LearningContractActualScene,
 ): boolean {
   if (phase === 'prerequisiteActivation' || phase === 'demonstration') return true;
-  if (phase === 'learnerPractice') return scene.type === 'interactive' || scene.type === 'pbl';
+  if (phase === 'learnerPractice') {
+    return scene.type === 'interactive' || scene.type === 'pbl' || scene.type === 'quiz';
+  }
   if (phase === 'feedbackRetry' || phase === 'transferApplication') {
     return scene.type === 'interactive' || scene.type === 'pbl' || scene.type === 'quiz';
   }
@@ -649,6 +691,12 @@ export function validateLearningContractFulfillment(
     actual.set(sceneId, scene);
   }
 
+  // 承担练习 / 反馈重试职责的屏：v2 在 required 里，v1 在顶层数组
+  const requiredRoles = isRecord(input.required) ? input.required : input;
+  const learnerInputScenes = new Set([
+    ...normalizedStrings(requiredRoles.learnerPractice),
+    ...normalizedStrings(requiredRoles.feedbackRetry),
+  ]);
   for (const [sceneId, expected] of planned) {
     const scene = actual.get(sceneId);
     if (!scene) {
@@ -670,7 +718,7 @@ export function validateLearningContractFulfillment(
       options.actualContentReady !== false &&
       scene.type === expected.type &&
       ['quiz', 'interactive', 'pbl'].includes(expected.type) &&
-      actualActivityContentViolation(sceneId, scene);
+      actualActivityContentViolation(sceneId, scene, learnerInputScenes.has(sceneId));
     if (contentViolation) violations.push(contentViolation);
   }
 
@@ -717,7 +765,9 @@ export function validateLearningContractFulfillment(
     if (!legacyV1) {
       for (const objectiveId of objectiveById.keys()) {
         if (!phaseObjectiveIds.has(objectiveId)) {
-          violations.push(`${phase} has no scene mapped to objective ${objectiveId}`);
+          violations.push(
+            `${phase} has no scene mapped to objective ${objectiveId} — add ${objectiveId} to objectiveIds of the scene that serves this phase (its description and items must genuinely address ${objectiveId}), or add such a scene`,
+          );
         }
       }
     }
@@ -769,7 +819,9 @@ export function validateLearningContractFulfillment(
         !options.currentCourseContentHash ||
         alignment.courseContentHash !== options.currentCourseContentHash
       ) {
-        violations.push('learning contract semantic alignment does not match current course content');
+        violations.push(
+          'learning contract semantic alignment does not match current course content',
+        );
       }
       if (
         !options.currentLearningContractHash ||
@@ -844,6 +896,11 @@ export function validateAndRepairLearningContract(
   const objectives: LearningObjectiveContract[] = [];
   const seenObjectiveIds = new Set<string>();
   const rawObjectives = Array.isArray(input.objectives) ? input.objectives : [];
+  const hasPbl = outlines.some((outline) => outline.type === 'pbl');
+  const proceduralSkillIds = outlines
+    .filter((outline) => outline.type === 'interactive' && outline.widgetType === 'procedural-skill')
+    .map((outline) => outline.id);
+  const handsOnAvailable = hasPbl || proceduralSkillIds.length > 0;
   for (const [index, candidate] of rawObjectives.entries()) {
     if (!isRecord(candidate)) {
       violations.push(`objective ${index + 1} must be an object`);
@@ -864,6 +921,18 @@ export function validateAndRepairLearningContract(
     if (NON_MEASURABLE_ACTION.test(objective.action) && !OBSERVABLE_ACTION.test(objective.action)) {
       violations.push(`objective ${objective.id} action must be observable and measurable`);
     }
+    // 没有 pbl 场景的课只有测验/控件可承载练习，「执行/完成/配置/操作/标定」这类程序性动作
+    // 在浏览器里做不到，两位语义判官必然判「媒介无法承载」（2026-09-02 智造域第七跑：
+    // 三个目标全是这种写法，全部 misaligned）。提示词规则模型不听，这里机械判：
+    // 进修订，要求改写成测验可判定的认知动作（判定/排序/识别/说明/写出清单/补全关键步骤）。
+    if (
+      !handsOnAvailable &&
+      (PROCEDURAL_ACTION.test(objective.action) || PROCEDURAL_ACTION.test(objective.successCriterion))
+    ) {
+      violations.push(
+        `objective ${objective.id} action "${objective.action}" is a hands-on procedure but this course has no pbl scene — rephrase it as a quiz-gradable cognitive action (e.g. 判定/排序/识别错误步骤/写出检查清单/补全关键参数), and phrase successCriterion the same way`,
+      );
+    }
     if (seenObjectiveIds.has(objective.id)) {
       violations.push(`objective id ${objective.id} is duplicated`);
       continue;
@@ -882,13 +951,19 @@ export function validateAndRepairLearningContract(
     (phase) => phase.repaired,
   );
 
+  // 练习屏要能收作答并给反馈：quiz（可重试）、pbl，或真正收输入的 interactive。
+  if (practice.refs.some((id) => !isActivityScene(sceneById.get(id)))) {
+    violations.push('learnerPractice must reference a quiz, interactive, or pbl scene');
+  }
+  // 职教实训课：有 procedural-skill 实操控件却把练习丢给选择题，两位语义判官必判
+  // 「测验承载不了执行」（2026-09-02 智造第七跑：三个实操台全被挂成 demonstration）。
   if (
-    practice.refs.some((id) => {
-      const scene = sceneById.get(id);
-      return scene?.type !== 'interactive' && scene?.type !== 'pbl';
-    })
+    proceduralSkillIds.length > 0 &&
+    !practice.refs.some((id) => proceduralSkillIds.includes(id))
   ) {
-    violations.push('learnerPractice must reference an interactive or pbl scene');
+    violations.push(
+      `learnerPractice must include the procedural-skill scene(s) ${proceduralSkillIds.join(', ')} — hands-on widgets are where the learner performs the objective action; quizzes alone cannot carry a procedural objective`,
+    );
   }
   if (feedback.refs.some((id) => !isActivityScene(sceneById.get(id)))) {
     violations.push('feedbackRetry must reference an interactive, pbl, or quiz scene');
@@ -947,13 +1022,15 @@ export function validateAndRepairLearningContract(
     }
     for (const objective of objectives) {
       if (!covered.has(objective.id)) {
-        violations.push(`${phase} has no scene mapped to objective ${objective.id}`);
+        violations.push(
+          `${phase} has no scene mapped to objective ${objective.id} — add ${objective.id} to objectiveIds of the scene that serves this phase (its description and items must genuinely address ${objective.id}), or add such a scene`,
+        );
       }
     }
   }
   for (const practiceId of practice.refs) {
     const practiceScene = sceneById.get(practiceId);
-    if (practiceScene?.type !== 'interactive' && practiceScene?.type !== 'pbl') continue;
+    if (!practiceScene || !isActivityScene(practiceScene)) continue;
     const practiceType = practiceScene.type;
     for (const objectiveId of objectivesForScene(practiceScene)) {
       const laterFeedback = feedback.refs.filter((sceneId) => {

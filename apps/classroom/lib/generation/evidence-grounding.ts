@@ -151,11 +151,28 @@ export async function fetchEvidence(
         selection_mode?: string;
       };
     };
-    const chunks = payload.data?.chunks ?? [];
+    let chunks = payload.data?.chunks ?? [];
+    if (chunks.length === 0) {
+      // 200 + 空 chunks 也要复查一次：实测（2026-09-02，job sH0L6eE2Uv 场景 3）
+      // 引擎 embedding 间歇失败会静默降级 TF-IDF，长中文查询过不了词法充分性门，
+      // 引擎如实回空——几分钟后同一查询 6 命中。单次空结果杀整门课太脆；
+      // 复查仍空才定「未命中」，判据不放宽。
+      log.info(`Evidence empty for ${params.corpus}, re-checking once in 3s`);
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      const retryResp = await attempt();
+      if (retryResp.ok) {
+        const retryPayload = (await retryResp.json()) as typeof payload;
+        const retryChunks = retryPayload.data?.chunks ?? [];
+        if (retryChunks.length > 0) {
+          payload.data = retryPayload.data;
+          chunks = retryChunks;
+        }
+      }
+    }
     if (chunks.length === 0) {
       return {
         status: 'empty',
-        reason: `知识库 ${params.corpus} 未命中可用于本课的证据`,
+        reason: `知识库 ${params.corpus} 未命中可用于本课的证据（复查一次仍空）`,
       };
     }
     // 引擎判定「证据不足」时会带回 missing_evidence_warning。
@@ -877,32 +894,46 @@ export async function zeroEvidenceReason(
   if (!base) return null; // 没配检索：本地开发常态，不拦
   const query = requirement.trim();
   if (!query) return null;
-  try {
-    const params = new URLSearchParams({ query, top_k: '6', corpus: corpus?.trim() || 'default' });
-    const resp = await fetch(
-      `${base.replace(/\/$/, '')}/internal/v1/personalize/evidence?${params}`,
-      {
-        headers: { 'x-internal-token': process.env.GROUNDING_TOKEN ?? '' },
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-        cache: 'no-store',
-      },
-    );
-    if (!resp.ok) {
-      return `检索服务请求失败（HTTP ${resp.status}）。为避免生成无出处课程，本次生成已停止，请稍后重试。`;
+  // 0 命中要隔几秒复查一次再定罪：实测（2026-09-02，job np8o8xl9lj）同一条需求
+  // 首查 0 命中、几分钟后原样重查 6 命中——引擎冷启动/索引懒加载的瞬态空窗会把
+  // 合法需求整单枪毙。复查仍 0 才拦，判据本身不放宽。
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const params = new URLSearchParams({
+        query,
+        top_k: '6',
+        corpus: corpus?.trim() || 'default',
+      });
+      const resp = await fetch(
+        `${base.replace(/\/$/, '')}/internal/v1/personalize/evidence?${params}`,
+        {
+          headers: { 'x-internal-token': process.env.GROUNDING_TOKEN ?? '' },
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+          cache: 'no-store',
+        },
+      );
+      if (!resp.ok) {
+        return `检索服务请求失败（HTTP ${resp.status}）。为避免生成无出处课程，本次生成已停止，请稍后重试。`;
+      }
+      const payload = (await resp.json()) as { data?: { chunks?: unknown[] } };
+      const chunks = payload.data?.chunks;
+      if (!Array.isArray(chunks)) {
+        return '检索服务响应格式无效（缺少 data.chunks 数组）。为避免生成无出处课程，本次生成已停止，请稍后重试。';
+      }
+      if (chunks.length > 0) return null;
+      if (attempt === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        continue;
+      }
+      const where = corpus?.trim() ? `知识库「${corpus.trim()}」` : '当前知识库';
+      return (
+        `${where}里查不到与这条需求相关的资料（两次检索均 0 命中）。\n` +
+        `继续生成的话，整门课都会没有出处可依——那不是这个产品该给的东西。\n` +
+        `两条出路：把需求写得贴近这个库真正讲的内容，或者换一个库。`
+      );
+    } catch {
+      return '检索服务调用异常或响应无法解析。为避免生成无出处课程，本次生成已停止，请稍后重试。';
     }
-    const payload = (await resp.json()) as { data?: { chunks?: unknown[] } };
-    const chunks = payload.data?.chunks;
-    if (!Array.isArray(chunks)) {
-      return '检索服务响应格式无效（缺少 data.chunks 数组）。为避免生成无出处课程，本次生成已停止，请稍后重试。';
-    }
-    if (chunks.length > 0) return null;
-    const where = corpus?.trim() ? `知识库「${corpus.trim()}」` : '当前知识库';
-    return (
-      `${where}里查不到与这条需求相关的资料（检索 0 命中）。\n` +
-      `继续生成的话，整门课都会没有出处可依——那不是这个产品该给的东西。\n` +
-      `两条出路：把需求写得贴近这个库真正讲的内容，或者换一个库。`
-    );
-  } catch {
-    return '检索服务调用异常或响应无法解析。为避免生成无出处课程，本次生成已停止，请稍后重试。';
   }
+  return null;
 }

@@ -56,7 +56,10 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
-  --radius-2xl: calc(var(--radius) + 8px);
+  /* 容器圆角只留一档。rounded-xl(14px) 与 rounded-2xl(18px) 在库里各用了 156/86 处，
+     同一种卡在两页之间差 4px 是能看出来的，而 18px 在 B 端信息密集页上偏圆。
+     2xl 对齐到 xl，类名一个不动，容器圆角就统一到 14px。 */
+  --radius-2xl: calc(var(--radius) + 4px);
   --radius-3xl: calc(var(--radius) + 12px);
   --radius-4xl: calc(var(--radius) + 16px);
   /* 学径语义粉彩（值取自 apps/legacy-platform/web-next/app/globals.css L15-24）。
@@ -95,6 +98,18 @@
     0px 0px 8px rgb(0 0 0 / 0.04);
   --shadow-dropdown: 0px 5px 20px rgb(0 0 0 / 0.1), 0px 10px 40px rgb(0 0 0 / 0.03);
   --drop-shadow-card-hover: 0 2px 4px #222a350d;
+  /* Tailwind 自带的 shadow-xs…shadow-2xl 六档在库里同时被用到（实测
+     shadow-sm 60 处、md/lg/xl/2xl 26 处），和上面这两档并存等于四套阴影语言，
+     同一层级的卡在不同页面轻重不一。这里不去改那 86 处类名，直接把 Tailwind
+     的六个 token 折到本规格的两档上：贴地的（xs/sm）走 --shadow-card，
+     浮起的（md/lg/xl/2xl）走 --shadow-dropdown。两档都比 Tailwind 默认更轻，
+     方向是收敛，不是加重。 */
+  --shadow-xs: var(--shadow-card);
+  --shadow-sm: var(--shadow-card);
+  --shadow-md: var(--shadow-dropdown);
+  --shadow-lg: var(--shadow-dropdown);
+  --shadow-xl: var(--shadow-dropdown);
+  --shadow-2xl: var(--shadow-dropdown);
   /* 动效预算（规格 2.6，配方⑳㉑②）。Tailwind v4 的 duration-* 工具类读
      --transition-duration-* 命名空间，故在规格命名之外补一份同值别名，
      两套名字指向同一预算，改值时两处同改。 */
@@ -105,6 +120,23 @@
   --transition-duration-base: 200ms;
   --transition-duration-slow: 300ms;
   --ease-out-quad: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+
+  /* 字号一个不改，只改行高与字距——中文全字身占满 em，Tailwind 那套按拉丁文
+     调的行高压在中文上偏挤（text-sm 14/20 ≈ 1.43，正文段落读起来是黏的）。
+     正文两档各抬一点点，标题档反向收紧并给一点负字距，层级靠字重/字距拉开，
+     不靠把标题做大。改动幅度：sm +1px 行高、base +1.6px 行高。 */
+  --text-sm--line-height: 1.5;
+  --text-base--line-height: 1.6;
+  --text-xl--line-height: 1.45;
+  --text-xl--letter-spacing: -0.01em;
+  --text-2xl--line-height: 1.35;
+  --text-2xl--letter-spacing: -0.014em;
+  --text-3xl--line-height: 1.25;
+  --text-3xl--letter-spacing: -0.018em;
+  --text-4xl--line-height: 1.15;
+  --text-4xl--letter-spacing: -0.02em;
+  --text-5xl--line-height: 1.1;
+  --text-5xl--letter-spacing: -0.022em;
 }
 
 :root {

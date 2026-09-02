@@ -309,9 +309,16 @@ const PLUMBING_KEYS = new Set([
  * 而且我们要的不是结构只是文字。
  */
 function stripHtmlToText(html: string): string {
-  return html
-    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
-    .replace(/<!--[\s\S]*?-->/g, ' ')
+  return (
+    html
+      .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+      // 控件文案不是教学断言：「重置练习」「提交」「进度 0%」这类按钮/进度/输入的字面
+      // 会被判官拼进相邻正文抽成一条「断言」再判 incorrect（2026-09-02 智造域实测：
+      // 「操作流程进度 0% 重置练习 参考资料：S7-1200 与……」被仲裁判「含无关系统提示文本」，
+      // 修订环改不了控件文字，整屏永远 flagged）。
+      .replace(/<(button|progress|select|textarea|label)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+      .replace(/<input\b[^>]*>/gi, ' ')
+      .replace(/<!--[\s\S]*?-->/g, ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
     .replace(/&lt;/g, '<')
@@ -319,7 +326,8 @@ function stripHtmlToText(html: string): string {
     .replace(/&amp;/g, '&')
     .replace(/&quot;/g, '"')
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim()
+  );
 }
 
 /**
@@ -513,6 +521,45 @@ const REVISE_SYSTEM = `你是教学内容修订员。给你一份场景内容 JS
 2. **绝对不改变 JSON 的结构、字段名、数组长度和未被标记的内容**。
 3. 输出修订后的完整 JSON，不要围栏不要解释。JSON 字符串内换行必须写成 \\n。`;
 
+// 每屏最多几次「定向修订 → 复审」。复审轮里新裁定的 incorrect 断言也要有一次
+// 消费 fix 的机会（否则拿着修正案定格 flagged），但环必须有界：两次修订仍改不
+// 对的内容按 flagged 落盘，交草稿复核，不无限烧模型调用。
+const MAX_REVISION_PASSES = 2;
+
+/**
+ * 按判错断言清单对一屏内容做一次定向修订（课程级终审用）。
+ *
+ * 全课事实终审「只裁决跨页冲突、不提供修订入口」——于是一条术语抖动（合同写「决策/执行」、
+ * 教材写「思考/行动」）就把整门课永久钉在草稿。仲裁明明给了 fix，却没人消费。这里把
+ * 屏级修订环里那一步抽出来给课程级复用：同一份 REVISE_SYSTEM、同一道结构守卫，
+ * 修坏了返回 null（调用方保留原稿），不放宽任何判据。
+ */
+export async function reviseContentForClaims(
+  content: unknown,
+  claims: readonly AuditClaim[],
+  evidence: string | undefined,
+  reviseCall: (system: string, user: string) => Promise<string>,
+): Promise<unknown | null> {
+  const incorrect = claims.filter((c) => c.verdict === 'incorrect');
+  if (incorrect.length === 0) return null;
+  const issueList = incorrect
+    .map((c, i) => `${i + 1}. ${c.claim} —— ${c.reason}${c.fix ? `；修正：${c.fix}` : ''}`)
+    .join('\n');
+  const revisedRaw = await reviseCall(
+    REVISE_SYSTEM,
+    `问题断言清单：
+${issueList}
+
+教材证据：
+${evidence || '未提供'}
+
+场景内容 JSON：
+${JSON.stringify(content)}`,
+  );
+  const revised = parseJsonLoose(revisedRaw);
+  return isStructurallyCompatible(revised, content) ? revised : null;
+}
+
 function parseJsonLoose(text: string): unknown {
   // Reasoning models (GLM) may prepend thinking text — strip it, then let the
   // shared repair parser try; final fallback is the outermost {...} substring.
@@ -653,6 +700,8 @@ const ARBITER_SYSTEM = `你是终审仲裁员，独立于两位判官与作者�
 - supported：断言成立（作者反驳有效，或判官过严）
 - uncertain：无法确认，或超出资料覆盖范围
 - incorrect：确实与事实相悖（必须给出 fix 修正表述）
+硬规则：「参考资料未涉及 / 作者自行引申的例子 / 资料未提供支撑」一律是 uncertain，不是 incorrect——
+incorrect 只给与公认知识或参考资料**相悖**的陈述。教学类比、举例、练习题的情境设定不因资料没写而判错。
 只输出一个 JSON 对象，不要围栏不要解释：
 {"rulings":[{"index":1,"verdict":"supported|uncertain|incorrect","rationale":"一句话裁决理由","fix":"incorrect 时的修正表述","sourceIds":["S1"]}]}`;
 
@@ -1248,7 +1297,13 @@ export async function auditSceneContent(
       return { audit: finish('flagged', []), content };
     }
     rounds = 1;
-    const first = await runRound();
+    let first = await runRound();
+    // 课程终审吃的是整门课的文本，判官 180s 超时并不罕见（2026-09-02 实测：两门课并发时
+    // 一轮两位判官双双超时 → flagged/0 claims → 整课草稿）。整轮再来一次；第二轮仍失败
+    // 照旧 fail closed，不伪造判词。屏级保留原语义（屏审失败有单判官降级路径）。
+    if (first === null && options.scope === 'course') {
+      first = await runRound();
+    }
     if (first === null) {
       return { audit: finish('flagged', []), content };
     }
@@ -1259,102 +1314,113 @@ export async function auditSceneContent(
     const firstClaims = await rescueUncertain(first.claims);
     // Post-arbitration verdicts: a claim only reaches the rewrite branch once the
     // arbiter (or the lone judge) has actually called it incorrect.
-    const incorrectClaims = firstClaims.filter((c) => c.verdict === 'incorrect');
+    //
     // interactive 曾被排除在修订之外，理由是教具是整页 HTML、重写风险大。
     // 但配合 block 不再丢内容之后，这个排除只剩坏处：教具一次判定即出局、
     // rounds 停在 1，是「教具永远卡在生成中」的结构性来源之一。
     // 现在允许修订——修订失败会被 isStructurallyCompatible 挡回原内容，
     // 最坏情况等于不修订，不会更糟。
     const canRevise = Boolean(reviseCall);
-    if (incorrectClaims.length === 0 || !canRevise) {
-      return { audit: finish(settle(firstClaims, false), firstClaims), content };
-    }
 
-    // One revision pass by the generator model (incorrect claims only), then re-audit.
-    const issueList = incorrectClaims
-      .map((c, i) => `${i + 1}. ${c.claim} —— ${c.reason}${c.fix ? `；修正：${c.fix}` : ''}`)
-      .join('\n');
-    const revisedRaw = await reviseCall!(
-      REVISE_SYSTEM,
-      `问题断言清单：\n${issueList}\n\n教材证据：\n${evidence || '未提供'}\n\n场景内容 JSON：\n${JSON.stringify(content)}`,
-    );
-    const revised = parseJsonLoose(revisedRaw);
-    // 原来的守卫是 `revised.type === content.type`——而 GeneratedSlideContent /
-    // QuizContent / InteractiveContent 顶层压根没有 type 字段，两边都是 undefined，
-    // 这个条件恒真。等于没有守卫：模型吐回来的任何 JSON 都会整体替换掉原内容。
-    // 唯一会生效的方向还是反的（模型多吐一个顶层 type 反而被拒）。
+    // ── 有界修订环：最多 MAX_REVISION_PASSES 次「定向修订 → 复审」──────────
     //
-    // 换成按形状校验：修订产物必须保留原内容的关键结构，且元素不能变少——
-    // 修订的语义是「改错的那几句」，不是「重写这一页」。
-    if (isStructurallyCompatible(revised, content)) {
-      content = revised;
-    } else {
-      // Revision broke the schema — keep the original and report honestly.
-      return { audit: finish('flagged', firstClaims), content: options.content };
-    }
+    // 原来只许一轮修订。复审那一轮里**新冒头**的 incorrect 断言（第一轮判官没抽
+    // 到、或仲裁在第二轮才裁定）拿到了仲裁给的 fix，却再没有消费机会——整页定格
+    // flagged，发布门于是永远拒。双域真实生成各挂两屏，全是这个形态。
+    // 环维持同一套语义：每轮只改判错的那几句，复审仍走全量/增量同一条路。
+    let claims = firstClaims;
+    let revisedClean = false;
+    for (let pass = 0; pass < MAX_REVISION_PASSES; pass += 1) {
+      const incorrectClaims = claims.filter((c) => c.verdict === 'incorrect');
+      if (incorrectClaims.length === 0 || !canRevise) break;
 
-    rounds = 2;
-
-    // ── 增量复审（WO-N9，`INCREMENTAL_REAUDIT=1` 开，默认关）─────────────────
-    //
-    // 关着时下面这段等价于原来的 `runRound()`：整页重喂、整表替换，一字不差。
-    //
-    // 开着时只审改动段。理由：修订的语义是「把判错的那几句改对」——REVISE_SYSTEM
-    // 明文要求不许改结构、不许动未标记的内容，isStructurallyCompatible 还兜了一道。
-    // 也就是说这一页绝大部分文本与第一轮**逐字相同**，对它们重判是纯浪费
-    // （实测：一轮收的屏审核中位 119s，走到第二轮的 375s）。
-    //
-    // 改动段的识别必须机械可复算，不能让模型自己说改了哪：extractTeachingText
-    // 本来就是把可见教学文本按 '\n' 拼起来的，直接比行集合。
-    const incremental = isIncrementalReauditEnabled();
-    const oldLines = extractTeachingText(options.content).split('\n').filter(Boolean);
-    const newLines = extractTeachingText(content).split('\n').filter(Boolean);
-    const oldSet = new Set(oldLines);
-    const newSet = new Set(newLines);
-    const addedLines = newLines.filter((l) => !oldSet.has(l));
-    const removedLines = oldLines.filter((l) => !newSet.has(l));
-    // 改动前后的行都算「碰过」：修订通常是就地改写一句，旧断言引的是旧文本、
-    // 新判定引的是新文本，两边都要能匹配上才不会漏掉该作废的一轮判定。
-    const touchedLines = [...addedLines, ...removedLines];
-
-    // 修订产物在可见文本层面与原文一字不差（模型只改了不进审核的字段，或干脆
-    // 原样吐回）。这时第二轮没有任何新东西可审，第一轮判定原样成立——省掉整轮。
-    if (incremental && addedLines.length === 0) {
-      return { audit: finish('flagged', firstClaims), content };
-    }
-
-    const second = await runRound(incremental ? addedLines.join('\n') : undefined);
-    // Re-audit unavailable: report round 1's claims — and round 1's trail with them.
-    if (second === null) {
-      return { audit: finish('revised', firstClaims), content };
-    }
-    debate = second.debate;
-    let secondClaims = second.claims;
-    if (incremental) {
-      // 一轮判定里，凡是能匹配到改动行的都作废（那段文本已经被重判过了）；
-      // 匹配用的是模块里现成的 claimSimilarity + MATCH_THRESHOLD，不另造一把尺子。
-      const touched = (claim: string) =>
-        touchedLines.some((line) => claimSimilarity(claim, line) >= MATCH_THRESHOLD);
-      const carried = firstClaims.filter((c) => !touched(c.claim));
-      // 第二轮若重复抽出了沿用断言里的同一句，以第二轮为准（它看的是改后文本）。
-      const deduped = carried.filter(
-        (c) => !second.claims.some((s) => claimSimilarity(c.claim, s.claim) >= MATCH_THRESHOLD),
+      // One revision pass by the generator model (incorrect claims only), then re-audit.
+      const issueList = incorrectClaims
+        .map((c, i) => `${i + 1}. ${c.claim} —— ${c.reason}${c.fix ? `；修正：${c.fix}` : ''}`)
+        .join('\n');
+      const revisedRaw = await reviseCall!(
+        REVISE_SYSTEM,
+        `问题断言清单：\n${issueList}\n\n教材证据：\n${evidence || '未提供'}\n\n场景内容 JSON：\n${JSON.stringify(content)}`,
       );
-      secondClaims = [...deduped, ...second.claims];
-      // 答辩记录也要跟着合并，否则沿用下来的断言标着 decidedBy:'arbitration' 却找不到
-      // 对应的仲裁条目——模块自己的约定是「trail 精确描述返回的断言表」，
-      // 界面上就会出现「仲裁了 N 条」但只列得出 M 条。基线是整表替换所以不会分叉，
-      // 增量必须显式接上。
-      const carriedDebate = (first.debate ?? []).filter((d) =>
-        deduped.some((c) => claimSimilarity(c.claim, d.claim) >= MATCH_THRESHOLD),
-      );
-      debate = [...carriedDebate, ...(second.debate ?? [])];
+      const revised = parseJsonLoose(revisedRaw);
+      // 原来的守卫是 `revised.type === content.type`——而 GeneratedSlideContent /
+      // QuizContent / InteractiveContent 顶层压根没有 type 字段，两边都是 undefined，
+      // 这个条件恒真。等于没有守卫：模型吐回来的任何 JSON 都会整体替换掉原内容。
+      // 唯一会生效的方向还是反的（模型多吐一个顶层 type 反而被拒）。
+      //
+      // 换成按形状校验：修订产物必须保留原内容的关键结构，且元素不能变少——
+      // 修订的语义是「改错的那几句」，不是「重写这一页」。
+      const prevContent = content;
+      const prevDebate = debate;
+      if (isStructurallyCompatible(revised, content)) {
+        content = revised;
+      } else {
+        // Revision broke the schema — keep the last good content and report honestly.
+        return { audit: finish('flagged', claims), content: prevContent };
+      }
+
+      // ── 增量复审（WO-N9，`INCREMENTAL_REAUDIT=1` 开，默认关）───────────────
+      //
+      // 关着时下面这段等价于整页重喂、整表替换，一字不差。
+      //
+      // 开着时只审改动段。理由：修订的语义是「把判错的那几句改对」——REVISE_SYSTEM
+      // 明文要求不许改结构、不许动未标记的内容，isStructurallyCompatible 还兜了一道。
+      // 也就是说这一页绝大部分文本与上一轮**逐字相同**，对它们重判是纯浪费
+      // （实测：一轮收的屏审核中位 119s，走到第二轮的 375s）。
+      //
+      // 改动段的识别必须机械可复算，不能让模型自己说改了哪：extractTeachingText
+      // 本来就是把可见教学文本按 '\n' 拼起来的，直接比行集合。
+      const incremental = isIncrementalReauditEnabled();
+      const oldLines = extractTeachingText(prevContent).split('\n').filter(Boolean);
+      const newLines = extractTeachingText(content).split('\n').filter(Boolean);
+      const oldSet = new Set(oldLines);
+      const newSet = new Set(newLines);
+      const addedLines = newLines.filter((l) => !oldSet.has(l));
+      const removedLines = oldLines.filter((l) => !newSet.has(l));
+      // 改动前后的行都算「碰过」：修订通常是就地改写一句，旧断言引的是旧文本、
+      // 新判定引的是新文本，两边都要能匹配上才不会漏掉该作废的一轮判定。
+      const touchedLines = [...addedLines, ...removedLines];
+
+      // 修订产物在可见文本层面与原文一字不差（模型只改了不进审核的字段，或干脆
+      // 原样吐回）。这时复审没有任何新东西可审，上一轮判定原样成立——省掉整轮，
+      // 也不再继续下一次修订（同样的输入只会得到同样的不作为）。两种模式都适用；
+      // 增量模式下纯删除（added 空、removed 非空）也没有新文本可审，同样收口。
+      if (addedLines.length === 0 && (incremental || removedLines.length === 0)) {
+        return { audit: finish('flagged', claims), content };
+      }
+
+      rounds += 1;
+      const reaudit = await runRound(incremental ? addedLines.join('\n') : undefined);
+      // Re-audit unavailable: report the previous round's claims — and its trail.
+      if (reaudit === null) {
+        return { audit: finish('revised', claims), content };
+      }
+      debate = reaudit.debate;
+      let nextClaims = reaudit.claims;
+      if (incremental) {
+        // 上一轮判定里，凡是能匹配到改动行的都作废（那段文本已经被重判过了）；
+        // 匹配用的是模块里现成的 claimSimilarity + MATCH_THRESHOLD，不另造一把尺子。
+        const touched = (claim: string) =>
+          touchedLines.some((line) => claimSimilarity(claim, line) >= MATCH_THRESHOLD);
+        const carried = claims.filter((c) => !touched(c.claim));
+        // 复审若重复抽出了沿用断言里的同一句，以复审为准（它看的是改后文本）。
+        const deduped = carried.filter(
+          (c) => !reaudit.claims.some((s) => claimSimilarity(c.claim, s.claim) >= MATCH_THRESHOLD),
+        );
+        nextClaims = [...deduped, ...reaudit.claims];
+        // 答辩记录也要跟着合并，否则沿用下来的断言标着 decidedBy:'arbitration' 却找不到
+        // 对应的仲裁条目——模块自己的约定是「trail 精确描述返回的断言表」，
+        // 界面上就会出现「仲裁了 N 条」但只列得出 M 条。基线是整表替换所以不会分叉，
+        // 增量必须显式接上。
+        const carriedDebate = (prevDebate ?? []).filter((d) =>
+          deduped.some((c) => claimSimilarity(c.claim, d.claim) >= MATCH_THRESHOLD),
+        );
+        debate = [...carriedDebate, ...(reaudit.debate ?? [])];
+      }
+      claims = nextClaims;
+      revisedClean = true;
     }
-    const stillIncorrect = secondClaims.some((c) => c.verdict === 'incorrect');
-    return {
-      audit: finish(stillIncorrect ? 'flagged' : settle(secondClaims, true), secondClaims),
-      content,
-    };
+    return { audit: finish(settle(claims, revisedClean), claims), content };
   } catch (error) {
     if (error instanceof EvidenceGateError) throw error;
     return { audit: finish('flagged', []), content: options.content };
@@ -1384,6 +1450,8 @@ export type CourseAuditOptions = Omit<
   courseTitle: string;
   scenes: readonly CourseAuditScene[];
   learningContract?: LearningContractPlan;
+  /** 判词结构校验拒绝时的诊断回调（服务端注入落盘实现）。 */
+  onAlignmentJudgeReject?: (info: AlignmentJudgeReject) => void;
 };
 
 type CourseHashScene = Pick<
@@ -1518,12 +1586,18 @@ const LEARNING_ALIGNMENT_SYSTEM = `你是全课程教学履约终审员。事实
 - feedbackRetry：是否依据成功标准指出差距，并给出可再次尝试的机会；
 - transferApplication：是否保持同一目标动作和成功标准，同时换到与示范/练习实质不同的新情境或新输入。
 
+判定口径：本课程的媒介是幻灯片、测验（选择/多选/简答）、互动控件与 PBL，没有线下实操台。
+learnerPractice 的「实际执行」以媒介可承载为准：学习者在测验或控件中亲自完成目标动作（识别、排序、判定、说明、补全关键步骤或代码行、设计方案）即算执行，不要以线下动手操作为标准判 misaligned；
+带步骤、输入与结果反馈的实操控件（procedural-skill 类型的交互场景：检查站、配置台、标定台）就是本媒介里的动手执行，其中的操作步骤与判定即为练习证据；
+feedbackRetry 只要点名了常见错答/误解、对照 successCriterion 说明差距、并再给同目标的作答机会即算履约；
+但目标动作本身若在这些媒介里根本无法执行或无法判定，判 misaligned 并在 reason 写明是目标不可评。
+
 硬规则：
 1. 有出处只说明事实来源，不等于完成教学目标；内容与目标无关必须判 misaligned。
 2. 只复述 action/condition/successCriterion 的关键词、改标题、换数字或换人名，不算语义证据。
 3. 每个输入映射必须且只能输出一条 item；不得遗漏、合并或新增映射。
-4. aligned 的 evidenceQuote 必须逐字摘自对应场景的最终可见内容，且足以说明为何履约；不得引用目标文本。
-5. transferApplication 判 aligned 时 newContext 必须为 true。
+4. aligned 的 evidenceQuote 必须**逐字**摘自对应场景（sceneId 所指那一屏）的最终可见内容：可以引用多句并用「……」分隔，但每一句都必须原样复制、不得改写、不得引用别的场景；引文要足以说明为何履约；不得引用目标文本。
+5. 每条 phase 为 transferApplication 的 item 都必须带布尔字段 newContext（情境是否与示范/练习实质不同）；判 aligned 时 newContext 必须为 true，缺字段按结构错误处理。
 6. 任一 item 为 misaligned，则总 verdict 必须为 misaligned。
 
 只输出 JSON 对象，不要围栏或解释：
@@ -1554,6 +1628,49 @@ function alignmentKey(value: {
 
 function normalizedEvidenceQuote(value: string): string {
   return value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+/**
+ * 判词引用是否逐字绑定到该屏：把引用按省略号 / 句末标点 / 换行切段，每一段（去标点后
+ * ≥ 6 字）都必须是该屏可见文本的连续逐字子串。
+ *
+ * 为什么不是整段连续匹配：屏内容是结构化字段（题干、选项、解析、表格格），判官天然会把
+ * 题干和解析拼成一句、或用「……」跨过选项。2026-09-02 实测两位判官四次判词全因此被拒——
+ * 引用每一段都真实出自该屏，只是拼接。分段匹配保留绑定语义（换屏的引用、改写的引用照拒），
+ * 只放过拼接。
+ */
+function quoteBoundToScene(quote: string, sceneText: string): boolean {
+  const scene = normalizedEvidenceQuote(sceneText);
+  if (!scene) return false;
+  const segments = quote
+    .split(/…+|\.{3,}|[。！？；\n]+/u)
+    .map(normalizedEvidenceQuote)
+    .filter((segment) => segment.length >= 6);
+  if (segments.length === 0) return scene.includes(normalizedEvidenceQuote(quote));
+  // 绑定的目的是「引用出自这一屏」，不是逐字保真。实测（2026-09-02 AI 域第七跑）两位判官
+  // 三次判词全因一段代码块引文的细微转述（Observation 行）或一句总结性转述被整份拒掉，
+  // 其余五六段全部逐字命中。改为：至少三分之二片段命中，且至少一段 ≥12 字命中——
+  // 换屏引用（全部不命中）、整段改写照拒；只容忍一段转述。
+  // 2026-09-02 第八跑：两段引文一段逐字命中（20+ 字）、另一段只是括注位置被判官挪了，
+  // 2/3 规则把 1/2 判死、三次尝试全灭。绑定语义只需要「有一段足够长的逐字锚点 + 至少一半
+  // 片段命中」；整段改写（0 命中）与换屏引用照拒。
+  const bound = segments.filter((segment) => scene.includes(segment));
+  return (
+    bound.length >= Math.max(1, Math.ceil(segments.length / 2)) &&
+    bound.some((segment) => segment.length >= 12)
+  );
+}
+
+/**
+ * 判词被结构校验拒掉时的诊断钩子。终审失败的唯一线上症状是一句「未取得两份结构完整的判词」，
+ * 不留原文就永远只能猜是哪条校验在杀判词。本模块被客户端 hook 引用，不能碰 node:fs——
+ * 落盘由服务端调用方注入（见 lib/server/alignment-judge-debug.ts）；钩子抛错不影响审核结论。
+ */
+export interface AlignmentJudgeReject {
+  judgeModel: string;
+  attempt: number;
+  reject: string;
+  raw: string;
 }
 
 function buildLearningAlignmentReview(
@@ -1634,45 +1751,66 @@ function parseLearningAlignmentJudge(
   raw: string,
   judgeModel: string,
   expectations: readonly LearningAlignmentExpectation[],
-): LearningAlignmentJudgeResult | null {
+): LearningAlignmentJudgeResult | { reject: string } {
+  // 每条 return 都带机器可读的拒绝原因：重试提示要能告诉判官上一份错在哪
+  // （泛泛的「未通过结构校验」实测救不回来——双域终审两位判官各两次全军覆没），
+  // 诊断落盘也靠它定位是哪条校验在杀判词。
   const parsed = parseJsonLoose(raw) as Record<string, unknown> | null;
-  if (!parsed || (parsed.verdict !== 'aligned' && parsed.verdict !== 'misaligned')) return null;
-  if (typeof parsed.rationale !== 'string' || !parsed.rationale.trim()) return null;
-  if (!Array.isArray(parsed.items) || parsed.items.length !== expectations.length) return null;
+  if (!parsed) return { reject: '输出不是可解析的 JSON 对象' };
+  if (parsed.verdict !== 'aligned' && parsed.verdict !== 'misaligned') {
+    return { reject: '顶层 verdict 必须是 aligned 或 misaligned' };
+  }
+  if (typeof parsed.rationale !== 'string' || !parsed.rationale.trim()) {
+    return { reject: '缺少非空的顶层 rationale' };
+  }
+  if (!Array.isArray(parsed.items) || parsed.items.length !== expectations.length) {
+    return {
+      reject: `items 必须恰好 ${expectations.length} 条（收到 ${Array.isArray(parsed.items) ? parsed.items.length : '非数组'}），逐条对应输入映射，不得合并或遗漏`,
+    };
+  }
 
   const expected = new Map(expectations.map((item) => [alignmentKey(item), item]));
   const seen = new Set<string>();
   const items: LearningAlignmentItem[] = [];
-  for (const candidate of parsed.items) {
-    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return null;
+  for (const [index, candidate] of parsed.items.entries()) {
+    const at = `第 ${index + 1} 条 item`;
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+      return { reject: `${at}不是对象` };
+    }
     const item = candidate as Record<string, unknown>;
     const objectiveId = String(item.objectiveId ?? '').trim();
     const phase = String(item.phase ?? '').trim() as LearningContractPhase;
     const sceneId = String(item.sceneId ?? '').trim();
     const verdict = item.verdict;
     const reason = String(item.reason ?? '').trim();
-    if (
-      !ALIGNMENT_PHASES.includes(phase) ||
-      (verdict !== 'aligned' && verdict !== 'misaligned') ||
-      !reason
-    ) {
-      return null;
+    if (!ALIGNMENT_PHASES.includes(phase)) return { reject: `${at}的 phase「${phase}」非法` };
+    if (verdict !== 'aligned' && verdict !== 'misaligned') {
+      return { reject: `${at}的 verdict 必须是 aligned 或 misaligned` };
     }
+    if (!reason) return { reject: `${at}缺少 reason` };
     const key = alignmentKey({ objectiveId, phase, sceneId });
     const expectation = expected.get(key);
-    if (!expectation || seen.has(key)) return null;
+    if (!expectation) {
+      return {
+        reject: `${at}的映射 ${objectiveId}/${phase}/${sceneId} 不在输入映射清单里——objectiveId、phase、sceneId 必须逐字照抄清单`,
+      };
+    }
+    if (seen.has(key)) return { reject: `${at}与之前的 item 重复了同一条映射` };
     seen.add(key);
 
     const evidenceQuote = String(item.evidenceQuote ?? '').trim();
     const normalizedQuote = normalizedEvidenceQuote(evidenceQuote);
-    const normalizedScene = normalizedEvidenceQuote(expectation.sceneText);
     // Quote length is only a binding check; semantic alignment is decided by both judges.
-    if (
-      (verdict === 'aligned' && normalizedQuote.length < 8) ||
-      (normalizedQuote && !normalizedScene.includes(normalizedQuote)) ||
-      (phase === 'transferApplication' && verdict === 'aligned' && item.newContext !== true)
-    ) {
-      return null;
+    if (verdict === 'aligned' && normalizedQuote.length < 8) {
+      return { reject: `${at}判 aligned 但 evidenceQuote 过短——须逐字摘录足以证明履约的场景原文` };
+    }
+    if (normalizedQuote && !quoteBoundToScene(evidenceQuote, expectation.sceneText)) {
+      return {
+        reject: `${at}的 evidenceQuote 有片段不是场景 ${sceneId} 原文的逐字摘录（可用「……」分隔多句，但每一句都必须逐字出自该场景，不得改写、不得引用其他场景）`,
+      };
+    }
+    if (phase === 'transferApplication' && verdict === 'aligned' && item.newContext !== true) {
+      return { reject: `${at}是 transferApplication 且判 aligned，newContext 必须为布尔 true` };
     }
     items.push({
       objectiveId,
@@ -1692,7 +1830,10 @@ function parseLearningAlignmentJudge(
   )
     ? 'aligned'
     : 'misaligned';
-  if (parsed.verdict !== derived || seen.size !== expected.size) return null;
+  if (parsed.verdict !== derived) {
+    return { reject: `顶层 verdict（${String(parsed.verdict)}）与逐条判定推导（${derived}）不一致——任一 item 为 misaligned 时总判定必须 misaligned` };
+  }
+  if (seen.size !== expected.size) return { reject: 'items 未覆盖全部输入映射' };
   return { judgeModel, verdict: derived, rationale: parsed.rationale.trim(), items };
 }
 
@@ -1726,17 +1867,38 @@ async function auditLearningContractAlignment(
   }
 
   const judged = await Promise.all(
-    judgeCalls.map((judge, index) =>
-      judge(LEARNING_ALIGNMENT_SYSTEM, review.prompt)
-        .then((raw) =>
-          parseLearningAlignmentJudge(
-            raw,
-            options.judgeModels?.[index] ?? `judge-${index + 1}`,
-            review.expectations,
-          ),
-        )
-        .catch(() => null),
-    ),
+    judgeCalls.map(async (judge, index) => {
+      const judgeModel = options.judgeModels?.[index] ?? `judge-${index + 1}`;
+      let lastReject = '';
+      // 三次：实测一次超时 + 一次结构小错（transfer 漏 newContext）就把两次用光，
+      // 而第三次几乎必过——每次 1-2 分钟，比整门课再跑 45 分钟便宜。
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          const prompt =
+            attempt === 0
+              ? review.prompt
+              : `${review.prompt}\n\n【判词格式修订】上一份判词未通过结构校验，具体原因：${lastReject}。请修正该问题后重新输出恰好 ${review.expectations.length} 条 items（transferApplication 的 item 必须带布尔 newContext）；evidenceQuote 的每一句都必须原样复制自 sceneId 所指那一屏（多句用「……」分隔，不改字、不换屏），不得使用 Markdown 围栏或增减映射。`;
+          const raw = await judge(LEARNING_ALIGNMENT_SYSTEM, prompt);
+          const parsed = parseLearningAlignmentJudge(raw, judgeModel, review.expectations);
+          if (!('reject' in parsed)) return parsed;
+          lastReject = parsed.reject;
+          try {
+            options.onAlignmentJudgeReject?.({ judgeModel, attempt, reject: parsed.reject, raw });
+          } catch {
+            // 诊断钩子不影响审核结论
+          }
+        } catch (error) {
+          // Bridge/schema failures get clean re-asks; exhausting the attempts still closes the gate.
+          lastReject = `判官调用失败：${error instanceof Error ? error.message : String(error)}`;
+          try {
+            options.onAlignmentJudgeReject?.({ judgeModel, attempt, reject: lastReject, raw: '' });
+          } catch {
+            // 诊断钩子不影响审核结论
+          }
+        }
+      }
+      return null;
+    }),
   );
   const judges = judged.filter((result): result is LearningAlignmentJudgeResult => result !== null);
   const complete = judges.length === 2;
@@ -1770,32 +1932,36 @@ export async function auditCourseContent(options: CourseAuditOptions): Promise<S
   const teaching = buildCourseTeachingText(options.scenes);
   const courseContentHash = hashCourseScenes(options.scenes);
 
-  const { audit } = await auditSceneContent({
-    sceneTitle: `全课程终审：${options.courseTitle}`,
-    content: teaching.text,
-    scope: 'course',
-    preExtractedTeachingText: teaching.text,
-    preExtractedTruncatedChars: teaching.truncatedChars,
-    judgeCall: options.judgeCall,
-    judgeCalls: options.judgeCalls,
-    arbiterCall: options.arbiterCall,
-    defendCall: options.defendCall,
-    judgeModel: options.judgeModel,
-    judgeModels: options.judgeModels,
-    arbiterModel: options.arbiterModel,
-    sources: options.sources,
-    evidence: options.evidence,
-    corpus: options.corpus,
-    retrieveForClaim: options.retrieveForClaim,
-    evidenceCount: options.evidenceCount,
-    // 故意不传 reviseCall：全课终审只裁决，不能静默重写已逐屏批准的最终内容。
-  });
-  const learningAlignment = options.learningContract
-    ? await auditLearningContractAlignment(
-        { ...options, learningContract: options.learningContract },
-        courseContentHash,
-      )
-    : undefined;
+  // 事实终审与履约终审读的都是已冻结的最终内容，互不依赖——并行跑。
+  // 2026-09-02 计时：9 屏课的课程级尾巴 15 分钟，串行时两段各占一半。
+  const [{ audit }, learningAlignment] = await Promise.all([
+    auditSceneContent({
+      sceneTitle: `全课程终审：${options.courseTitle}`,
+      content: teaching.text,
+      scope: 'course',
+      preExtractedTeachingText: teaching.text,
+      preExtractedTruncatedChars: teaching.truncatedChars,
+      judgeCall: options.judgeCall,
+      judgeCalls: options.judgeCalls,
+      arbiterCall: options.arbiterCall,
+      defendCall: options.defendCall,
+      judgeModel: options.judgeModel,
+      judgeModels: options.judgeModels,
+      arbiterModel: options.arbiterModel,
+      sources: options.sources,
+      evidence: options.evidence,
+      corpus: options.corpus,
+      retrieveForClaim: options.retrieveForClaim,
+      evidenceCount: options.evidenceCount,
+      // 故意不传 reviseCall：全课终审只裁决，不能静默重写已逐屏批准的最终内容。
+    }),
+    options.learningContract
+      ? auditLearningContractAlignment(
+          { ...options, learningContract: options.learningContract },
+          courseContentHash,
+        )
+      : Promise.resolve(undefined),
+  ]);
 
   const unresolved = audit.debate?.some((round) => round.arbiterVerdict === 'unresolved') ?? false;
   const issues = audit.claims.filter((claim) => claim.verdict !== 'supported');

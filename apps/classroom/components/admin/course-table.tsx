@@ -88,7 +88,7 @@ export function AdminCourseTable({
     <div className="overflow-x-auto rounded-2xl border border-border bg-card shadow-card">
       {/* 列宽显式给：课程名占一半，数字列各自压到刚够——
           原来十列全靠 auto 分宽，标题被挤成两行、数字列却空着半格 */}
-      <table className="w-full min-w-[820px] text-sm">
+      <table className="w-full min-w-[820px] text-sm tabular-nums">
         <colgroup>
           <col className="w-[30%]" />
           <col className="w-[8%]" />
