@@ -295,6 +295,8 @@ function HomePage() {
   }, [replaceThumbnails]);
 
   useEffect(() => {
+    if (accountLoading || forcePublic || (accountEnabled && !account)) return;
+
     // Clear stale media store to prevent cross-course thumbnail contamination.
     // The store may hold tasks from a previously visited classroom whose elementIds
     // (gen_img_1, etc.) collide with other courses' placeholders.
@@ -308,7 +310,7 @@ function HomePage() {
       revokeThumbnailSlideMediaUrls(thumbnailsRef.current);
       thumbnailsRef.current = {};
     };
-  }, [loadClassrooms]);
+  }, [account, accountEnabled, accountLoading, forcePublic, loadClassrooms]);
 
   const handleDelete = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
