@@ -281,7 +281,8 @@ with tarfile.open(output, "w:gz", compresslevel=9) as handle:
   if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($finalSha)) { throw 'final git rev-parse failed' }
   $ErrorActionPreference = 'Stop'
   if ($finalSha -ne $sha -or $finalDirty.Count -ne 0) {
-    throw 'Release sources changed while the build was running.'
+    $dirtySummary = if ($finalDirty.Count -eq 0) { 'clean' } else { $finalDirty -join '; ' }
+    throw "Release sources changed while the build was running: initial=$sha final=$finalSha dirty=$dirtySummary"
   }
 
   $payloadFiles = Get-ChildItem -LiteralPath $workDir -File | Sort-Object Name
