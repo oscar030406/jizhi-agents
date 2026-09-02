@@ -161,7 +161,7 @@ describe('整课生成 job 账户归属', () => {
     expect(mocks.accountForSession).not.toHaveBeenCalled();
   });
 
-  it('机构 job 在浏览器分支一律返回 404，即使会话账户与 ownerAccountId 相同', async () => {
+  it('机构 job 允许创建它的同一账户轮询', async () => {
     mocks.accountForSession.mockResolvedValue({ id: 'account-a' });
     mocks.readClassroomGenerationJob.mockResolvedValue(storedJob('account-a', 'org-a'));
     const { GET } = await import('@/app/api/generate-classroom/[jobId]/route');
@@ -170,8 +170,19 @@ describe('整课生成 job 账户归属', () => {
       params: Promise.resolve({ jobId: 'job_123' }),
     });
 
+    expect(response.status).toBe(200);
+    expect(mocks.accountForSession).toHaveBeenCalledOnce();
+  });
+
+  it('只有机构归属、没有浏览器账户的内部 job 不向浏览器暴露', async () => {
+    mocks.readClassroomGenerationJob.mockResolvedValue(storedJob(null, 'org-a'));
+    const { GET } = await import('@/app/api/generate-classroom/[jobId]/route');
+
+    const response = await GET(new NextRequest('http://localhost/api/generate-classroom/job_123'), {
+      params: Promise.resolve({ jobId: 'job_123' }),
+    });
+
     expect(response.status).toBe(404);
-    expect((await response.json()).error).toBe('Classroom generation job not found');
     expect(mocks.accountForSession).not.toHaveBeenCalled();
   });
 });

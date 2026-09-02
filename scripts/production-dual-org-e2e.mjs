@@ -350,6 +350,18 @@ function runSelfTest() {
   test(() => assert.equal(documentRequestRejected({ status: 204 }), false));
   test(() =>
     assert.equal(
+      documentDeleteIsolated({ status: 204 }, { status: 200 }),
+      true,
+    ),
+  );
+  test(() =>
+    assert.equal(
+      documentDeleteIsolated({ status: 204 }, { status: 404 }),
+      false,
+    ),
+  );
+  test(() =>
+    assert.equal(
       runtimeSessionMissing({
         status: 404,
         body: { error: { code: "SESSION_NOT_FOUND" } },
@@ -985,6 +997,13 @@ function documentRequestRejected(result) {
   ].includes(code);
 }
 
+function documentDeleteIsolated(result, ownerReread) {
+  return (
+    documentRequestRejected(result) ||
+    (result?.status === 204 && ownerReread?.status === 200)
+  );
+}
+
 function runtimeSessionMissing(result) {
   const error = isObject(result?.body?.error) ? result.body.error : null;
   return Boolean(
@@ -1173,16 +1192,22 @@ async function validateOwnedDocumentIsolation(report, options, sessions) {
         const remove = await request(options.base, sessions.B, path, {
           method: "DELETE",
         });
+        const ownerAfterNonOwnerDelete = await request(
+          options.base,
+          sessions.A,
+          path,
+        );
         control = {
           stageId,
           created: summarizeHttp(create),
           GET: summarizeHttp(get),
           PUT: summarizeHttp(put),
           DELETE: summarizeHttp(remove),
+          ownerAfterNonOwnerDelete: summarizeHttp(ownerAfterNonOwnerDelete),
           rejected: {
             GET: documentRequestRejected(get),
             PUT: documentRequestRejected(put),
-            DELETE: documentRequestRejected(remove),
+            DELETE: documentDeleteIsolated(remove, ownerAfterNonOwnerDelete),
           },
         };
       } else {
@@ -1234,7 +1259,10 @@ async function validateOwnedDocumentIsolation(report, options, sessions) {
         owner: "A",
         sampleKind: "temporary-owned-document",
         stageId,
-        expected: `B 对 A 文档的 ${method} 返回 401/403/404`,
+        expected:
+          method === "DELETE"
+            ? "B 对 A 文档的 DELETE 被拒绝，或幂等返回 204 且 A 仍能读取原文档"
+            : `B 对 A 文档的 ${method} 返回 401/403/404`,
         actual: control?.[method] ?? control?.created ?? null,
       });
     }
@@ -2727,13 +2755,13 @@ async function saveAndReadProfile(report, base, sessions, scenario) {
     ? before.body.fields
     : null;
   let update = null;
-  if (before.status === 200 && activeId && beforeFields) {
+  if (before.status === 200 && activeId) {
     update = await request(base, sessions[actor], "/api/profile", {
       method: "POST",
       json: {
         action: "update",
         id: activeId,
-        fields: { ...beforeFields, ...scenario.profile },
+        fields: { ...(beforeFields ?? {}), ...scenario.profile },
       },
     });
   }
@@ -2757,9 +2785,15 @@ async function saveAndReadProfile(report, base, sessions, scenario) {
           storedDomain: updatedFields.domain,
           storedCorpus: updatedFields.corpus,
         }
-      : update
-        ? summarizeHttp(update)
-        : summarizeHttp(before),
+      : updatedFields
+        ? {
+            activeId: update?.body?.activeId ?? null,
+            storedDomain: updatedFields.domain ?? null,
+            storedCorpus: updatedFields.corpus ?? null,
+          }
+        : update
+          ? summarizeHttp(update)
+          : summarizeHttp(before),
   });
   if (saved) {
     report.operations.push({

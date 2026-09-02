@@ -46,13 +46,12 @@ afterEach(() => {
 
 /**
  * 把一份清单写进临时引擎数据目录并指过去。
- * `enginePath()` 的口径是 `<ENGINE_DATA_DIR>/../<引擎相对路径>`，所以 env 指到 `data` 本身，
- * 文件落在 `data/knowledge_base/` 下——与线上目录结构一致。
+ * 临时根故意不叫 `data`，防止路径实现偶然依赖数据根的目录名。
  * `payload` 传字符串就原样写（用来造坏 json）。
  */
 async function withRegistryFile(payload: unknown): Promise<void> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'domain-registry-'));
-  const dataDir = path.join(root, 'data');
+  const dataDir = path.join(root, 'engine-state');
   await fs.mkdir(path.join(dataDir, 'knowledge_base'), { recursive: true });
   await fs.writeFile(
     path.join(dataDir, 'knowledge_base', 'domain_registry.json'),

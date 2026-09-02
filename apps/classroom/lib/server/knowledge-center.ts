@@ -86,7 +86,7 @@ export async function releaseCorpusOwnerMarker(
 
 /** 引擎相对路径（`data/...`）→ 本机绝对路径。展示时仍用引擎相对路径，便于复算。 */
 export function enginePath(rel: string): string {
-  return path.join(engineDataDir(), '..', rel);
+  return path.join(engineDataDir(), rel.replace(/^data[\\/]/, ''));
 }
 
 /** 语料名进路径，字符集照引擎 `get_corpus_retriever` 的正则卡死（外部输入不可信）。 */

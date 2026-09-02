@@ -43,7 +43,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ jobId: 
         return apiError('UNAUTHORIZED', 403, '内部服务无权访问该造课任务。');
       }
     } else if (
-      job.ownerOrgId ||
+      (job.ownerOrgId && !job.ownerAccountId) ||
       (job.ownerAccountId &&
         (await accountForSession(req.cookies.get(SESSION_COOKIE)?.value))?.id !==
           job.ownerAccountId)
