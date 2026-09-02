@@ -190,8 +190,12 @@ function DomainPathBody({ corpus, contextLabel }: { corpus: string; contextLabel
 
   // 域名优先用引擎给的 label（域注册清单里的中文名），它没给就走前端那张兜底表。
   // `|| ` 不是 `?? `：老库的 label 会退化成目录名同名的空串/占位，那不是名字。
+  // 引擎给的 label 若只是目录名本身（如 ai），不算名字，走登记表的中文名。
+  const engineLabel = state.kind === 'ok' ? (state.path.label?.trim() ?? '') : '';
   const label =
-    (state.kind === 'ok' ? state.path.label?.trim() : '') || contextLabel || domainLabel(corpus);
+    (engineLabel && engineLabel.toLowerCase() !== corpus.toLowerCase() ? engineLabel : '') ||
+    contextLabel ||
+    domainLabel(corpus);
 
   /** 把概念交给首页生成入口：写需求草稿再跳转（形制同 /skills 的 pickSkill）。 */
   const draftCourse = useCallback(
