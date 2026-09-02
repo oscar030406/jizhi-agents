@@ -33,7 +33,7 @@ $mat = Join-Path $stage '01-材料文档'
 New-Item -ItemType Directory -Force -Path $mat | Out-Null
 # 方案文档真源 = 技术实现文档-历程版.docx；design-implementation.md 是前身草稿，
 # 不再入包，避免两份技术文档口径分裂。
-$techDoc = Join-Path $defense '技术实现文档-历程版.docx'
+$techDoc = Join-Path $defense 'v8\技术实现文档-v8.docx'
 if (-not (Test-Path $techDoc)) {
     Write-Host "[阻断] 未找到技术实现文档（docs\06-defense\技术实现文档-历程版.docx）" -ForegroundColor Red; exit 1
 }
@@ -53,7 +53,7 @@ if ($missing.Count) {
     Write-Host "  真源目录：docs\06-defense\（写完再打包）" -ForegroundColor Yellow
     exit 1
 }
-$ppt = Join-Path $defense '集智答辩-v7-销冠版.pptx'
+$ppt = Join-Path $defense 'v8\集智答辩-v8.pptx'
 if (Test-Path $ppt) { Copy-Item $ppt $mat } else {
     Write-Host "[阻断] 未找到答辩 PPT（docs\06-defense\集智答辩-v7-销冠版.pptx）" -ForegroundColor Red; exit 1
 }
