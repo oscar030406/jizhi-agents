@@ -40,9 +40,23 @@ token_is_safe 'token_with-safe-chars_0123456789'
 printf '%s\n' '{"success":true,"classrooms":[{"id":"public-course_1"}]}' >"$base/public-classrooms.json"
 [[ "$(public_classroom_id "$base/public-classrooms.json")" == public-course_1 ]]
 printf '%s\n' '{"success":true,"classrooms":[]}' >"$base/public-classrooms.json"
-! public_classroom_id "$base/public-classrooms.json" >/dev/null 2>&1
+[[ -z "$(public_classroom_id "$base/public-classrooms.json")" ]]
 printf '%s\n' '{"success":true,"classrooms":[{"id":"../escape"}]}' >"$base/public-classrooms.json"
 ! public_classroom_id "$base/public-classrooms.json" >/dev/null 2>&1
+
+# ERR is inherited into command substitutions; only the top-level shell may mutate live state.
+trap_count="$base/rollback-count"
+set +e
+COUNT="$trap_count" bash -c '
+  set -Eeuo pipefail
+  rollback() { printf x >>"$COUNT"; exit "$1"; }
+  trap '\''cause=$?; if [[ "$BASHPID" == "$$" ]]; then rollback "$cause"; else exit "$cause"; fi'\'' ERR
+  fail() { return 73; }
+  value="$(fail)"
+' >/dev/null 2>&1
+trap_status=$?
+set -e
+[[ "$trap_status" == 73 && "$(cat "$trap_count")" == x ]]
 
 # Archive gate accepts only relative, in-release symlinks and regular payload types.
 mkdir -p "$base/archive-src/dir"
