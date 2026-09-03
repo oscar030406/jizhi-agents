@@ -19,6 +19,9 @@ vi.mock('@/lib/accounts/org-store', () => ({
 vi.mock('@/lib/server/intake-runs', () => ({
   isValidRunId: () => true,
   readRunEvents: mocks.readRunEvents,
+  // 可见性口径本身在 tests/server/intake-runs.test.ts 里钉；这里只验路由有没有用它
+  runVisibleTo: (owner: string | null | undefined, orgId: string | null) =>
+    !owner || owner === orgId,
 }));
 
 beforeEach(() => {
@@ -42,14 +45,16 @@ describe('intake run events tenant view', () => {
     expect(response.status).toBe(404);
   });
 
-  it('旧 run 没有所有者时不向任何机构管理者开放', async () => {
+  // 口径与语料可见性对齐：没有归属的 run 是平台自己跑的，管理者都看得到。
+  // 原来这里判 404，结果盘上 95 条早于 owner_org_id 字段的 run 一条都翻不出来。
+  it('没有所有者的旧 run 对管理者开放', async () => {
     mocks.readRunEvents.mockResolvedValue({ record: { corpus: 'public' }, events: [], nextSeq: 0 });
     const { GET } = await import('@/app/api/knowledge/intake-runs/[runId]/events/route');
     const response = await GET(
       { nextUrl: new URL('http://localhost/api/knowledge/intake-runs/legacy/events') } as never,
       { params: Promise.resolve({ runId: 'legacy' }) },
     );
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(200);
   });
 
   it('只向 run 创建机构返回事件', async () => {

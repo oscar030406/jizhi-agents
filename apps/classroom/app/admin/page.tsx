@@ -10,8 +10,11 @@
  *   A 已接入语料库（结论卡在外，就绪度九栏明细在折叠里）
  *   B 全局口径数字 + 课程墙实时汇总
  *   C 课程审核账单表，按判错数降序，点行下钻
- *   D 资源体检：覆盖缺口 + 难度供给
- *   E 学习路径入口（概念级规划图已下线，全景路径在 /path，与首页/报告同源）
+ *
+ * 2026-09-03 用户两次点名删掉页尾的「资源体检」与「学习路径」两区：前者讲的是资源侧
+ * 覆盖缺口与难度供给，与本页其余部分（库、指标、审核账单）不是同一个决策；后者整区
+ * 只有一句话加一条去 /path 的链接，路径页本身在顶栏就能到。删的是入口，
+ * 覆盖缺口的数据照旧喂给审核账单表那一列（readCoverageRuns 还在）。
  *
  * 数字纪律：只有 metrics.json（带口径原文）与课程文件实时计算两个来源，
  * 读不到显示「—」。这一页不受 check_metrics.py 管辖，更不许硬编码。
@@ -42,9 +45,7 @@ import {
   Gavel,
   Globe2,
   History,
-  Route,
   ShieldAlert,
-  Target,
   Upload,
 } from 'lucide-react';
 
@@ -53,14 +54,14 @@ import { SESSION_COOKIE } from '@/lib/accounts/session';
 import { domainLabel } from '@/lib/knowledge/domain-labels';
 import {
   readAllCourseAudits,
+  readCorpusOverview,
   readDomainIntakes,
   readHeadlineMetrics,
   rollup,
 } from '@/lib/server/admin-overview';
-import { readCoverageRuns, readDifficultySupply } from '@/lib/server/knowledge-map';
+import { readCoverageRuns } from '@/lib/server/knowledge-map';
 import { Caliber } from '@/components/admin/caliber';
 import { AdminCourseTable } from '@/components/admin/course-table';
-import { CoveragePanel, DifficultySupply } from '@/components/admin/coverage-panel';
 import { DomainIntakeSummary } from '@/components/admin/domain-intake-summary';
 import { DomainIntakeTable } from '@/components/admin/domain-intake-table';
 import { MetricBand } from '@/components/admin/metric-band';
@@ -149,12 +150,11 @@ export default async function AdminPage() {
   const { readDomainRegistry } = await import('@/lib/server/domain-registry');
   await readDomainRegistry().catch(() => null);
 
-  const [metrics, courses, intakes, coverage, tiers] = await Promise.all([
+  const [metrics, courses, intakes, coverage] = await Promise.all([
     readHeadlineMetrics(),
     readAllCourseAudits(),
     readDomainIntakes(),
     readCoverageRuns(),
-    readDifficultySupply(),
   ]);
   const totals = rollup(courses);
   /**
@@ -163,6 +163,8 @@ export default async function AdminPage() {
    * 换个消费点，不在两处各维护一份翻译。
    */
   const labeledIntakes = intakes.map((d) => ({ ...d, domain: domainLabel(d.domain) }));
+  // 卡片清单不等于体检报告清单：内置主库没走过接入链，只有域注册清单认识它。
+  const corpora = await readCorpusOverview(intakes);
 
   return (
     <>
@@ -264,7 +266,7 @@ export default async function AdminPage() {
 
         {/* 库状态是管理者进来要的第一个数字，排在主操作正下方（工单 N7 目标 2）。 */}
         <Section icon={Boxes} title="已接入语料库">
-          <DomainIntakeSummary intakes={intakes} />
+          <DomainIntakeSummary intakes={corpora} />
           <div className="mt-4">
             <Caliber summary="展开明细：每个库的就绪度报告（九栏 + 四道闸）">
               <p>
@@ -308,41 +310,6 @@ export default async function AdminPage() {
               <strong className="font-medium">带并发标记的课程不能当作独占运行耗时</strong>。
             </p>
           </Caliber>
-        </Section>
-
-        <Section icon={Target} title="资源体检" band={BAND_SOFT}>
-          <div className="grid gap-8 lg:grid-cols-2">
-            <div>
-              <h3 className="mb-4 text-base font-medium">资源覆盖缺口</h3>
-              <CoveragePanel rows={coverage} />
-            </div>
-            <div>
-              <h3 className="mb-4 text-base font-medium">资源难度供给</h3>
-              <DifficultySupply tiers={tiers} />
-            </div>
-          </div>
-          <Caliber summary="展开口径：覆盖缺口说的是资源，不是学情">
-            <p>覆盖缺口 = 金标里有、生成的课没讲到的知识成分；难度供给 = 概念图谱各难度档的量。</p>
-            <p>
-              这是<strong className="font-medium">资源</strong>的缺口，
-              不是学习者的知识盲区——后者是个人维度，在 <code className="font-mono">/report</code>。
-            </p>
-            <p>
-              难度供给的<strong className="font-medium">分母是概念不是语料</strong>
-              ——难度档是概念级的人工标注，判不了整个知识库偏浅还是偏深。
-            </p>
-          </Caliber>
-        </Section>
-
-        <Section icon={Route} title="学习路径">
-          <p className="rounded-xl border border-border bg-card px-4 py-4 text-sm leading-relaxed text-muted-foreground">
-            各领域的全景学习路径由引擎按概念前置图拓扑生成，学习者首页、学情报告与路径页读同一份产物。
-            管理者可在
-            <Link href="/path" className="mx-1 underline underline-offset-2">
-              路径页
-            </Link>
-            按当前有效领域查看；接入新语料后若前置图出不来，说明该领域暂时只能按书序排课。
-          </p>
         </Section>
       </main>
     </>

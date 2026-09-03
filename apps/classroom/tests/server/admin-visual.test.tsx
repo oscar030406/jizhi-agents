@@ -152,6 +152,17 @@ describe('语料库结论卡', () => {
     expect(html).toContain('1/4 道闸');
   });
 
+  it('没有接入体检记录的库不画闸位，直说是内置主库', () => {
+    const html = renderToStaticMarkup(
+      <DomainIntakeSummary intakes={[{ domain: 'ai', chunks: 1529, gates: null }]} />,
+    );
+    expect(html).toContain('人工智能应用开发');
+    expect(html).toContain('1,529');
+    expect(html).toContain('内置主库 · 无接入体检记录');
+    // 编一组闸位出来 = 替一次没发生过的体检下结论
+    expect(html).not.toContain('道闸');
+  });
+
   it('没有接入记录时整块不渲染', () => {
     expect(renderToStaticMarkup(<DomainIntakeSummary intakes={[]} />)).toBe('');
   });

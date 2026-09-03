@@ -33,14 +33,16 @@ vi.mock('@/lib/server/intake-runs', () => ({
   isValidRunId: () => true,
   listRuns: async (
     limit: number,
-    ownerOrgId?: string,
+    ownerOrgId?: string | null,
     display: (run: Record<string, unknown>) => boolean = () => true,
   ) =>
     mocks.runs
-      .filter((run) => run.ownerOrgId === ownerOrgId)
+      .filter((run) => !run.ownerOrgId || run.ownerOrgId === ownerOrgId)
       .filter(display)
       .slice(0, limit),
   readRunEvents: async () => mocks.payload,
+  runVisibleTo: (owner: string | null | undefined, orgId: string | null) =>
+    !owner || owner === orgId,
 }));
 
 import IntakeRunsPage from '@/app/admin/knowledge/runs/page';
@@ -128,10 +130,13 @@ describe('知识库接入记录页的提供方文案', () => {
     ).rejects.toThrow('NEXT_NOT_FOUND');
   });
 
-  it('详情路由拒绝没有所有者的旧记录', async () => {
+  // 没有所有者 = 平台自己跑的，口径与语料可见性一致（lib/server/intake-runs.ts 的 runVisibleTo）。
+  // 原来这里判 404，盘上早于 owner_org_id 字段的那批 run 于是一条都翻不出来。
+  it('详情路由渲染没有所有者的平台旧记录', async () => {
     mocks.payload = payload('iotdb', false, null);
-    await expect(
-      IntakeRunPage({ params: Promise.resolve({ runId: '20260831T120000-abcdef' }) }),
-    ).rejects.toThrow('NEXT_NOT_FOUND');
+    const html = renderToStaticMarkup(
+      await IntakeRunPage({ params: Promise.resolve({ runId: '20260831T120000-abcdef' }) }),
+    );
+    expect(html).toContain('iotdb');
   });
 });

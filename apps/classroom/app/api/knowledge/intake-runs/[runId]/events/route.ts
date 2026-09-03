@@ -16,7 +16,7 @@ import { accountForSession, accountsEnabled } from '@/lib/accounts/store';
 import { orgForAccount } from '@/lib/accounts/org-store';
 import { SESSION_COOKIE } from '@/lib/accounts/session';
 import { API_ERROR_CODES, apiError, apiSuccess } from '@/lib/server/api-response';
-import { isValidRunId, readRunEvents } from '@/lib/server/intake-runs';
+import { isValidRunId, readRunEvents, runVisibleTo } from '@/lib/server/intake-runs';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,7 +38,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ runI
     return apiError(API_ERROR_CODES.INVALID_REQUEST, 404, `没有这个接入 run：${runId}`);
   }
   const org = await orgForAccount(account.id);
-  if (!org || payload.record.owner_org_id !== org.id) {
+  if (!runVisibleTo(payload.record.owner_org_id, org?.id ?? null)) {
     return apiError(API_ERROR_CODES.INVALID_REQUEST, 404, `没有这个接入 run：${runId}`);
   }
   return apiSuccess(payload);

@@ -30,7 +30,18 @@ export async function GET() {
   const entries = registry?.entries;
   if (entries && typeof entries === 'object') {
     const filtered = Object.fromEntries(
-      Object.entries(entries).filter(([corpus]) => visible(corpus) && !isScratchCorpus(corpus)),
+      Object.entries(entries).filter(
+        ([corpus, entry]) =>
+          visible(corpus) &&
+          !isScratchCorpus(corpus) &&
+          // 块数写着 0 的行不出这一跳。引擎的种子名单（personalize_service.py 的
+          // DOMAIN_CORPORA）把「产品声明了、库还没建」的领域也写进注册清单，
+          // manufacturing / industrial-internet / software / odoo 四条是空壳：
+          // 选中它们生成课程时无素材可取。这里是客户端视图的唯一水源，
+          // 拦在这一跳 = 库下拉、路径页、示例词一起干净。
+          // 缺字段（老清单没写过 chunks）留着，判不了空就不替它下结论。
+          !(typeof entry?.chunks === 'number' && entry.chunks <= 0),
+      ),
     );
     return NextResponse.json({ ...registry, entries: filtered });
   }

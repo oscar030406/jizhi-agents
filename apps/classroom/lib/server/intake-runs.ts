@@ -52,7 +52,7 @@ export interface IntakeStageSlot {
 
 export interface IntakeRunRecord {
   run_id: string;
-  /** 创建 run 的机构；旧记录没有该字段，按未知所有者处理，不对管理端开放。 */
+  /** 创建 run 的机构；旧记录没有该字段，按平台自跑处理，可见性见 `runVisibleTo`。 */
   owner_org_id?: string;
   corpus: string;
   scope: string;
@@ -82,6 +82,21 @@ export interface IntakeRunSummary {
   /** 各状态各几站。口径与引擎 `list_runs()` 的 `stage_counts` 一致。 */
   stageCounts: Record<StageStatus, number>;
   error: string;
+}
+
+/**
+ * 这条 run 该不该给这个机构看。
+ *
+ * 口径与语料可见性（`lib/accounts/org-store.ts` 的 `corpusVisibilityFor`）**对齐**：
+ * 有归属的只给归属机构，**没有归属的是平台自己跑的，任何管理者都看得到**。
+ *
+ * 原来这里写的是「没有归属 = 谁都不给」，同一份数据于是有了两套口径：语料库那一页
+ * 看得见平台的 iotdb / smart-manufacturing，接入记录页却常年「还没有接入记录」——
+ * 盘上 95 条 run 全部早于 `owner_org_id` 这个字段，一条都没有归属，被这道闸整片挡掉了。
+ * 三处调用点（列表页、详情页、事件接口）此前各写一份同样的判断，现在收在这里一份。
+ */
+export function runVisibleTo(ownerOrgId: string | null | undefined, orgId: string | null): boolean {
+  return !ownerOrgId || ownerOrgId === orgId;
 }
 
 /** run 目录名的字符集，与引擎 `_safe_run_id` 同一条——外部输入不可信。 */
@@ -173,7 +188,8 @@ const STATUSES: StageStatus[] = [
 /** run 列表，新的在前。目录不存在（一次都没跑过）时返回空数组，页面出空态。 */
 export async function listRuns(
   limit = 30,
-  ownerOrgId?: string,
+  /** 传 undefined = 不做机构过滤（服务端内部用）；传机构 id 或 null = 按机构视图过滤。 */
+  ownerOrgId?: string | null,
   display: (run: IntakeRunSummary) => boolean = () => true,
 ): Promise<IntakeRunSummary[]> {
   if (limit <= 0) return [];
@@ -189,8 +205,8 @@ export async function listRuns(
   for (const name of names) {
     const record = await readRunRecord(name);
     if (!record) continue;
-    // 先按不可变 run 所有者过滤，再截取 limit；旧 run 没有所有者，安全地不进入机构视图。
-    if (ownerOrgId !== undefined && record.owner_org_id !== ownerOrgId) continue;
+    // 先按 run 所有者过滤，再截取 limit——否则别的机构的新记录会把本机构的挤出 limit。
+    if (ownerOrgId !== undefined && !runVisibleTo(record.owner_org_id, ownerOrgId)) continue;
     const stages = Object.values(record.stages ?? {});
     const row: IntakeRunSummary = {
       runId: record.run_id ?? name,

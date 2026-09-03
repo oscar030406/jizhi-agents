@@ -360,6 +360,55 @@ export async function readDomainIntakes(): Promise<DomainIntake[]> {
     .sort((a, b) => a.domain.localeCompare(b.domain));
 }
 
+/** 「已接入语料库」卡片的一行。 */
+export interface CorpusOverviewRow {
+  domain: string;
+  chunks: number;
+  /**
+   * 四道闸。**跑过接入链才有**——内置主库（`ai`）是随仓库一起来的，没有
+   * `readiness.json`，这里就是 `null`，卡面据此不画闸位。给它编一组绿条
+   * 等于替一次没发生过的体检下结论。
+   */
+  gates: DomainIntake['gates'] | null;
+}
+
+/**
+ * 已接入语料库的清单。
+ *
+ * **真源是域注册清单**（`domain_registry.json`，入库链 ⑧ 站写出），不是接入体检报告。
+ * 原来这一块直接铺 `readDomainIntakes()`，于是只有走过接入流水线的库才上屏——
+ * 内置主库 `ai`（1529 块，全站最常用的那个）在管理端一直是隐形的，因为它从来没走过
+ * 接入链、盘上没有 `ai_intake/readiness.json`。
+ *
+ * 块数为 0 的行一律不进清单：引擎的种子名单（`personalize_service.py` 的
+ * `DOMAIN_CORPORA`）会把「声明了但还没建」的领域也写进注册清单，
+ * manufacturing / industrial-internet / software / odoo 四条就是这么来的。
+ * 它们生成不出任何东西，摆在「已接入语料库」下面是假的。
+ */
+export async function readCorpusOverview(
+  intakes: readonly DomainIntake[],
+): Promise<CorpusOverviewRow[]> {
+  const { readDomainRegistry } = await import('@/lib/server/domain-registry');
+  const registry = await readDomainRegistry().catch(() => null);
+  const gatesOf = new Map(intakes.map((d) => [d.domain, d.gates] as const));
+  const rows = new Map<string, CorpusOverviewRow>();
+  for (const entry of Object.values(registry?.entries ?? {})) {
+    // chunks 缺字段时留着（老清单没写过这一项，判不了空就不替它下结论）；写着 0 才删。
+    if (typeof entry.chunks === 'number' && entry.chunks <= 0) continue;
+    rows.set(entry.corpus, {
+      domain: entry.corpus,
+      chunks: entry.chunks ?? 0,
+      gates: gatesOf.get(entry.corpus) ?? null,
+    });
+  }
+  // 注册清单读不到（引擎还没跑过 ⑧ 站）时仍要出库：体检报告里有块数的照常上屏。
+  for (const d of intakes) {
+    if (d.chunks > 0 && !rows.has(d.domain))
+      rows.set(d.domain, { domain: d.domain, chunks: d.chunks, gates: d.gates });
+  }
+  return [...rows.values()].sort((a, b) => b.chunks - a.chunks);
+}
+
 /** 课程墙的实时汇总。所有数字当场从课程文件算，不读缓存也不硬编码。 */
 export function rollup(courses: CourseAudit[]) {
   const acc = courses.reduce(

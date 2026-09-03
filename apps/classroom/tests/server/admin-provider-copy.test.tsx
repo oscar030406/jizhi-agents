@@ -17,6 +17,7 @@ vi.mock('@/lib/server/admin-overview', () => ({
   readHeadlineMetrics: async () => [],
   readAllCourseAudits: async () => [],
   readDomainIntakes: async () => [],
+  readCorpusOverview: async () => [],
   rollup: () => ({
     courses: 0,
     scenes: 0,

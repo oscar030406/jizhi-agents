@@ -1044,7 +1044,8 @@ CROSS_DOMAIN_CORPORA = frozenset({"iotdb", "odoo"})
 #: 一次性验证用的库名后缀/前缀。**约定而非名单**——名单要人记得维护，约定不用。
 #: 2026-08-23 实锤：全链验证建的 `fullpath-probe`（300 块随机字节）过了块数闸，
 #: 出现在学习者的知识库下拉里；选中它会拿乱码生成一门课。
-SCRATCH_SUFFIXES = ("-probe", "-test", "-tmp", "-scratch")
+#: 无分隔符的 `probe` 结尾也算（`sigprobe` 这类）——前端 SCRATCH_PATTERN 同日一起改。
+SCRATCH_SUFFIXES = ("-probe", "-test", "-tmp", "-scratch", "probe")
 SCRATCH_PREFIXES = ("probe-", "test-", "tmp-", "scratch-")
 LEGACY_SCRATCH_PREFIX = "fullprobe"
 

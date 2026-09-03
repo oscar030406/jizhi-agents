@@ -148,7 +148,7 @@ export default async function AdminCoursePage({
   return (
     <>
       {/* 与 /admin 同一条顶栏，返回目标改成管理端而不是首页 */}
-      <SiteHeader backHref="/admin" backLabel="回管理端" maxWidth="max-w-4xl" />
+      <SiteHeader backHref="/admin" backLabel="返回管理端" maxWidth="max-w-4xl" />
       <main className="bg-white dark:bg-background">
         <div className="mx-auto max-w-4xl px-4 pb-20 pt-12 sm:px-6 sm:pt-16">
           <h1 className="text-[32px] font-medium leading-[1.15] tracking-[-0.02em] sm:text-[40px]">

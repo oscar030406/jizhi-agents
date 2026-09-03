@@ -194,7 +194,9 @@ export function needsSafetyLayer(corpus?: string, _registryVersion?: number): bo
  * 前端再判一层是**双保险**——上一次它漏进学习者下拉，正是因为唯一一道闸
  * 换了判据。两处口径必须一起改，改一处漏一处就是那次事故重演。
  */
-const SCRATCH_PATTERN = /(?:^fullprobe|(?:^|[-_])(?:probe|test|tmp|scratch)(?:[-_]|$))/;
+// `probe$` 是 2026-09-03 补的：分隔符版只认 `x-probe`，盘上那条 `sigprobe`
+// （一次失败的自测投料，scope 写着「测试」）就这么混进了接入记录列表。
+const SCRATCH_PATTERN = /(?:^fullprobe|probe$|(?:^|[-_])(?:probe|test|tmp|scratch)(?:[-_]|$))/;
 
 export function isScratchCorpus(corpus: string): boolean {
   const name = corpus.trim().toLowerCase();

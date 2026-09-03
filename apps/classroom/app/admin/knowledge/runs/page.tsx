@@ -50,11 +50,14 @@ export default async function IntakeRunsPage() {
   // run 行的库名走 domainLabel，先灌域注册清单（同 admin 总览页的补法）
   const { readDomainRegistry } = await import('@/lib/server/domain-registry');
   await readDomainRegistry().catch(() => null);
-  const runs = org ? await listRuns(30, org.id, (run) => !isScratchCorpus(run.corpus)) : [];
+  // 没入组的管理者也要看得到平台自己跑的那些 run（口径见 runVisibleTo）
+  const runs = await listRuns(30, org?.id ?? null, (run) => !isScratchCorpus(run.corpus));
 
   return (
     <>
-      <SiteHeader backHref="/admin/knowledge" backLabel="回知识库" maxWidth="max-w-4xl" />
+      {/* 回链指管理端：这一页的入口是 /admin 上那张「接入记录」卡，
+          原来写死回知识库，等于把人送到他没来过的地方。去知识库的次级链在页尾。 */}
+      <SiteHeader backHref="/admin" backLabel="返回管理端" maxWidth="max-w-4xl" />
       <main className="mx-auto max-w-4xl px-4 py-10 sm:px-6">
         <header className="mb-8">
           <h1 className="text-2xl font-semibold tracking-tight">接入记录</h1>
@@ -124,6 +127,17 @@ export default async function IntakeRunsPage() {
             })}
           </ul>
         )}
+
+        <p className="mt-10 text-[11px] text-muted-foreground">
+          各语料库现在建到哪一站，在{' '}
+          <Link
+            href="/admin/knowledge"
+            className="underline underline-offset-2 hover:text-foreground"
+          >
+            知识库
+          </Link>
+          。
+        </p>
       </main>
     </>
   );

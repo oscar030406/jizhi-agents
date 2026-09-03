@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   readAllCourseAudits,
+  readCorpusOverview,
   readCourseAudit,
   readDomainIntakes,
   readHeadlineMetrics,
@@ -163,6 +164,23 @@ describe('管理端聚合', () => {
       expect(typeof d.gates.vocabulary).toBe('boolean');
       // 章级前置边不可能多于结构候选边——多了说明复核那一步把没提出的边也算进去了
       expect(d.chapterEdges).toBeLessThanOrEqual(Math.max(d.candidateEdges, d.chapterEdges));
+    }
+  });
+
+  it('已接入语料库清单：内置主库在里面，空壳领域不在', async () => {
+    const rows = await readCorpusOverview(await readDomainIntakes());
+    if (rows.length === 0) {
+      console.warn('跳过：本机既没有域注册清单也没有接入报告');
+      return;
+    }
+    // 块数为 0 的行一条都不许有——引擎种子名单里「声明了但还没建」的领域就是这种
+    for (const r of rows) expect(r.chunks).toBeGreaterThan(0);
+    // 内置主库没有 readiness.json，只能从域注册清单里来；它缺席就是这次修的那个 bug
+    const ai = rows.find((r) => r.domain === 'ai');
+    if (ai) {
+      expect(ai.chunks).toBeGreaterThan(0);
+      // 没跑过接入链就不该有闸位——编一组出来等于替没做过的体检下结论
+      expect(ai.gates).toBeNull();
     }
   });
 });

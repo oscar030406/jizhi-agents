@@ -13,7 +13,7 @@ import { SiteHeader } from '@/components/site-header';
 import { IntakeRunView } from '@/components/admin/intake-run-view';
 import { orgForAccount } from '@/lib/accounts/org-store';
 import { isScratchCorpus } from '@/lib/knowledge/domain-registry';
-import { isValidRunId, readRunEvents } from '@/lib/server/intake-runs';
+import { isValidRunId, readRunEvents, runVisibleTo } from '@/lib/server/intake-runs';
 
 import { Denied, managerAccount } from '../../guard';
 
@@ -32,12 +32,15 @@ export default async function IntakeRunPage({
   const payload = await readRunEvents(runId, 0, 2000);
   if (!payload) notFound();
   const org = await orgForAccount(account.id);
-  if (!org || payload.record.owner_org_id !== org.id || isScratchCorpus(payload.record.corpus))
+  if (
+    !runVisibleTo(payload.record.owner_org_id, org?.id ?? null) ||
+    isScratchCorpus(payload.record.corpus)
+  )
     notFound();
 
   return (
     <>
-      <SiteHeader backHref="/admin/knowledge/runs" backLabel="回接入记录" maxWidth="max-w-4xl" />
+      <SiteHeader backHref="/admin/knowledge/runs" backLabel="返回接入记录" maxWidth="max-w-4xl" />
       <main className="mx-auto max-w-4xl px-4 py-10 sm:px-6">
         <IntakeRunView record={payload.record} events={payload.events} />
 

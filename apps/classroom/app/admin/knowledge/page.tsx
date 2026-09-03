@@ -51,7 +51,7 @@ export default async function KnowledgeCenterPage() {
 
   return (
     <>
-      <SiteHeader backHref="/admin" backLabel="回管理端" maxWidth="max-w-6xl" />
+      <SiteHeader backHref="/admin" backLabel="返回管理端" maxWidth="max-w-6xl" />
       <main className="bg-white dark:bg-background">
         <header className="pt-12 pb-4 sm:pt-16">
           <div className={CONTAINER}>

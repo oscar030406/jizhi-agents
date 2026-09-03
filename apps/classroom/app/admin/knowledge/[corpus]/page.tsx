@@ -57,7 +57,7 @@ export default async function CorpusDetailPage({
 
   return (
     <>
-      <SiteHeader backHref="/admin/knowledge" backLabel="回知识库" maxWidth="max-w-4xl" />
+      <SiteHeader backHref="/admin/knowledge" backLabel="返回知识库" maxWidth="max-w-4xl" />
       <main className="mx-auto max-w-4xl px-4 py-10 sm:px-6">
         <header className="mb-8">
           {/* 中文名走 `lib/knowledge/domain-labels.ts` 的单一真源；库 id 仍然印出来，
