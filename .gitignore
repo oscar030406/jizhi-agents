@@ -5,7 +5,8 @@ AGENTS.md
 PLAYBOOK.md
 HANDOFF*
 *.docx
-docs/
+/docs/*
+**/*/docs/
 tmp/
 dist/
 references/
@@ -53,3 +54,7 @@ apps/classroom/assets/
 
 # 先行架构研究实验区（赛后论文素材，不公开）
 审核架构实验/
+
+# 对外仓库保留的两份文档（放在末尾，压过上面的 /docs/* 与 *.pdf）
+!/docs/技术实现文档.pdf
+!/docs/部署说明.md
