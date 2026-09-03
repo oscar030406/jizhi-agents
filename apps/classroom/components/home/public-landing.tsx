@@ -384,7 +384,7 @@ export function PublicLanding() {
           {/* hero kicker：朱批色细下划线呼应评点本视觉 */}
           <p className="mb-5 text-sm font-semibold tracking-wide text-annot-zhu">
             <span className="border-b border-annot-zhu/50 pb-0.5">
-              我们不发明知识，只做教材的搬运工
+              资料换了，课就换了
             </span>
           </p>
           {/* 68px：全幅宽下最长一行「一句需求，生成一门」九个字 612px，容器内一行放下。
