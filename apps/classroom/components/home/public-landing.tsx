@@ -42,7 +42,11 @@ import {
   type PracticeProject,
 } from '@/components/skills/practice-projects';
 import { EmptyState } from '@/components/ui/empty-state';
+import { DemoEntryButtons } from '@/components/tour/demo-entry-buttons';
+import { ReplayTourLink } from '@/components/tour/replay-tour-link';
+import { TourAutoStart } from '@/components/tour/tour-auto-start';
 import { Textarea } from '@/components/ui/textarea';
+import { conceptLabel } from '@/lib/knowledge/concept-labels';
 import { createLogger } from '@/lib/logger';
 import { cn } from '@/lib/utils';
 
@@ -164,7 +168,10 @@ function AuditBadges({ audit }: { audit: NonNullable<ClassroomSummary['audit']> 
   // 一个字都没改，只是默认不铺开。
   return (
     <div className="mt-3 text-xs">
-      <span className="inline-flex items-center gap-1 rounded-full bg-yellow-soft px-2 py-0.5 text-foreground/80">
+      <span
+        data-tour="audit-badge"
+        className="inline-flex items-center gap-1 rounded-full bg-yellow-soft px-2 py-0.5 text-foreground/80"
+      >
         <Gavel className="size-3" aria-hidden />
         审核打回 {audit.flagged} 条
       </span>
@@ -189,9 +196,12 @@ function AuditBadges({ audit }: { audit: NonNullable<ClassroomSummary['audit']> 
 function CourseGrid({
   courses,
   practiceProjects,
+  conceptOf,
 }: {
   courses: ClassroomSummary[];
   practiceProjects: PracticeProject[];
+  /** courseId → 这门课的生成期摘要。取其中的主概念做角标；没有就不出。 */
+  conceptOf?: CoursePath['courses'];
 }) {
   return (
     <ul className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -221,6 +231,12 @@ function CourseGrid({
                 </h3>
                 <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   <span>{course.sceneCount} 个场景</span>
+                  {/* 主概念取自这门课场景实际引用的教材块标签，与阶次同一个判据。 */}
+                  {conceptOf?.[course.id]?.concept && (
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-foreground/80">
+                      {conceptLabel(conceptOf[course.id].concept!)}
+                    </span>
+                  )}
                   {/* 课程边只由当前已发布项目的 courseIds 反查，不在课程数据里落第二份。 */}
                   {linkedProjects.length > 0 && (
                     <span className="inline-flex items-center gap-1 rounded-full bg-green-soft px-2 py-0.5 text-foreground/80">
@@ -235,6 +251,199 @@ function CourseGrid({
         );
       })}
     </ul>
+  );
+}
+
+/** `/api/course-path/{corpus}` 的返回体：阶次由引擎的前置图现算，这里只负责摆。 */
+export interface CoursePath {
+  conceptCount: number;
+  edgeCount: number;
+  stages: Array<{ index: number; title: string; conceptIds: string[]; courseIds: string[] }>;
+  ungroupedCourseIds: string[];
+  courses: Record<string, { concept: string | null; tier?: string; profileFields?: string[] }>;
+}
+
+type CoursePathState = { kind: 'loading' } | { kind: 'ready'; path: CoursePath } | { kind: 'failed' };
+
+/** 画像字段的中文名。字段清单跟着 `CourseGenerationMeta.profile` 走，认不出就原样出 id。 */
+const PROFILE_FIELD_LABEL: Record<string, string> = {
+  education: '学历档',
+  programmingLevel: '编程自评',
+  pythonLevel: 'Python 自评',
+  agentLevel: '智能体自评',
+  ragLevel: 'RAG 自评',
+  engineeringLevel: '工程自评',
+};
+
+const profileFieldNames = (fields: string[]) =>
+  fields.map((f) => PROFILE_FIELD_LABEL[f] ?? f).join('、');
+
+/**
+ * 同一个概念下、两份画像各自生成的两门课。
+ *
+ * 找的是**盘上真有的一对**：同一主概念、讲解档不同。找不到就返回 null，
+ * 由调用方退回「只列画像字段」——不拿两门无关的课硬凑一个对照。
+ */
+export function pickProfileContrast(path: CoursePath, courses: ClassroomSummary[]) {
+  const byId = new Map(courses.map((c) => [c.id, c]));
+  const groups = new Map<
+    string,
+    Array<{ course: ClassroomSummary; tier: string; fields: string[] }>
+  >();
+  for (const [id, meta] of Object.entries(path.courses)) {
+    const course = byId.get(id);
+    if (!course || !meta.concept || !meta.tier) continue;
+    const row = { course, tier: meta.tier, fields: meta.profileFields ?? [] };
+    const bucket = groups.get(meta.concept);
+    if (bucket) bucket.push(row);
+    else groups.set(meta.concept, [row]);
+  }
+  for (const [concept, rows] of groups) {
+    // 先按讲解档，再按填了几项自评：同档内填得多的排后面，取两端就是「填得最少」对「填得最多」
+    const sorted = [...rows].sort(
+      (a, b) => a.tier.localeCompare(b.tier) || a.fields.length - b.fields.length,
+    );
+    const low = sorted[0];
+    const high = sorted[sorted.length - 1];
+    if (low.tier !== high.tier) return { concept, low, high };
+  }
+  return null;
+}
+
+/**
+ * 「画像改变了什么」——未登录也要看得见的一块。
+ *
+ * 不讲个性化的原理，直接摆盘上真有的两门课：同一个概念，两份画像，出来的讲解档
+ * 与场景数不一样。找不到这样一对时只列画像有哪些字段，并说清为什么没有对照，
+ * **不编一个示例**。
+ */
+function ProfileEffect({ path, courses }: { path: CoursePath; courses: ClassroomSummary[] }) {
+  const contrast = pickProfileContrast(path, courses);
+  const allFields = [
+    ...new Set(Object.values(path.courses).flatMap((c) => c.profileFields ?? [])),
+  ];
+  return (
+    <div className="mt-5 rounded-xl border border-border bg-card p-5">
+      <p className="text-sm font-medium">画像改变了什么</p>
+      {contrast ? (
+        <>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+            教材是同一批，阶次也是同一条路径；变的是讲解档和铺开的场景数。下面这两门课都落在
+            「{conceptLabel(contrast.concept)}」上，是两份不同画像各自生成的：
+          </p>
+          <ul className="mt-3 space-y-2 text-sm">
+            {[contrast.low, contrast.high].map((row) => (
+              <li key={row.course.id} className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-foreground/80">
+                  {row.tier} 档
+                </span>
+                <Link href={`/classroom/${row.course.id}`} className="font-medium hover:text-primary">
+                  {row.course.title}
+                </Link>
+                <span className="text-xs text-muted-foreground">
+                  {row.course.sceneCount} 个场景 · 画像填了{' '}
+                  {row.fields.length ? profileFieldNames(row.fields) : '（无自评项）'}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+            两门课都进得去，点开就能对比同一个概念被讲成什么样。登录后填自己的画像，
+            再发起生成的课按同一套规则定档。
+          </p>
+        </>
+      ) : (
+        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+          画像会记{allFields.length ? profileFieldNames(allFields) : '学历档与五维自评'}，
+          用来决定讲解档与铺开的场景数。当前已发布的课里还没有「同一个概念、两份画像」的成对
+          样本，所以这里不摆对照——凑一对无关的课看不出画像改了什么。登录后按自己的画像生成
+          一门，报告页会逐条列出这门课为什么长成这样。
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 课程墙按阶次分组。
+ *
+ * 分组判据不在这里：每门课的主概念由它场景实际引用的教材块的 concept_tags 投票得出，
+ * 阶次由引擎对该库前置图做拓扑分层。这个组件只做摆放，以及三件必须说清的事——
+ * 空阶（这一阶排出来了但还没有课）、未归入路径的课（有课但对不上概念，**照样上墙**）、
+ * 以及阶次是算出来的不是人排的。
+ */
+function CourseWallByStage({
+  path,
+  courses,
+  practiceProjects,
+}: {
+  path: CoursePath;
+  courses: ClassroomSummary[];
+  practiceProjects: PracticeProject[];
+}) {
+  const byId = new Map(courses.map((c) => [c.id, c]));
+  const pick = (ids: string[]) =>
+    ids.map((id) => byId.get(id)).filter((c): c is ClassroomSummary => Boolean(c));
+  const ungrouped = pick(path.ungroupedCourseIds);
+  return (
+    <div className="mt-5">
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        阶次来自知识库的概念前置图（{path.conceptCount} 个概念、{path.edgeCount} 条前置边）现算的
+        拓扑分层，不是人工排的；同一阶内的课没有先后。每门课挂在哪一阶，由它的场景实际引用了
+        哪些教材段落投票得出。
+      </p>
+      <ProfileEffect path={path} courses={courses} />
+      {path.stages.map((stage) => {
+        const staged = pick(stage.courseIds);
+        return (
+          <section key={stage.index} className="mt-8 border-t border-border/60 pt-5">
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <h3 className="text-lg font-semibold">{stage.title}</h3>
+              <p className="text-sm text-muted-foreground">
+                {stage.conceptIds.map((id) => conceptLabel(id)).join(' · ')}
+              </p>
+              <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">
+                {staged.length} 门课
+              </span>
+            </div>
+            {staged.length > 0 ? (
+              <CourseGrid
+                courses={staged}
+                practiceProjects={practiceProjects}
+                conceptOf={path.courses}
+              />
+            ) : (
+              /* 空阶不删。删掉它，路径就从 1、2、3、4 变成 1、2、3，看不出这一阶存在但还没人开课。 */
+              <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+                这一阶的概念已经排进路径，但还没有已发布的课。登录后可以按其中任一概念发起生成，
+                生成的课通过审核后会落在这一阶。
+              </p>
+            )}
+          </section>
+        );
+      })}
+      {ungrouped.length > 0 && (
+        <section className="mt-8 border-t border-border/60 pt-5">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <h3 className="text-lg font-semibold">未归入路径</h3>
+            <p className="text-sm text-muted-foreground">
+              这些课的场景没有对上本库路径里的概念
+            </p>
+            <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">
+              {ungrouped.length} 门课
+            </span>
+          </div>
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+            多数是引用的教材段落上没有概念标签，或引用落在本库路径之外的概念上。
+            它们照样是已审核发布的课，只是这一版排不出阶次，所以摆在最后而不是藏起来。
+          </p>
+          {/* 这里不出概念角标：这些课要么没概念，要么落在本库路径之外的概念上
+              （比如反推表把「大模型上下文与 KV 缓存」判成了 embodied 域的概念）。
+              把那种标签印在卡上，比不印更误导。 */}
+          <CourseGrid courses={ungrouped} practiceProjects={practiceProjects} />
+        </section>
+      )}
+    </div>
   );
 }
 
@@ -291,6 +500,7 @@ export function PublicLanding() {
   // 三态分开记：在飞 / 拉到了 / 拉失败。只有 loaded 布尔时，接口挂掉与真没课
   // 都走「courses 为空 ⇒ 整块不渲染」，访客看到的是课程墙凭空消失。
   const [listState, setListState] = useState<'loading' | 'ready' | 'failed'>('loading');
+  const [pathState, setPathState] = useState<CoursePathState>({ kind: 'loading' });
   // 变体选择只在客户端读 URL：服务端渲染拿不到 search，写在 state 里免得两边不一致
   const [anchorVariant, setAnchorVariant] = useState<'purple' | 'zhu'>('purple');
   const [replayLayout, setReplayLayout] = useState<'tabs' | 'stack'>('tabs');
@@ -313,6 +523,32 @@ export function PublicLanding() {
       } catch (error) {
         log.warn(`公共课程墙加载失败，按失败态渲染：${String(error)}`);
         if (!cancelled) setListState('failed');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 阶次单独取：它挂了课程墙照常平铺，不能让分组的失败把整面墙拖下水。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/course-path/ai', { cache: 'no-store' });
+        const body = (await res.json().catch(() => null)) as {
+          success?: boolean;
+          stages?: CoursePath['stages'];
+        } | null;
+        if (cancelled) return;
+        if (!res.ok || !body?.success || !body.stages?.length) {
+          setPathState({ kind: 'failed' });
+          return;
+        }
+        setPathState({ kind: 'ready', path: body as unknown as CoursePath });
+      } catch (error) {
+        log.warn(`课程阶次加载失败，课程墙按平铺渲染：${String(error)}`);
+        if (!cancelled) setPathState({ kind: 'failed' });
       }
     })();
     return () => {
@@ -368,9 +604,11 @@ export function PublicLanding() {
           </Link>
         </nav>
         <div className="flex items-center gap-2">
+          <ReplayTourLink id="landing" />
           <AccountMenu />
         </div>
       </header>
+      <TourAutoStart id="landing" />
 
       {/* 区 A —— 承诺（E2 换骨架：NotebookLM 式单栏居中大字。
           病根复盘：E1 在双栏骨架里把 H1 调到 48px 就到顶了——532px 栏宽装不下更大的字。
@@ -402,7 +640,10 @@ export function PublicLanding() {
           {/* 副标：标题只说产出，这一行说这门课凭什么同时成立。个性化与专业质量在单模型
               里是互相拉扯的，我们把它们拆到输入端和输出端两条线上分开管——这是产品的
               主张，不是功能列表，所以放在首屏第二行。一行讲完，不展开。 */}
-          <p className="mt-5 max-w-xl text-base leading-relaxed text-muted-foreground">
+          <p
+            data-tour="hero-subline"
+            className="mt-5 max-w-xl text-base leading-relaxed text-muted-foreground"
+          >
             个性化放在输入端，专业质量放在输出端，两件事分开管，不用互相让步
           </p>
 
@@ -410,7 +651,10 @@ export function PublicLanding() {
               参考 Kimi/NotebookLM 的产品即输入框。全首屏只有这一个交互主体。 */}
           <div className="mt-10 w-full max-w-2xl text-left">
             {/* 玻璃质感：半透明白 + 背景模糊，让极光从卡片底下透出来 */}
-            <div className="rounded-2xl border border-white/60 bg-card/75 shadow-card backdrop-blur-xl transition-shadow focus-within:shadow-dropdown dark:border-border">
+            <div
+              data-tour="hero-composer"
+              className="rounded-2xl border border-white/60 bg-card/75 shadow-card backdrop-blur-xl transition-shadow focus-within:shadow-dropdown dark:border-border"
+            >
               <Textarea
                 value={requirement}
                 onChange={(e) => {
@@ -445,6 +689,9 @@ export function PublicLanding() {
               </div>
             </div>
 
+            {/* 评委通道：不注册、不输密码，一键以演示账号进两端。角色在服务端解析。 */}
+            <DemoEntryButtons />
+
             {courses.length > 0 && (
               <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5 text-xs">
                 <span className="text-muted-foreground">或者直接看已发布课程：</span>
@@ -466,7 +713,7 @@ export function PublicLanding() {
                 做法上刻意压重量——小字、单行、竖线分隔、无卡片无色块，
                 重心留给上面那个输入框。数字全部来自 public-metrics.json，见上方常量。 */}
             <div className="border-border/60 mt-6 border-t pt-4">
-              <dl className="grid grid-cols-3">
+              <dl data-tour="metrics" className="grid grid-cols-3">
                 {HERO_FIGURES.map((f, i) => (
                   <div
                     key={f.label}
@@ -551,7 +798,7 @@ export function PublicLanding() {
             </h2>
             {wallCount > 0 && (
               <p className="text-xs text-muted-foreground">
-                角标是这门课的审核记录，进入课程后可详细查看
+                按学习路径的阶次排列；角标是这门课的审核记录，进入课程后可详细查看
               </p>
             )}
           </div>
@@ -574,8 +821,21 @@ export function PublicLanding() {
               />
             </div>
           )}
-          {listState === 'ready' && wallCount > 0 && (
-            <div className="mt-6">
+          {listState === 'ready' && wallCount > 0 && pathState.kind === 'ready' && (
+            <CourseWallByStage
+              path={pathState.path}
+              courses={courses}
+              practiceProjects={practiceProjects}
+            />
+          )}
+          {/* 阶次取不到就退回平铺，并说明退回的是什么——不假装这面墙本来就没有顺序。 */}
+          {listState === 'ready' && wallCount > 0 && pathState.kind !== 'ready' && (
+            <div className="mt-5">
+              {pathState.kind === 'failed' && (
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  这次没取到知识库的阶次产物，下面按发布时间平铺。刷新可重试。
+                </p>
+              )}
               <CourseGrid courses={courses} practiceProjects={practiceProjects} />
             </div>
           )}

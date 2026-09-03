@@ -13,6 +13,7 @@ import { CARD_RECIPE } from '@/components/home/course-card';
 import { SectionAnchor } from '@/components/home/section-anchor';
 import {
   featuredProjects,
+  licenseNote,
   type PracticeLoadState,
   type PracticeProject,
 } from '@/components/skills/practice-projects';
@@ -56,7 +57,9 @@ function HighlightCard({
         <span className="text-xs text-muted-foreground">{project.hours}</span>
       </div>
       <h3 className="text-sm font-semibold leading-snug">{project.name}</h3>
-      <p className="text-xs text-muted-foreground">{project.org}</p>
+      <p className="text-xs text-muted-foreground">
+        {project.org} · {licenseNote(project)}
+      </p>
       <p className="text-xs leading-relaxed">
         <span className="font-medium">做到什么算完成：</span>
         {project.acceptance}
@@ -127,16 +130,32 @@ export function PracticeHighlights({
           </div>
         </>
       ) : (
-        <p
-          className="mt-4 rounded-xl border border-border bg-card px-5 py-4 text-sm leading-relaxed text-muted-foreground"
+        <div
+          className="mt-4 rounded-xl border border-border bg-card px-5 py-4"
           data-testid="practice-highlights-status"
         >
-          {state.kind === 'missing'
-            ? state.reason
-            : state.kind === 'unavailable'
-              ? state.reason
-              : '正在读取已审核发布的实操项目…'}
-        </p>
+          {state.kind === 'loading' ? (
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              正在读取已审核发布的实操项目…
+            </p>
+          ) : (
+            <>
+              <p className="text-sm font-medium">
+                {state.kind === 'missing' ? '这个领域还没有已发布的实操项目' : '实操项目状态取不到'}
+              </p>
+              {/* 引擎给的原因原样上屏，不改写：它知道缺的到底是什么。 */}
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{state.reason}</p>
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                这一区放的是引擎从 GitHub 实时搜索、管理者逐条审核后发布的真实开源项目：
+                每张卡写清操作步骤、做到什么算完成、对口哪几门课，以及仓库的许可证。
+                这里不摆示例卡，也不拿别的领域的项目顶上——凑数的项目学习者做不下去。
+                {state.kind === 'missing'
+                  ? ' 现在可以先按上面的课程墙逐门学，理论部分不依赖这一区。'
+                  : ' 刷新页面可以重试；反复取不到就是实操服务暂时不可用。'}
+              </p>
+            </>
+          )}
+        </div>
       )}
     </>
   );

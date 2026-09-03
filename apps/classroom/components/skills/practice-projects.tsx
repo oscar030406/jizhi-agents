@@ -27,6 +27,17 @@ export interface PracticeProject {
   links: Array<{ label: string; url: string }>;
   alternatives: string[];
   firsthand: boolean;
+  /** 起草时从 GitHub 实拉的事实字段，模型无权改写。许可证要露出来：
+      「无许可证信息」不等于可以随便拿来改，学习者照着做之前有权先知道。 */
+  provenance?: { license?: string; stars?: number; pushed_at?: string };
+}
+
+/** 许可证一行。拉不到就说拉不到，不写「未知」当成一种许可证。 */
+export function licenseNote(project: PracticeProject): string {
+  const license = project.provenance?.license?.trim();
+  if (!license || license === '无许可证信息') return '仓库未标注开源许可证';
+  if (license === 'NOASSERTION') return '许可证未被 GitHub 识别';
+  return `许可证 ${license}`;
 }
 
 const LEVEL_META: Record<PracticeProject['level'], { label: string; cls: string }> = {
@@ -246,6 +257,7 @@ export function PracticeCard({
               {l.label} ↗
             </a>
           ))}
+          <span className="text-muted-foreground">{licenseNote(project)}</span>
           {!project.firsthand && <span className="text-muted-foreground">（一手体验待验证）</span>}
         </p>
       </div>
