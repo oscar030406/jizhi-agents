@@ -408,6 +408,7 @@ export function TutorPanel({ currentSceneId }: { currentSceneId?: string | null 
         <p className="text-xs text-muted-foreground mt-1">需要多智能体引擎在线才能发起导师追问</p>
         <button
           type="button"
+          data-tour="tutor-quiz"
           disabled
           className="mt-3 rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground cursor-not-allowed"
         >
@@ -443,6 +444,7 @@ export function TutorPanel({ currentSceneId }: { currentSceneId?: string | null 
           </p>
           <button
             type="button"
+            data-tour="tutor-quiz"
             disabled={status === 'loading' || !lectureText}
             onClick={handleStart}
             className="w-full rounded-lg border border-border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:opacity-50 transition"

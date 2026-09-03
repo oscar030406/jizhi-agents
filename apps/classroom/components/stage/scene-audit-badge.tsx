@@ -221,6 +221,7 @@ export function SceneAuditBadge({
       <button
         type="button"
         data-testid="scene-audit-badge"
+        data-tour="claim-badge"
         title={`${style.label} · ${audit.totalClaims} 条断言，${audit.flaggedCount} 条被标记`}
         onClick={(e) => {
           e.stopPropagation();

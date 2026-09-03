@@ -67,6 +67,9 @@ import { DomainIntakeTable } from '@/components/admin/domain-intake-table';
 import { MetricBand } from '@/components/admin/metric-band';
 import { SectionAnchor } from '@/components/home/section-anchor';
 import { SiteHeader } from '@/components/site-header';
+import { DemoStrip } from '@/components/tour/demo-strip';
+import { ReplayTourLink } from '@/components/tour/replay-tour-link';
+import { TourAutoStart } from '@/components/tour/tour-auto-start';
 import { cn } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
@@ -172,7 +175,11 @@ export default async function AdminPage() {
           没有顶栏就意味着想切暗色得先退回首页。SiteHeader 是站内其余子页
           共用的那一条。root layout 已在最外层挂了 ThemeProvider 与 I18nProvider，
           服务端组件里渲染这个客户端组件没问题。 */}
-      <SiteHeader maxWidth="max-w-6xl" />
+      <DemoStrip />
+      <SiteHeader maxWidth="max-w-6xl">
+        <ReplayTourLink id="admin" />
+      </SiteHeader>
+      <TourAutoStart id="admin" />
       {/* 纯白基底：`--background` 是 lab(98.3) 暖白，整页垫一层米色底味正是
           「农家」观感的基音（四家参考站实拔全是纯白）。 */}
       <main className="bg-white dark:bg-background">
@@ -227,26 +234,30 @@ export default async function AdminPage() {
                 {
                   href: '/admin/knowledge/runs',
                   icon: History,
+                  tour: 'admin-runs',
                   title: '接入记录',
                   desc: '每次投料的九站流水线直播与留档',
                 },
                 {
                   href: '/admin/generalization',
                   icon: Globe2,
+                  tour: undefined,
                   title: '领域泛化',
                   desc: '跨域重建的指标对比与体检判词',
                 },
                 {
                   href: '/admin/org',
                   icon: Building2,
+                  tour: 'admin-org',
                   title: '机构管理',
                   desc: '邀请码、成员名册、课程指派与库归属',
                 },
               ] as const
-            ).map(({ href, icon: Icon, title, desc }) => (
+            ).map(({ href, icon: Icon, tour, title, desc }) => (
               <Link
                 key={href}
                 href={href}
+                data-tour={tour}
                 className="group flex items-center gap-4 rounded-xl border border-border bg-white p-6 shadow-card transition-colors hover:border-foreground/30 dark:bg-background"
               >
                 <span className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-blue-soft text-blue-deep dark:bg-muted dark:text-foreground">
@@ -266,7 +277,9 @@ export default async function AdminPage() {
 
         {/* 库状态是管理者进来要的第一个数字，排在主操作正下方（工单 N7 目标 2）。 */}
         <Section icon={Boxes} title="已接入语料库">
-          <DomainIntakeSummary intakes={corpora} />
+          <div data-tour="admin-corpora">
+            <DomainIntakeSummary intakes={corpora} />
+          </div>
           <div className="mt-4">
             <Caliber summary="展开明细：每个库的就绪度报告（九栏 + 四道闸）">
               <p>
@@ -299,7 +312,9 @@ export default async function AdminPage() {
         </Section>
 
         <Section icon={Gavel} title="资源审核账单" lead="点任意一行看逐条判词。">
-          <AdminCourseTable courses={courses} coverage={coverage} />
+          <div data-tour="admin-audit-table">
+            <AdminCourseTable courses={courses} coverage={coverage} />
+          </div>
           <Caliber summary="展开口径：四列数字各自的分母">
             <p>
               表按判错数降序。判错（incorrect）与存疑（uncertain）分列——两者口径不同，

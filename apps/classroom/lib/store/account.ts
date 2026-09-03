@@ -31,6 +31,8 @@ export interface AccountInfo {
   displayName: string;
   role: AccountRole;
   createdAt: string;
+  /** 演示账号（服务端按固定用户名判定）：页面顶部挂提示条，敏感操作被 403。 */
+  demo?: boolean;
 }
 
 /** 角色决定登录后落到哪一端。这是两个 C 端之间唯一的桥。 */
@@ -169,7 +171,7 @@ interface AccountState {
     password: string,
     role: AccountRole,
   ) => Promise<{ ok: true } | { ok: false; message: string }>;
-  logout: () => Promise<void>;
+  logout: (redirectTo?: string) => Promise<void>;
   saveProfile: (profile: unknown) => Promise<void>;
 }
 
@@ -232,11 +234,12 @@ export const useAccountStore = create<AccountState>((set, get) => ({
     return { ok: true };
   },
 
-  logout: async () => {
+  logout: async (redirectTo) => {
     await postAuth({ action: 'logout' }).catch(() => undefined);
     // 登出也是换身份：账户的画像别留给下一个用这台机器的人
     adoptServerProfile(null);
-    window.location.reload();
+    if (redirectTo) window.location.assign(redirectTo);
+    else window.location.reload();
   },
 
   saveProfile: async (profile) => {

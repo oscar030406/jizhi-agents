@@ -11,6 +11,9 @@ import {
 import { Pool } from 'pg';
 
 import { validateAppScene, validateAppStage } from '@/lib/document-store/validators';
+import { demoForbidden, isDemoAccount } from '@/lib/accounts/demo';
+import { sessionTokenFromCookieHeader } from '@/lib/accounts/session';
+import { accountForSession } from '@/lib/accounts/store';
 import { authenticatePersistenceRequest } from '@/lib/persistence/server-auth';
 
 export const runtime = 'nodejs';
@@ -222,6 +225,13 @@ export async function handlePersistenceRequest(
   request: Request,
   deps: PersistenceRequestDeps = {},
 ): Promise<Response> {
+  // 演示账号多人共用：删课（DELETE 文档 / 运行时记录）一律拒绝，读写照常。
+  if (request.method === 'DELETE') {
+    const account = await accountForSession(
+      sessionTokenFromCookieHeader(request.headers.get('cookie') ?? undefined),
+    );
+    if (isDemoAccount(account)) return demoForbidden();
+  }
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
     return jsonError(404, 'PERSISTENCE_NOT_CONFIGURED', 'server persistence not configured');

@@ -1,0 +1,98 @@
+/* 引导弹层主题：白卡、靛蓝标题、16–18px 正文、轻阴影，不用渐变。 */
+.driver-popover.jz-tour {
+  width: min(400px, calc(100vw - 32px));
+  max-width: none;
+  padding: 18px 20px 16px;
+  border-radius: 14px;
+  background: #fff;
+  color: #1f2330;
+  box-shadow:
+    0 1px 2px rgba(20, 24, 40, 0.06),
+    0 12px 32px rgba(20, 24, 40, 0.14);
+  font-family: inherit;
+}
+.dark .driver-popover.jz-tour {
+  background: #1c1f27;
+  color: #e6e8ee;
+}
+.jz-tour .jz-tour-agent {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: #6b7080;
+}
+.jz-tour .jz-tour-agent img {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+  object-position: top;
+  background: #f1f2f6;
+}
+.jz-tour .driver-popover-title {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: #4338ca;
+}
+.dark .jz-tour .driver-popover-title {
+  color: #a5b4fc;
+}
+.jz-tour .driver-popover-description {
+  margin-top: 8px;
+  font-size: 16px;
+  line-height: 1.7;
+  color: inherit;
+}
+.jz-tour .jz-tour-hint {
+  display: block;
+  margin-top: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #4338ca;
+}
+.jz-tour .driver-popover-footer {
+  margin-top: 16px;
+  align-items: center;
+}
+.jz-tour .driver-popover-progress-text {
+  font-size: 13px;
+  color: #6b7080;
+}
+.jz-tour .driver-popover-footer button {
+  padding: 7px 14px;
+  border: 1px solid #d5d8e1;
+  border-radius: 8px;
+  background: #fff;
+  color: #1f2330;
+  font-size: 14px;
+  text-shadow: none;
+}
+.jz-tour .driver-popover-footer button:hover {
+  background: #f4f5f8;
+}
+.jz-tour .driver-popover-footer .driver-popover-next-btn {
+  border-color: #4338ca;
+  background: #4338ca;
+  color: #fff;
+}
+.jz-tour .driver-popover-footer .driver-popover-next-btn:hover {
+  background: #3730a3;
+}
+.jz-tour .driver-popover-footer button:disabled {
+  opacity: 0.45;
+}
+.jz-tour .driver-popover-arrow-side-left.driver-popover-arrow {
+  border-left-color: #fff;
+}
+.jz-tour .driver-popover-arrow-side-right.driver-popover-arrow {
+  border-right-color: #fff;
+}
+.jz-tour .driver-popover-arrow-side-top.driver-popover-arrow {
+  border-top-color: #fff;
+}
+.jz-tour .driver-popover-arrow-side-bottom.driver-popover-arrow {
+  border-bottom-color: #fff;
+}

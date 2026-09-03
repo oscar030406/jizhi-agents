@@ -16,6 +16,7 @@ import type { NextRequest } from 'next/server';
 
 import { accountForSession } from '@/lib/accounts/store';
 import { SESSION_COOKIE } from '@/lib/accounts/session';
+import { demoForbidden, isDemoAccount } from '@/lib/accounts/demo';
 import { createOrg, orgViewFor, rotateInviteCode } from '@/lib/accounts/org-store';
 import { API_ERROR_CODES, apiError, apiSuccess } from '@/lib/server/api-response';
 import { createLogger } from '@/lib/logger';
@@ -70,6 +71,7 @@ export async function POST(req: NextRequest) {
     });
   }
   if (body.action === 'rotate') {
+    if (isDemoAccount(account)) return demoForbidden();
     const view = await orgViewFor(account.id);
     if (!view || view.org.memberRole !== 'owner') {
       return apiError(API_ERROR_CODES.UNAUTHORIZED, 403, '只有机构所有者可以轮换邀请码。');

@@ -276,6 +276,7 @@ export function SceneSidebar({
         {/* Scenes List */}
         <div
           data-testid="scene-list"
+          data-tour="scene-list"
           className="flex-1 overflow-y-auto overflow-x-hidden p-2 space-y-2 scrollbar-hide pt-1"
         >
           {scenes.map((scene, index) => {
@@ -293,6 +294,7 @@ export function SceneSidebar({
               <div
                 key={scene.id}
                 data-testid="scene-item"
+                data-tour={scene.type === 'quiz' ? 'quiz-scene' : undefined}
                 role="button"
                 tabIndex={0}
                 aria-current={isActive ? 'true' : undefined}

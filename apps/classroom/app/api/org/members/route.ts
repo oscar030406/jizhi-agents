@@ -8,6 +8,7 @@ import type { NextRequest } from 'next/server';
 
 import { accountForSession, resetPassword, validateCredentials } from '@/lib/accounts/store';
 import { SESSION_COOKIE } from '@/lib/accounts/session';
+import { demoForbidden, isDemoAccount } from '@/lib/accounts/demo';
 import { membersOf, orgForAccount, removeMember } from '@/lib/accounts/org-store';
 import { API_ERROR_CODES, apiError, apiSuccess } from '@/lib/server/api-response';
 import { createLogger } from '@/lib/logger';
@@ -38,6 +39,7 @@ export async function GET() {
 export async function DELETE(req: NextRequest) {
   const gate = await ownerOrg();
   if ('error' in gate) return gate.error;
+  if (isDemoAccount(gate.account)) return demoForbidden();
   const accountId = new URL(req.url).searchParams.get('accountId') ?? '';
   if (!accountId) return apiError(API_ERROR_CODES.MISSING_REQUIRED_FIELD, 400, '缺 accountId。');
   const result = await removeMember(gate.org.id, accountId);
@@ -49,6 +51,7 @@ export async function DELETE(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   const gate = await ownerOrg();
   if ('error' in gate) return gate.error;
+  if (isDemoAccount(gate.account)) return demoForbidden();
   const body = (await req.json().catch(() => ({}))) as { accountId?: string; newPassword?: string };
   const accountId = String(body.accountId ?? '');
   const newPassword = String(body.newPassword ?? '');

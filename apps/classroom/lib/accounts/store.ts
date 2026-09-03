@@ -315,6 +315,20 @@ export async function authenticateAndCreateSession(
   }
 }
 
+/** 按用户名取账号（不含密码哈希）。演示登录用：角色在服务端解析成固定用户名。 */
+export async function accountByUsername(username: string): Promise<Account | null> {
+  if (!hasPostgres()) {
+    const { fileBackend } = await import('./file-store');
+    return (await fileBackend.accountWithHash(username))?.account ?? null;
+  }
+  const pool = await getPool();
+  const row = await pool.query(
+    'SELECT id, username, display_name, role, created_at FROM accounts WHERE lower(username) = lower($1)',
+    [username],
+  );
+  return row.rowCount ? rowToAccount(row.rows[0] as Record<string, unknown>) : null;
+}
+
 export async function createSession(accountId: string): Promise<{ token: string; maxAge: number }> {
   const token = randomBytes(32).toString('hex');
   const maxAge = SESSION_TTL_DAYS * 24 * 3600;

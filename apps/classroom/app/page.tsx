@@ -61,6 +61,8 @@ import { LearnerAccountSwitcher } from '@/components/learner-account-switcher';
 import { OrgBadge } from '@/components/home/org-badge';
 import { AccountMenu } from '@/components/account/account-menu';
 import { PublicLanding } from '@/components/home/public-landing';
+import { DemoStrip } from '@/components/tour/demo-strip';
+import { ReplayTourLink } from '@/components/tour/replay-tour-link';
 import { EmptyState } from '@/components/ui/empty-state';
 import { useAccountStore } from '@/lib/store/account';
 import {
@@ -487,6 +489,7 @@ function HomePage() {
 
   return (
     <div className="min-h-[100dvh] w-full bg-background flex flex-col overflow-x-hidden">
+      <DemoStrip />
       {/* ═══ 顶部导航条：左字标，右原有图标组（原样迁移） ═══ */}
       {/* 顶栏底极浅暖 tint：yellow-soft 渐变叠在半透明底上（色调回暖微调） */}
       <header className="sticky top-0 z-50 w-full border-b border-border/60 bg-background/85 bg-gradient-to-b from-yellow-soft/35 to-yellow-soft/15 backdrop-blur-md">
@@ -562,6 +565,8 @@ function HomePage() {
             </div>
 
             <div className="w-[1px] h-4 bg-border" />
+
+            <ReplayTourLink id="landing" href="/?public=1" />
 
             {/* 账户入口：未启用账户系统时自渲染 null */}
             <AccountMenu />

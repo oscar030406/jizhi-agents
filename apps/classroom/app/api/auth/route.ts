@@ -23,6 +23,7 @@ import {
 } from '@/lib/accounts/store';
 import { SESSION_COOKIE, sessionCookieOptions } from '@/lib/accounts/session';
 import { corpusVisibilityFor } from '@/lib/accounts/org-store';
+import { isDemoAccount } from '@/lib/accounts/demo';
 import { credentialLimiter, trustedRequestSource } from '@/lib/accounts/credential-rate-limit';
 import { corpusOf } from '@/lib/generation/learner-profile';
 import { createLogger } from '@/lib/logger';
@@ -45,7 +46,12 @@ export async function GET(req: NextRequest) {
     const account = await accountForSession(req.cookies.get(SESSION_COOKIE)?.value);
     if (!account) return NextResponse.json({ enabled: true, account: null, capabilities });
     const profile = await profileForAccount(account.id, await readProfile(account.id));
-    return NextResponse.json({ enabled: true, account, profile, capabilities });
+    return NextResponse.json({
+      enabled: true,
+      account: isDemoAccount(account) ? { ...account, demo: true } : account,
+      profile,
+      capabilities,
+    });
   } catch (error) {
     log.error('session lookup failed:', error);
     return NextResponse.json({ error: '会话读取失败' }, { status: 500 });

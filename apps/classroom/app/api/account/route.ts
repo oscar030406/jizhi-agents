@@ -7,6 +7,7 @@ import {
   validateCredentials,
 } from '@/lib/accounts/store';
 import { SESSION_COOKIE, sessionCookieOptions } from '@/lib/accounts/session';
+import { demoForbidden, isDemoAccount } from '@/lib/accounts/demo';
 import { credentialLimiter, trustedRequestSource } from '@/lib/accounts/credential-rate-limit';
 import { createLogger } from '@/lib/logger';
 
@@ -18,6 +19,7 @@ export async function DELETE(req: NextRequest) {
   try {
     const account = await accountForSession(req.cookies.get(SESSION_COOKIE)?.value);
     if (!account) return NextResponse.json({ error: '未登录' }, { status: 401 });
+    if (isDemoAccount(account)) return demoForbidden();
 
     let body: { password?: unknown };
     try {

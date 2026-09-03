@@ -84,7 +84,7 @@ export class CredentialLimiter {
 
   /** 注册在执行密码哈希前消费额度；成功注册也计数，避免换用户名耗尽 scrypt。 */
   async consume(input: {
-    namespace: 'register';
+    namespace: 'register' | 'demo';
     subject: string;
     source: string;
   }): Promise<CredentialAdmissionResult> {
