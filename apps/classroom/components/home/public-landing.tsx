@@ -421,7 +421,7 @@ export function PublicLanding() {
                     submit();
                   }
                 }}
-                placeholder="想学什么？例如：Transformer 注意力机制"
+                placeholder="想学什么？一句话说清要教给谁、教什么"
                 className="min-h-24 resize-none border-0 bg-transparent shadow-none focus-visible:ring-0"
                 aria-label="学习需求"
               />

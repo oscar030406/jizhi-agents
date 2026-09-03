@@ -13,13 +13,10 @@ import {
   Check,
   ChevronDown,
   Clock,
-  ImagePlus,
-  Pencil,
   Search,
   Sun,
   Moon,
   Monitor,
-  ChevronUp,
   X,
   BarChart3,
   Briefcase,
@@ -30,7 +27,6 @@ import Link from 'next/link';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { createLogger } from '@/lib/logger';
 import { InputGroup, InputGroupInput, InputGroupButton } from '@/components/ui/input-group';
-import { Textarea as UITextarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { EngineBridgeBanner } from '@/components/generation/engine-bridge-banner';
 import { useTheme } from '@/lib/hooks/use-theme';
@@ -38,7 +34,7 @@ import { nanoid } from 'nanoid';
 import type { UserRequirements } from '@/lib/types/generation';
 import { useSettingsStore } from '@/lib/store/settings';
 import { hasUsableLLMProvider } from '@/lib/store/settings-validation';
-import { useUserProfileStore, AVATAR_OPTIONS } from '@/lib/store/user-profile';
+import { useUserProfileStore } from '@/lib/store/user-profile';
 import {
   StageListItem,
   listStages,
@@ -59,7 +55,6 @@ import {
   mergeSeedIntoProfile,
 } from '@/lib/generation/profile-from-requirement';
 import { toast } from 'sonner';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useDraftCache } from '@/lib/hooks/use-draft-cache';
 import { SpeechButton } from '@/components/audio/speech-button';
 import { LearnerAccountSwitcher } from '@/components/learner-account-switcher';
@@ -74,6 +69,8 @@ import {
   DEFAULT_LEARNER_PROFILE,
   DOMAINS,
 } from '@/components/generation/learner-profile-popover';
+import { NO_BLUEPRINT, TIER_TEXT } from '@/components/generation/profile-impact-preview';
+import { presentationTier } from '@/lib/generation/learner-profile';
 
 const log = createLogger('Home');
 
@@ -455,6 +452,14 @@ function HomePage() {
     return date.toLocaleDateString();
   };
 
+  /** 造课卡下方的一行画像说明。字段与右侧「学习者画像」卡同源，讲解姿态档走生成时
+   *  真正跑的那个纯函数（`presentationTier`），不是这里另算一套。 */
+  const profileSummary = [
+    learnerProfile.role || '学习者',
+    DOMAINS.find((d) => d.id === learnerProfile.domain)?.label ?? 'AI',
+    TIER_TEXT[presentationTier(NO_BLUEPRINT, learnerProfile)].name,
+  ].join(' · ');
+
   const canGenerate = !!form.requirement.trim() && hasUsableProvider && Boolean(effectiveDomain);
   /** 有最近课时时英雄位是「继续学习」，造课按钮降级 ghost；否则造课卡当英雄位，
    *  其按钮就是全页唯一的实心紫拟物按压 CTA（规格 3.1 第 1/2 条，配方①③④） */
@@ -652,10 +657,11 @@ function HomePage() {
           <section className={cn('overflow-hidden lg:col-span-2', CARD_RECIPE_STATIC)}>
             <div className="h-0.5 w-full bg-primary/60" />
             <EngineBridgeBanner />
-            {/* ── Greeting + Profile ── */}
-            <div className="relative z-20">
-              <GreetingBar />
-            </div>
+            {/* 一行口径。不重复顶栏那句「带出处的课」——同屏两处说同一件事就都不算数；
+                个性化那一半由下面「将按你的画像生成」那行说，这里只说输入与产出。 */}
+            <p className="px-4 pt-4 pb-1 text-sm font-medium text-foreground">
+              一句需求，现做一门课
+            </p>
 
             {/* Textarea */}
             {/* 焦点环：原来写的是 focus:outline-none，键盘 Tab 进来这个页面上最重要的
@@ -665,11 +671,11 @@ function HomePage() {
             <textarea
               ref={textareaRef}
               placeholder={t('upload.requirementPlaceholder')}
-              className="w-full resize-none rounded-lg border-0 bg-transparent px-4 pt-1 pb-2 text-base leading-relaxed placeholder:text-muted-foreground/70 outline-none focus-visible:ring-[3px] focus-visible:ring-ring focus-visible:ring-inset min-h-[140px] max-h-[300px]"
+              className="w-full resize-none rounded-lg border-0 bg-transparent px-4 pt-1 pb-2 text-base leading-relaxed placeholder:text-muted-foreground/70 outline-none focus-visible:ring-[3px] focus-visible:ring-ring focus-visible:ring-inset min-h-[96px] max-h-[300px]"
               value={form.requirement}
               onChange={(e) => updateForm('requirement', e.target.value)}
               onKeyDown={handleKeyDown}
-              rows={4}
+              rows={3}
             />
 
             {/* 示例提示：一键填入 */}
@@ -687,6 +693,11 @@ function HomePage() {
                 ))}
               </div>
             )}
+
+            {/* 需求框里不再问画像：画像由右侧卡片维护，这里只如实说明这次按哪份画像生成 */}
+            <p className="px-4 pb-2 text-xs text-muted-foreground">
+              将按你的画像生成：{profileSummary}
+            </p>
 
             {/* 语音输入 + 发送。flex-wrap 留着：窄屏下发送按钮的文字会把一行顶宽。 */}
             <div className="px-3 pb-3 flex flex-wrap items-end justify-end gap-2">
@@ -978,293 +989,6 @@ function HomePage() {
           )}
         </div>
       </motion.main>
-    </div>
-  );
-}
-
-// ─── Greeting Bar — avatar + "Hi, Name", click to edit in-place ────
-const MAX_AVATAR_SIZE = 5 * 1024 * 1024;
-
-function isCustomAvatar(src: string) {
-  return src.startsWith('data:');
-}
-
-function GreetingBar() {
-  const { t } = useI18n();
-  const avatar = useUserProfileStore((s) => s.avatar);
-  const nickname = useUserProfileStore((s) => s.nickname);
-  const bio = useUserProfileStore((s) => s.bio);
-  const setAvatar = useUserProfileStore((s) => s.setAvatar);
-  const setNickname = useUserProfileStore((s) => s.setNickname);
-  const setBio = useUserProfileStore((s) => s.setBio);
-
-  const [open, setOpen] = useState(false);
-  const [editingName, setEditingName] = useState(false);
-  const [nameDraft, setNameDraft] = useState('');
-  const [avatarPickerOpen, setAvatarPickerOpen] = useState(false);
-  const nameInputRef = useRef<HTMLInputElement>(null);
-  const avatarInputRef = useRef<HTMLInputElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  const displayName = nickname || t('profile.defaultNickname');
-
-  // Click-outside to collapse
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-        setEditingName(false);
-        setAvatarPickerOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [open]);
-
-  const startEditName = () => {
-    setNameDraft(nickname);
-    setEditingName(true);
-    setTimeout(() => nameInputRef.current?.focus(), 50);
-  };
-
-  const commitName = () => {
-    setNickname(nameDraft.trim());
-    setEditingName(false);
-  };
-
-  const handleAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.size > MAX_AVATAR_SIZE) {
-      toast.error(t('profile.fileTooLarge'));
-      return;
-    }
-    if (!file.type.startsWith('image/')) {
-      toast.error(t('profile.invalidFileType'));
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new window.Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        canvas.width = 128;
-        canvas.height = 128;
-        const ctx = canvas.getContext('2d')!;
-        const scale = Math.max(128 / img.width, 128 / img.height);
-        const w = img.width * scale;
-        const h = img.height * scale;
-        ctx.drawImage(img, (128 - w) / 2, (128 - h) / 2, w, h);
-        setAvatar(canvas.toDataURL('image/jpeg', 0.85));
-      };
-      img.src = reader.result as string;
-    };
-    reader.readAsDataURL(file);
-    e.target.value = '';
-  };
-
-  return (
-    <div ref={containerRef} className="relative pl-4 pr-2 pt-3.5 pb-1 w-auto">
-      <input
-        ref={avatarInputRef}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={handleAvatarUpload}
-      />
-
-      {/* ── Collapsed pill (always in flow) ──
-           用 <button> 而不是带 onClick 的 div：这是打开个人资料面板的唯一入口，
-           div 上 Tab 停不住、回车也按不动。 */}
-      {!open && (
-        <button
-          type="button"
-          aria-expanded={false}
-          className="flex items-center gap-2.5 cursor-pointer transition-all duration-200 group rounded-full px-2.5 py-1.5 border border-border/50 text-muted-foreground/70 hover:text-foreground hover:bg-muted/60 active:scale-[0.97]"
-          onClick={() => setOpen(true)}
-        >
-          <div className="shrink-0 relative">
-            <div className="size-8 rounded-full overflow-hidden ring-[1.5px] ring-border/30 group-hover:ring-purple-deep/50 transition-all duration-300">
-              <img src={avatar} alt="" className="size-full object-cover" />
-            </div>
-            <div className="absolute -bottom-0.5 -right-0.5 size-3.5 rounded-full bg-popover border border-border/40 flex items-center justify-center opacity-60 group-hover:opacity-100 transition-opacity">
-              <Pencil className="size-[7px] text-muted-foreground/70" />
-            </div>
-          </div>
-          <div className="flex-1 min-w-0">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="leading-none select-none flex items-center gap-1">
-                  <span className="text-sm font-medium text-foreground/85 group-hover:text-foreground transition-colors">
-                    {t('home.greetingWithName', { name: displayName })}
-                  </span>
-                  <ChevronDown className="size-3 text-muted-foreground/30 group-hover:text-muted-foreground/60 transition-colors shrink-0" />
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" sideOffset={4}>
-                {t('profile.editTooltip')}
-              </TooltipContent>
-            </Tooltip>
-          </div>
-        </button>
-      )}
-
-      {/* ── Expanded panel (absolute, floating) ── */}
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ opacity: 0, y: -4, scale: 0.97 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -4, scale: 0.97 }}
-            transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
-            className="absolute left-4 top-3.5 z-50 w-64"
-          >
-            <div className="rounded-2xl border border-border bg-popover/95 dark:bg-surface-2/95 backdrop-blur-sm shadow-dropdown dark:shadow-none px-2.5 py-2">
-              {/* ── Row: avatar + name ── */}
-              <div
-                className="flex items-center gap-2.5 cursor-pointer transition-all duration-200"
-                onClick={() => {
-                  setOpen(false);
-                  setEditingName(false);
-                  setAvatarPickerOpen(false);
-                }}
-              >
-                {/* Avatar */}
-                <div
-                  className="shrink-0 relative cursor-pointer"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setAvatarPickerOpen(!avatarPickerOpen);
-                  }}
-                >
-                  <div className="size-8 rounded-full overflow-hidden ring-[1.5px] ring-purple-deep/40 transition-all duration-300">
-                    <img src={avatar} alt="" className="size-full object-cover" />
-                  </div>
-                  <motion.div
-                    initial={{ scale: 0 }}
-                    animate={{ scale: 1 }}
-                    className="absolute -bottom-0.5 -right-0.5 size-3.5 rounded-full bg-popover border border-border/60 flex items-center justify-center"
-                  >
-                    <ChevronDown
-                      className={cn(
-                        'size-2 text-muted-foreground/70 transition-transform duration-200',
-                        avatarPickerOpen && 'rotate-180',
-                      )}
-                    />
-                  </motion.div>
-                </div>
-
-                {/* Text */}
-                <div className="flex-1 min-w-0">
-                  {editingName ? (
-                    <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-                      <input
-                        ref={nameInputRef}
-                        value={nameDraft}
-                        onChange={(e) => setNameDraft(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') commitName();
-                          if (e.key === 'Escape') {
-                            setEditingName(false);
-                          }
-                        }}
-                        onBlur={commitName}
-                        maxLength={20}
-                        placeholder={t('profile.defaultNickname')}
-                        className="flex-1 min-w-0 h-6 bg-transparent border-b border-border/80 text-sm font-medium text-foreground outline-none placeholder:text-muted-foreground/40"
-                      />
-                      <button
-                        onClick={commitName}
-                        className="shrink-0 size-5 rounded flex items-center justify-center text-primary hover:bg-purple-soft"
-                      >
-                        <Check className="size-3" />
-                      </button>
-                    </div>
-                  ) : (
-                    <span
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        startEditName();
-                      }}
-                      className="group/name inline-flex items-center gap-1 cursor-pointer"
-                    >
-                      <span className="text-sm font-medium text-foreground/85 group-hover/name:text-foreground transition-colors">
-                        {displayName}
-                      </span>
-                      <Pencil className="size-2.5 text-muted-foreground/30 opacity-0 group-hover/name:opacity-100 transition-opacity" />
-                    </span>
-                  )}
-                </div>
-
-                {/* Collapse arrow */}
-                <motion.div
-                  initial={{ opacity: 0, y: -2 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="shrink-0 size-6 rounded-full flex items-center justify-center hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors"
-                >
-                  <ChevronUp className="size-3.5 text-muted-foreground/50" />
-                </motion.div>
-              </div>
-
-              {/* ── Expandable content ── */}
-              <div className="pt-2" onClick={(e) => e.stopPropagation()}>
-                {/* Avatar picker */}
-                <AnimatePresence>
-                  {avatarPickerOpen && (
-                    <motion.div
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: 'auto', opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      transition={{ duration: 0.15, ease: 'easeInOut' }}
-                      className="overflow-hidden"
-                    >
-                      <div className="p-1 pb-2.5 flex items-center gap-1.5 flex-wrap">
-                        {AVATAR_OPTIONS.map((url) => (
-                          <button
-                            key={url}
-                            onClick={() => setAvatar(url)}
-                            className={cn(
-                              'size-7 rounded-full overflow-hidden bg-muted cursor-pointer transition-all duration-150',
-                              avatar === url
-                                ? 'ring-2 ring-primary ring-offset-0'
-                                : 'hover:ring-1 hover:ring-muted-foreground/30',
-                            )}
-                          >
-                            <img src={url} alt="" className="size-full" />
-                          </button>
-                        ))}
-                        <label
-                          className={cn(
-                            'size-7 rounded-full flex items-center justify-center cursor-pointer transition-all duration-150 border border-dashed',
-                            isCustomAvatar(avatar)
-                              ? 'ring-2 ring-primary ring-offset-0 border-purple-deep/30 bg-purple-soft'
-                              : 'border-muted-foreground/30 text-muted-foreground/50 hover:border-muted-foreground/50',
-                          )}
-                          onClick={() => avatarInputRef.current?.click()}
-                          title={t('profile.uploadAvatar')}
-                        >
-                          <ImagePlus className="size-3" />
-                        </label>
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-
-                {/* Bio */}
-                <UITextarea
-                  value={bio}
-                  onChange={(e) => setBio(e.target.value)}
-                  placeholder={t('profile.bioPlaceholder')}
-                  maxLength={200}
-                  rows={2}
-                  className="resize-none border-border/40 bg-transparent min-h-[72px] !text-sm !leading-relaxed placeholder:!leading-relaxed focus-visible:ring-1 focus-visible:ring-border/60"
-                />
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }

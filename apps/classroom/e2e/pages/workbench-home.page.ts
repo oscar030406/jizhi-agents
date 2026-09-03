@@ -17,7 +17,7 @@ export class WorkbenchHomePage {
   readonly wordmark: Locator;
   /** 需求输入框。工作台上唯一的 textarea。 */
   readonly requirement: Locator;
-  /** 造课按钮。文案走 i18n（zh-CN 是「进入课堂」）。 */
+  /** 造课按钮。文案走 i18n（zh-CN 是「生成这门课」）。 */
   readonly enterButton: Locator;
   /** 学习者画像弹层的触发按钮。按钮上会带一句「这门课照着哪本书讲」的摘要。 */
   readonly profileTrigger: Locator;
@@ -28,7 +28,7 @@ export class WorkbenchHomePage {
     this.page = page;
     this.wordmark = page.locator('header').getByText('集智', { exact: true });
     this.requirement = page.locator('textarea').first();
-    this.enterButton = page.getByRole('button', { name: /进入课堂|enter classroom/i });
+    this.enterButton = page.getByRole('button', { name: /生成这门课|generate this course/i });
     // 不按可见文字定位：按钮上的文字是画像摘要，会随选中的库变化，
     // 拿它当定位器等于用「待断言的内容」去找「承载它的元素」。
     // 也不按 title 定位：那句 title 是给用户看的说明文案，改一版文案测试就断。
