@@ -25,8 +25,8 @@ export function DomainPathNotice({ corpus, caliber }: { corpus: string; caliber?
     >
       <Info className="mt-0.5 size-4 shrink-0" />
       <span>
-        这条路径由机器排出：概念与前置关系取自「{domainLabel(corpus)}」接入时跑的流水线，
-        {caliber ? `口径：${caliber}。` : '边未经人工复核，只作推荐，不拦人。'}
+        「{domainLabel(corpus)}」的排法：
+        {caliber ? `${caliber}。` : '边未经人工复核，只作推荐，不拦人。'}
       </span>
     </div>
   );

@@ -74,9 +74,11 @@ export function PathOrDomainCard({ corpus, className }: { corpus?: string; class
   const current = allConcepts.filter((concept) => concept.status === 'current');
   const preview = (current.length ? current : (stages[0]?.concepts ?? [])).slice(0, 3);
   const counts = state.kind === 'ready' ? state.path.personalization?.counts : undefined;
+  // 引擎对内置主库回的 label 就是库 id（"ai"），给人看要换成注册表里的中文名；
+  // 引擎给了真名（接入库）就用引擎的。domainLabel 查不到时原样回 id，不会变空。
+  const engineLabel = state.kind === 'ready' ? (state.path.label?.trim() ?? '') : '';
   const label =
-    (state.kind === 'ready' ? state.path.label?.trim() : '') ||
-    (effective ? domainLabel(effective) : '');
+    engineLabel && engineLabel !== effective ? engineLabel : effective ? domainLabel(effective) : '';
 
   return (
     <section
@@ -128,7 +130,7 @@ export function PathOrDomainCard({ corpus, className }: { corpus?: string; class
                     key={`${concept.name ?? 'concept'}-${index}`}
                     className="text-sm text-foreground"
                   >
-                    {concept.name ?? '未命名概念'}
+                    {concept.name ? conceptLabel(concept.name) : '未命名概念'}
                   </li>
                 ))}
               </ul>
