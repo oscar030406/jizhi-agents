@@ -344,7 +344,7 @@ export function PublicLanding() {
         <div className="flex items-baseline gap-2">
           <span className="text-lg font-semibold tracking-wide">集智</span>
           <span className="hidden text-xs text-muted-foreground sm:inline">
-            多智能体生成带出处的课
+            一句需求，一门懂专业也懂你的课
           </span>
         </div>
         <nav className="hidden items-center gap-3 text-sm text-muted-foreground md:flex">
@@ -387,21 +387,23 @@ export function PublicLanding() {
               我们不发明知识，只做教材的搬运工
             </span>
           </p>
-          {/* 68px：全幅宽下「生成一整门带出处的课」十个字 680px，max-w-3xl 内一行放下。
+          {/* 68px：全幅宽下最长一行「一句需求，生成一门」九个字 612px，容器内一行放下。
               中文笔画密，不追英文站 88px 的量级，68 是可读与气势的平衡点。 */}
-          {/* 基档 32px：375 宽视口减 padding 剩 ~327px，「生成一整门带出处的课」十字
-              32×10=320 恰好一行；44px 起步会在词中间被硬折。 */}
+          {/* 基档 32px：375 宽视口减 padding 剩 ~327px，最长一行九字 32×9=288 一行放下；
+              44px 起步会在词中间被硬折。换行点定在「一门」之后，两行分别是九字与八字，
+              比按语义断在「一句需求，」之后更省宽——那样第二行十二字，三档字号全要缩。 */}
           {/* 字重 500 + 收字距：Brilliant 76px/w500/-1.4px、NotebookLM 88px/w500 实拔同款；
               600 在 68px 上发闷，500 收字距更接近参考站的「利落」。 */}
           <h1 className="text-[32px] font-medium leading-[1.15] tracking-[-0.02em] sm:text-[56px] lg:text-[68px]">
-            一句需求，
+            一句需求，生成一门
             <br />
-            生成一整门<RoughCircle>带出处</RoughCircle>的课
+            <RoughCircle>懂专业也懂你</RoughCircle>的课
           </h1>
-          {/* 副标：标题只说做什么，这一行说给谁做。访客第一屏看不出对象是机构还是个人，
-              就会按个人订阅工具来读我们。一行讲完，不展开。 */}
+          {/* 副标：标题只说产出，这一行说这门课凭什么同时成立。个性化与专业质量在单模型
+              里是互相拉扯的，我们把它们拆到输入端和输出端两条线上分开管——这是产品的
+              主张，不是功能列表，所以放在首屏第二行。一行讲完，不展开。 */}
           <p className="mt-5 max-w-xl text-base leading-relaxed text-muted-foreground">
-            给学校和企业培训部门用的课程生产线
+            个性化放在输入端，专业质量放在输出端，两件事分开管，不用互相让步
           </p>
 
           {/* 输入框改成「作曲器」形态：框内左下口径小字 + 右下 CTA，

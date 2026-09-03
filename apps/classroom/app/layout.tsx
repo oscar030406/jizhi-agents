@@ -20,9 +20,9 @@ const inter = localFont({
 });
 
 export const metadata: Metadata = {
-  title: '集智 · 多智能体生成带出处的课',
+  title: '集智 · 一句需求，一门懂专业也懂你的课',
   description:
-    '集智——多智能体生成带出处的课。课程内容取自受控教材库，结合学习者画像与前测校准，多智能体协同生成个性化互动课堂。',
+    '面向垂直领域技能培训的多智能体课程生成系统：学情画像决定课程结构，受控知识库与双判官保证专业内容不走样。',
 };
 
 export default function RootLayout({

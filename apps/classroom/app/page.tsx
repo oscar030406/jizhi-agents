@@ -496,7 +496,7 @@ function HomePage() {
               集智
             </span>
             <span className="hidden truncate text-sm tracking-[0.14em] text-muted-foreground md:inline">
-              多智能体生成带出处的课
+              一句需求，一门懂专业也懂你的课
             </span>
           </div>
           <div ref={toolbarRef} className="flex shrink-0 items-center gap-1">
@@ -657,7 +657,7 @@ function HomePage() {
           <section className={cn('overflow-hidden lg:col-span-2', CARD_RECIPE_STATIC)}>
             <div className="h-0.5 w-full bg-primary/60" />
             <EngineBridgeBanner />
-            {/* 一行口径。不重复顶栏那句「带出处的课」——同屏两处说同一件事就都不算数；
+            {/* 一行口径。不重复顶栏那句品牌语——同屏两处说同一件事就都不算数；
                 个性化那一半由下面「将按你的画像生成」那行说，这里只说输入与产出。 */}
             <p className="px-4 pt-4 pb-1 text-sm font-medium text-foreground">
               一句需求，现做一门课
