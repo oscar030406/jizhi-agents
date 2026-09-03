@@ -66,11 +66,12 @@ import { ReplayTourLink } from '@/components/tour/replay-tour-link';
 import { EmptyState } from '@/components/ui/empty-state';
 import { useAccountStore } from '@/lib/store/account';
 import {
-  LearnerProfilePopover,
+  SelfProfilePanel,
   loadLearnerProfile,
   DEFAULT_LEARNER_PROFILE,
-  DOMAINS,
 } from '@/components/generation/learner-profile-popover';
+import { LearnerRail } from '@/components/nav/learner-rail';
+import { domainLabel } from '@/lib/knowledge/domain-labels';
 import { NO_BLUEPRINT, TIER_TEXT } from '@/components/generation/profile-impact-preview';
 import { presentationTier } from '@/lib/generation/learner-profile';
 
@@ -136,6 +137,8 @@ function HomePage() {
    */
   const [learnerProfile, setLearnerProfile] = useState(DEFAULT_LEARNER_PROFILE);
   const [profileReady, setProfileReady] = useState(false);
+  // 画像面板的开合握在首页：造课要用同一份画像，左栏和画像卡上的按钮开的是同一块。
+  const [profileOpen, setProfileOpen] = useState(false);
   // 清单灌注落地时自增——示例词/中文名等读清单的渲染要吃到真值而不是首帧兜底
   const registryVersion = useDomainRegistryVersion();
   useEffect(() => {
@@ -456,9 +459,12 @@ function HomePage() {
 
   /** 造课卡下方的一行画像说明。字段与右侧「学习者画像」卡同源，讲解姿态档走生成时
    *  真正跑的那个纯函数（`presentationTier`），不是这里另算一套。 */
+  // 领域名走 domainLabel（清单 → 兜底表 → 原值）。原先是在四条硬编码里 find，
+  // 找不到就写死「AI」——账户的领域是 smart-manufacturing 时，首页那行明晃晃
+  // 写着「AI」，而课其实是照智能制造的库讲的。
   const profileSummary = [
     learnerProfile.role || '学习者',
-    DOMAINS.find((d) => d.id === learnerProfile.domain)?.label ?? 'AI',
+    domainLabel(learnerProfile.domain),
     TIER_TEXT[presentationTier(NO_BLUEPRINT, learnerProfile)].name,
   ].join(' · ');
 
@@ -490,510 +496,528 @@ function HomePage() {
   return (
     <div className="min-h-[100dvh] w-full bg-background flex flex-col overflow-x-hidden">
       <DemoStrip />
-      {/* ═══ 顶部导航条：左字标，右原有图标组（原样迁移） ═══ */}
-      {/* 顶栏底极浅暖 tint：yellow-soft 渐变叠在半透明底上（色调回暖微调） */}
-      <header className="sticky top-0 z-50 w-full border-b border-border/60 bg-background/85 bg-gradient-to-b from-yellow-soft/35 to-yellow-soft/15 backdrop-blur-md">
-        <div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between px-4 md:px-6">
-          <div className="flex min-w-0 items-baseline gap-3">
-            <span className="font-serif text-xl font-semibold tracking-[0.12em] text-foreground">
-              集智
-            </span>
-            <span className="hidden truncate text-sm tracking-[0.14em] text-muted-foreground md:inline">
-              一句需求，一门懂专业也懂你的课
-            </span>
-          </div>
-          <div ref={toolbarRef} className="flex shrink-0 items-center gap-1">
-            {/* Theme Selector */}
-            <div className="relative">
-              <button
-                onClick={() => {
-                  setThemeOpen(!themeOpen);
-                }}
-                aria-label="切换主题"
-                aria-haspopup="menu"
-                aria-expanded={themeOpen}
-                title="切换主题"
-                className="p-2 rounded-full text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
-              >
-                {theme === 'light' && <Sun className="w-4 h-4" />}
-                {theme === 'dark' && <Moon className="w-4 h-4" />}
-                {theme === 'system' && <Monitor className="w-4 h-4" />}
-              </button>
-              {themeOpen && (
-                <div className="absolute top-full mt-2 right-0 bg-popover dark:bg-surface-2 border border-border rounded-lg shadow-dropdown dark:shadow-none overflow-hidden z-50 min-w-[140px]">
+      {/* 左功能栏与正文并排。演示条留在最上面一条通栏，不进这一行。 */}
+      <div className="flex min-h-0 flex-1">
+        <LearnerRail onOpenProfile={() => setProfileOpen(true)} />
+        <div className="flex min-w-0 flex-1 flex-col">
+          {/* ═══ 顶部导航条：左字标，右原有图标组（原样迁移） ═══ */}
+          {/* 顶栏底极浅暖 tint：yellow-soft 渐变叠在半透明底上（色调回暖微调） */}
+          <header className="sticky top-0 z-50 w-full border-b border-border/60 bg-background/85 bg-gradient-to-b from-yellow-soft/35 to-yellow-soft/15 backdrop-blur-md">
+            <div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between px-4 md:px-6">
+              <div className="flex min-w-0 items-baseline gap-3">
+                <span className="font-serif text-xl font-semibold tracking-[0.12em] text-foreground">
+                  集智
+                </span>
+                <span className="hidden truncate text-sm tracking-[0.14em] text-muted-foreground md:inline">
+                  一句需求，一门懂专业也懂你的课
+                </span>
+              </div>
+              <div ref={toolbarRef} className="flex shrink-0 items-center gap-1">
+                {/* Theme Selector */}
+                <div className="relative">
                   <button
                     onClick={() => {
-                      setTheme('light');
-                      setThemeOpen(false);
+                      setThemeOpen(!themeOpen);
                     }}
-                    className={cn(
-                      'w-full px-4 py-2 text-left text-sm hover:bg-accent transition-colors flex items-center gap-2',
-                      theme === 'light' && 'bg-secondary text-primary',
-                    )}
+                    aria-label="切换主题"
+                    aria-haspopup="menu"
+                    aria-expanded={themeOpen}
+                    title="切换主题"
+                    className="p-2 rounded-full text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
                   >
-                    <Sun className="w-4 h-4" />
-                    {t('settings.themeOptions.light')}
+                    {theme === 'light' && <Sun className="w-4 h-4" />}
+                    {theme === 'dark' && <Moon className="w-4 h-4" />}
+                    {theme === 'system' && <Monitor className="w-4 h-4" />}
                   </button>
-                  <button
-                    onClick={() => {
-                      setTheme('dark');
-                      setThemeOpen(false);
-                    }}
-                    className={cn(
-                      'w-full px-4 py-2 text-left text-sm hover:bg-accent transition-colors flex items-center gap-2',
-                      theme === 'dark' && 'bg-secondary text-primary',
-                    )}
-                  >
-                    <Moon className="w-4 h-4" />
-                    {t('settings.themeOptions.dark')}
-                  </button>
-                  <button
-                    onClick={() => {
-                      setTheme('system');
-                      setThemeOpen(false);
-                    }}
-                    className={cn(
-                      'w-full px-4 py-2 text-left text-sm hover:bg-accent transition-colors flex items-center gap-2',
-                      theme === 'system' && 'bg-secondary text-primary',
-                    )}
-                  >
-                    <Monitor className="w-4 h-4" />
-                    {t('settings.themeOptions.system')}
-                  </button>
+                  {themeOpen && (
+                    <div className="absolute top-full mt-2 right-0 bg-popover dark:bg-surface-2 border border-border rounded-lg shadow-dropdown dark:shadow-none overflow-hidden z-50 min-w-[140px]">
+                      <button
+                        onClick={() => {
+                          setTheme('light');
+                          setThemeOpen(false);
+                        }}
+                        className={cn(
+                          'w-full px-4 py-2 text-left text-sm hover:bg-accent transition-colors flex items-center gap-2',
+                          theme === 'light' && 'bg-secondary text-primary',
+                        )}
+                      >
+                        <Sun className="w-4 h-4" />
+                        {t('settings.themeOptions.light')}
+                      </button>
+                      <button
+                        onClick={() => {
+                          setTheme('dark');
+                          setThemeOpen(false);
+                        }}
+                        className={cn(
+                          'w-full px-4 py-2 text-left text-sm hover:bg-accent transition-colors flex items-center gap-2',
+                          theme === 'dark' && 'bg-secondary text-primary',
+                        )}
+                      >
+                        <Moon className="w-4 h-4" />
+                        {t('settings.themeOptions.dark')}
+                      </button>
+                      <button
+                        onClick={() => {
+                          setTheme('system');
+                          setThemeOpen(false);
+                        }}
+                        className={cn(
+                          'w-full px-4 py-2 text-left text-sm hover:bg-accent transition-colors flex items-center gap-2',
+                          theme === 'system' && 'bg-secondary text-primary',
+                        )}
+                      >
+                        <Monitor className="w-4 h-4" />
+                        {t('settings.themeOptions.system')}
+                      </button>
+                    </div>
+                  )}
                 </div>
-              )}
+
+                <div className="w-[1px] h-4 bg-border" />
+
+                <ReplayTourLink id="landing" href="/?public=1" />
+
+                {/* 账户入口：未启用账户系统时自渲染 null */}
+                <AccountMenu />
+
+                {/* 岗位技能地图（企业内训 / 转岗培训入口） */}
+                <Link
+                  href="/skills"
+                  title="岗位技能地图 · 企业内训与转岗培训"
+                  className="p-2 rounded-full text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                >
+                  <Briefcase className="w-4 h-4" />
+                </Link>
+
+                {/* 个人学情与资源匹配度报告 */}
+                <Link
+                  href="/report"
+                  title="个人学情与资源匹配度报告"
+                  className="p-2 rounded-full text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                >
+                  <BarChart3 className="w-4 h-4" />
+                </Link>
+
+                {/* 数据与隐私说明 */}
+                <Link
+                  href="/privacy"
+                  title="数据与隐私"
+                  className="p-2 rounded-full text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                >
+                  <ShieldCheck className="w-4 h-4" />
+                </Link>
+              </div>
             </div>
+          </header>
 
-            <div className="w-[1px] h-4 bg-border" />
-
-            <ReplayTourLink id="landing" href="/?public=1" />
-
-            {/* 账户入口：未启用账户系统时自渲染 null */}
-            <AccountMenu />
-
-            {/* 岗位技能地图（企业内训 / 转岗培训入口） */}
-            <Link
-              href="/skills"
-              title="岗位技能地图 · 企业内训与转岗培训"
-              className="p-2 rounded-full text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
-            >
-              <Briefcase className="w-4 h-4" />
-            </Link>
-
-            {/* 个人学情与资源匹配度报告 */}
-            <Link
-              href="/report"
-              title="个人学情与资源匹配度报告"
-              className="p-2 rounded-full text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
-            >
-              <BarChart3 className="w-4 h-4" />
-            </Link>
-
-            {/* 数据与隐私说明 */}
-            <Link
-              href="/privacy"
-              title="数据与隐私"
-              className="p-2 rounded-full text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
-            >
-              <ShieldCheck className="w-4 h-4" />
-            </Link>
-          </div>
-        </div>
-      </header>
-
-      {/* ═══ 工作台主体：卡片网格 ═══ */}
-      <motion.main
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4, ease: 'easeOut' }}
-        className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 md:px-6 md:py-8"
-      >
-        {/* 窄屏必须显式写 grid-cols-1：不写时隐式列是 auto，轨道被最宽子项的
+          {/* ═══ 工作台主体：卡片网格 ═══ */}
+          <motion.main
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4, ease: 'easeOut' }}
+            className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 md:px-6 md:py-8"
+          >
+            {/* 窄屏必须显式写 grid-cols-1：不写时隐式列是 auto，轨道被最宽子项的
             min-content 撑到 355px（实测 375 视口下容器只有 328px），卡片右边被
             根节点的 overflow-x-hidden 静默切掉。grid-cols-1 = minmax(0,1fr) 封住上界。 */}
-        <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-3">
-          {/* ══ 首屏三件：继续学习 / 我的路径 / 我的学情 ══
+            <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-3">
+              {/* ══ 首屏三件：继续学习 / 我的路径 / 我的学情 ══
                登录后第一眼要能回答「我学到哪、接下来学什么、我哪儿弱」，
                造课入口与最近课程排在其后。 */}
 
-          {/* ── ⓪ 「继续上次」英雄卡：打开即知道下一步；无最近课时由造课卡当英雄位（规格 3.1 第 1 条） ── */}
-          {domainContextState.kind === 'loading' && (
-            <section className="lg:col-span-3 rounded-xl border border-border bg-card px-5 py-4 text-sm text-muted-foreground">
-              正在确认当前账户的课程指派与学习领域…
-            </section>
-          )}
-          {domainContextState.kind === 'error' && (
-            <div className="lg:col-span-3">
-              <EmptyState title="当前学习领域暂时无法确认" hint={domainContextState.reason} />
-            </div>
-          )}
-          {domainContextState.kind === 'ready' && !domainContextState.context.domain && (
-            <div className="lg:col-span-3">
-              <EmptyState
-                title={
-                  domainContextState.context.assignment
-                    ? '机构指派课程的领域尚未确认'
-                    : '当前学习领域尚未确认'
-                }
-                hint={`${domainContextState.context.reason ?? '当前没有可用的领域信息。'} 首页不会改用旧画像或其它领域内容。`}
-              />
-            </div>
-          )}
-          {effectiveDomain && continueClassroom && (
-            <ContinueHeroCard
-              classroom={continueClassroom}
-              slide={thumbnails[continueClassroom.id]}
-              progress={progressMap[continueClassroom.id]}
-              formatDate={formatDate}
-            />
-          )}
+              {/* ── ⓪ 「继续上次」英雄卡：打开即知道下一步；无最近课时由造课卡当英雄位（规格 3.1 第 1 条） ── */}
+              {domainContextState.kind === 'loading' && (
+                <section className="lg:col-span-3 rounded-xl border border-border bg-card px-5 py-4 text-sm text-muted-foreground">
+                  正在确认当前账户的课程指派与学习领域…
+                </section>
+              )}
+              {domainContextState.kind === 'error' && (
+                <div className="lg:col-span-3">
+                  <EmptyState title="当前学习领域暂时无法确认" hint={domainContextState.reason} />
+                </div>
+              )}
+              {domainContextState.kind === 'ready' && !domainContextState.context.domain && (
+                <div className="lg:col-span-3">
+                  <EmptyState
+                    title={
+                      domainContextState.context.assignment
+                        ? '机构指派课程的领域尚未确认'
+                        : '当前学习领域尚未确认'
+                    }
+                    hint={`${domainContextState.context.reason ?? '当前没有可用的领域信息。'} 首页不会改用旧画像或其它领域内容。`}
+                  />
+                </div>
+              )}
+              {effectiveDomain && continueClassroom && (
+                <ContinueHeroCard
+                  classroom={continueClassroom}
+                  slide={thumbnails[continueClassroom.id]}
+                  progress={progressMap[continueClassroom.id]}
+                  formatDate={formatDate}
+                />
+              )}
 
-          {/* ── ⓪b 我的学习路径（AI 域）或当前领域课程卡（非 AI 库，域工作区最小实现） ── */}
-          {effectiveDomain && (
-            <PathOrDomainCard corpus={effectiveDomain} className="lg:col-span-2" />
-          )}
+              {/* ── ⓪b 我的学习路径（AI 域）或当前领域课程卡（非 AI 库，域工作区最小实现） ── */}
+              {effectiveDomain && (
+                <PathOrDomainCard corpus={effectiveDomain} className="lg:col-span-2" />
+              )}
 
-          {/* ── ⓪c 我的学情（只读有效领域对应的分域掌握度） ── */}
-          {effectiveDomain && (
-            <MasterySummaryCard profile={learnerProfile} effectiveDomain={effectiveDomain} />
-          )}
+              {/* ── ⓪c 我的学情（只读有效领域对应的分域掌握度） ── */}
+              {effectiveDomain && (
+                <MasterySummaryCard profile={learnerProfile} effectiveDomain={effectiveDomain} />
+              )}
 
-          {/* ── ① 造课卡 ── */}
-          <section className={cn('overflow-hidden lg:col-span-2', CARD_RECIPE_STATIC)}>
-            <div className="h-0.5 w-full bg-primary/60" />
-            <EngineBridgeBanner />
-            {/* 一行口径。不重复顶栏那句品牌语——同屏两处说同一件事就都不算数；
+              {/* ── ① 造课卡 ── */}
+              <section className={cn('overflow-hidden lg:col-span-2', CARD_RECIPE_STATIC)}>
+                <div className="h-0.5 w-full bg-primary/60" />
+                <EngineBridgeBanner />
+                {/* 一行口径。不重复顶栏那句品牌语——同屏两处说同一件事就都不算数；
                 个性化那一半由下面「将按你的画像生成」那行说，这里只说输入与产出。 */}
-            <p className="px-4 pt-4 pb-1 text-sm font-medium text-foreground">
-              一句需求，现做一门课
-            </p>
+                <p className="px-4 pt-4 pb-1 text-sm font-medium text-foreground">
+                  一句需求，现做一门课
+                </p>
 
-            {/* Textarea */}
-            {/* 焦点环：原来写的是 focus:outline-none，键盘 Tab 进来这个页面上最重要的
+                {/* Textarea */}
+                {/* 焦点环：原来写的是 focus:outline-none，键盘 Tab 进来这个页面上最重要的
                 输入框没有任何可见反馈（实测四组合下它是全页唯一无焦点指示的控件）。
                 环走站内既有配方（components/ui/button.tsx 的 ring-ring + ring-[3px]），
                 内偏移 -3px 是因为卡片 overflow-hidden 会把外扩的环切掉。 */}
-            <textarea
-              ref={textareaRef}
-              placeholder={t('upload.requirementPlaceholder')}
-              className="w-full resize-none rounded-lg border-0 bg-transparent px-4 pt-1 pb-2 text-base leading-relaxed placeholder:text-muted-foreground/70 outline-none focus-visible:ring-[3px] focus-visible:ring-ring focus-visible:ring-inset min-h-[96px] max-h-[300px]"
-              value={form.requirement}
-              onChange={(e) => updateForm('requirement', e.target.value)}
-              onKeyDown={handleKeyDown}
-              rows={3}
-            />
+                <textarea
+                  ref={textareaRef}
+                  placeholder={t('upload.requirementPlaceholder')}
+                  className="w-full resize-none rounded-lg border-0 bg-transparent px-4 pt-1 pb-2 text-base leading-relaxed placeholder:text-muted-foreground/70 outline-none focus-visible:ring-[3px] focus-visible:ring-ring focus-visible:ring-inset min-h-[96px] max-h-[300px]"
+                  value={form.requirement}
+                  onChange={(e) => updateForm('requirement', e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  rows={3}
+                />
 
-            {/* 示例提示：一键填入 */}
-            {!form.requirement.trim() && (
-              <div className="flex flex-wrap gap-1.5 px-4 pb-2">
-                {examplePrompts.map((p) => (
-                  <button
-                    key={p}
-                    type="button"
-                    onClick={() => updateForm('requirement', p)}
-                    className="rounded-full border border-border/60 bg-muted/40 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                  >
-                    {p}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* 需求框里不再问画像：画像由右侧卡片维护，这里只如实说明这次按哪份画像生成 */}
-            <p className="px-4 pb-2 text-xs text-muted-foreground">
-              将按你的画像生成：{profileSummary}
-            </p>
-
-            {/* 语音输入 + 发送。flex-wrap 留着：窄屏下发送按钮的文字会把一行顶宽。 */}
-            <div className="px-3 pb-3 flex flex-wrap items-end justify-end gap-2">
-              {/* Voice input */}
-              <SpeechButton
-                size="md"
-                onTranscription={(text) => {
-                  setForm((prev) => {
-                    const next = prev.requirement + (prev.requirement ? ' ' : '') + text;
-                    updateRequirementCache(next);
-                    return { ...prev, requirement: next };
-                  });
-                }}
-              />
-
-              {/* Send button */}
-              <button
-                onClick={handleGenerate}
-                disabled={!canGenerate}
-                className={cn(
-                  'shrink-0 h-8 flex items-center justify-center gap-1.5 px-3',
-                  // 停用态原来是 muted-foreground/40，实测在 bg-muted 上只有 1.77:1
-                  // （暗色 2.09:1），字面上看不见。停用文字不受 1.4.3 约束，但也不该
-                  // 消失——/70 实测到 3.4:1 左右，既读得出又仍然明显是停用。
-                  !canGenerate
-                    ? 'rounded-lg bg-muted text-muted-foreground/70 cursor-not-allowed transition-colors'
-                    : heroIsCourse
-                      ? 'rounded-lg border border-border bg-transparent text-foreground hover:bg-accent cursor-pointer transition-colors'
-                      : cn('cursor-pointer', HERO_CTA_RECIPE),
+                {/* 示例提示：一键填入 */}
+                {!form.requirement.trim() && (
+                  <div className="flex flex-wrap gap-1.5 px-4 pb-2">
+                    {examplePrompts.map((p) => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => updateForm('requirement', p)}
+                        className="rounded-full border border-border/60 bg-muted/40 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      >
+                        {p}
+                      </button>
+                    ))}
+                  </div>
                 )}
-              >
-                <span className="text-sm font-medium">{t('toolbar.enterClassroom')}</span>
-                <ArrowUp className="size-3.5" />
-              </button>
-            </div>
 
-            {/* ── Error ── */}
-            <AnimatePresence>
-              {error && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="mx-4 mb-3 p-3 bg-destructive/10 border border-destructive/20 rounded-lg"
-                >
-                  <p className="text-sm text-destructive">{error}</p>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </section>
-
-          {/* ── ② 画像卡 + ④ 功能入口卡 ── */}
-          <div className="flex flex-col gap-5">
-            <section
-              className={cn(
-                // 卡头 soft tint 带（任意属性写法，避开 tailwind-merge 的 bg-* 冲突判定）
-                'overflow-hidden [background-image:linear-gradient(to_bottom,color-mix(in_oklab,var(--green-soft)_45%,transparent),transparent_40%)]',
-                CARD_RECIPE_STATIC,
-              )}
-            >
-              <div className="h-0.5 w-full bg-green-deep/50" />
-              <div className="space-y-3 p-5">
-                <div className="flex items-center justify-between">
-                  <p className="text-lg font-medium">学习者画像</p>
-                  {Object.keys(learnerProfile.pretestCalibrated ?? {}).length > 0 && (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-green-soft px-2 py-0.5 text-xs font-medium text-green-deep">
-                      <Check className="size-3" />
-                      前测已校准
-                    </span>
-                  )}
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  <span className="rounded-full bg-green-soft px-2 py-0.5 text-xs text-green-deep">
-                    {learnerProfile.role || '学习者'}
-                  </span>
-                  <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                    {DOMAINS.find((d) => d.id === learnerProfile.domain)?.label ?? 'AI'}
-                  </span>
-                  <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                    Agent Lv{learnerProfile.agent_level}
-                  </span>
-                  <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                    RAG Lv{learnerProfile.rag_level}
-                  </span>
-                  <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                    工程 Lv{learnerProfile.engineering_level}
-                  </span>
-                </div>
-                {/* 复用现有画像弹窗：触发按钮即「完善画像/做校准」 */}
-                <LearnerProfilePopover profile={learnerProfile} onChange={setLearnerProfile} />
-                {/* 学习者档案切换（账户 A 档）：learner-key 分区 + 画像快照隔离 */}
-                <LearnerAccountSwitcher />
-                <p className="text-sm leading-relaxed text-muted-foreground">
-                  学情诊断 Agent 据此计算难度档、讲解深度、类比领域与测验难度带
+                {/* 需求框里不再问画像：画像由右侧卡片维护，这里只如实说明这次按哪份画像生成 */}
+                <p className="px-4 pb-2 text-xs text-muted-foreground">
+                  将按你的画像生成：{profileSummary}
                 </p>
-                {/* 机构归属：入组后可见本机构专属知识库（域清单按机构过滤） */}
-                <OrgBadge />
-              </div>
-            </section>
 
-            {FEATURE_LINKS.map((f) => (
-              <Link
-                key={f.href}
-                href={f.href}
-                className={cn('group overflow-hidden', CARD_RECIPE, f.tint)}
-              >
-                <div className={cn('h-1 w-full', f.strip)} />
-                <div className="flex items-center gap-3 p-5">
-                  <span
+                {/* 语音输入 + 发送。flex-wrap 留着：窄屏下发送按钮的文字会把一行顶宽。 */}
+                <div className="px-3 pb-3 flex flex-wrap items-end justify-end gap-2">
+                  {/* Voice input */}
+                  <SpeechButton
+                    size="md"
+                    onTranscription={(text) => {
+                      setForm((prev) => {
+                        const next = prev.requirement + (prev.requirement ? ' ' : '') + text;
+                        updateRequirementCache(next);
+                        return { ...prev, requirement: next };
+                      });
+                    }}
+                  />
+
+                  {/* Send button */}
+                  <button
+                    onClick={handleGenerate}
+                    disabled={!canGenerate}
                     className={cn(
-                      'flex size-9 shrink-0 items-center justify-center rounded-xl',
-                      f.chip,
+                      'shrink-0 h-8 flex items-center justify-center gap-1.5 px-3',
+                      // 停用态原来是 muted-foreground/40，实测在 bg-muted 上只有 1.77:1
+                      // （暗色 2.09:1），字面上看不见。停用文字不受 1.4.3 约束，但也不该
+                      // 消失——/70 实测到 3.4:1 左右，既读得出又仍然明显是停用。
+                      !canGenerate
+                        ? 'rounded-lg bg-muted text-muted-foreground/70 cursor-not-allowed transition-colors'
+                        : heroIsCourse
+                          ? 'rounded-lg border border-border bg-transparent text-foreground hover:bg-accent cursor-pointer transition-colors'
+                          : cn('cursor-pointer', HERO_CTA_RECIPE),
                     )}
                   >
-                    <f.icon className="size-4" />
-                  </span>
-                  <div className="min-w-0">
-                    <p className="text-base font-medium text-foreground">{f.label}</p>
-                    <p className="truncate text-sm text-muted-foreground">{f.desc}</p>
-                  </div>
+                    <span className="text-sm font-medium">{t('toolbar.enterClassroom')}</span>
+                    <ArrowUp className="size-3.5" />
+                  </button>
                 </div>
-              </Link>
-            ))}
-          </div>
 
-          {/* ── ③ 最近学习卡（原折叠列表原样迁入） ── */}
-          {domainScoped.length > 0 && (
-            <section className={cn('overflow-hidden lg:col-span-3', CARD_RECIPE_STATIC)}>
-              <div className="h-0.5 w-full bg-blue-deep/40" />
-              <div className="flex w-full flex-col px-5 pb-4 pt-1">
-                {/* Trigger — divider-line with centered text */}
-                <div className="group w-full flex items-center gap-4 py-2">
-                  <div className="flex-1 h-px bg-border/40 group-hover:bg-border/70 transition-colors" />
-                  {/* 这一行原来整体压着 muted-foreground/60（实测 2.57:1），里面的搜索图标
+                {/* ── Error ── */}
+                <AnimatePresence>
+                  {error && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={{ opacity: 0, height: 0 }}
+                      className="mx-4 mb-3 p-3 bg-destructive/10 border border-destructive/20 rounded-lg"
+                    >
+                      <p className="text-sm text-destructive">{error}</p>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </section>
+
+              {/* ── ② 画像卡 + ④ 功能入口卡 ── */}
+              <div className="flex flex-col gap-5">
+                <section
+                  className={cn(
+                    // 卡头 soft tint 带（任意属性写法，避开 tailwind-merge 的 bg-* 冲突判定）
+                    'overflow-hidden [background-image:linear-gradient(to_bottom,color-mix(in_oklab,var(--green-soft)_45%,transparent),transparent_40%)]',
+                    CARD_RECIPE_STATIC,
+                  )}
+                >
+                  <div className="h-0.5 w-full bg-green-deep/50" />
+                  <div className="space-y-3 p-5">
+                    <div className="flex items-center justify-between">
+                      <p className="text-lg font-medium">学习者画像</p>
+                      {Object.keys(learnerProfile.pretestCalibrated ?? {}).length > 0 && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-green-soft px-2 py-0.5 text-xs font-medium text-green-deep">
+                          <Check className="size-3" />
+                          前测已校准
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      <span className="rounded-full bg-green-soft px-2 py-0.5 text-xs text-green-deep">
+                        {learnerProfile.role || '学习者'}
+                      </span>
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                        {domainLabel(learnerProfile.domain)}
+                      </span>
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                        Agent Lv{learnerProfile.agent_level}
+                      </span>
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                        RAG Lv{learnerProfile.rag_level}
+                      </span>
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                        工程 Lv{learnerProfile.engineering_level}
+                      </span>
+                    </div>
+                    {/* 自画像面板：这个按钮和左栏「我的画像」开的是同一块面板 */}
+                    <SelfProfilePanel
+                      profile={learnerProfile}
+                      onChange={setLearnerProfile}
+                      open={profileOpen}
+                      onOpenChange={setProfileOpen}
+                    />
+                    {/* 学习者档案切换（账户 A 档）：learner-key 分区 + 画像快照隔离 */}
+                    <LearnerAccountSwitcher />
+                    <p className="text-sm leading-relaxed text-muted-foreground">
+                      学情诊断 Agent 据此计算难度档、讲解深度、类比领域与测验难度带
+                    </p>
+                    {/* 机构归属：入组后可见本机构专属知识库（域清单按机构过滤） */}
+                    <OrgBadge />
+                  </div>
+                </section>
+
+                {FEATURE_LINKS.map((f) => (
+                  <Link
+                    key={f.href}
+                    href={f.href}
+                    className={cn('group overflow-hidden', CARD_RECIPE, f.tint)}
+                  >
+                    <div className={cn('h-1 w-full', f.strip)} />
+                    <div className="flex items-center gap-3 p-5">
+                      <span
+                        className={cn(
+                          'flex size-9 shrink-0 items-center justify-center rounded-xl',
+                          f.chip,
+                        )}
+                      >
+                        <f.icon className="size-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-base font-medium text-foreground">{f.label}</p>
+                        <p className="truncate text-sm text-muted-foreground">{f.desc}</p>
+                      </div>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+
+              {/* ── ③ 最近学习卡（原折叠列表原样迁入） ── */}
+              {domainScoped.length > 0 && (
+                <section
+                  id="my-courses"
+                  className={cn('scroll-mt-16 overflow-hidden lg:col-span-3', CARD_RECIPE_STATIC)}
+                >
+                  <div className="h-0.5 w-full bg-blue-deep/40" />
+                  <div className="flex w-full flex-col px-5 pb-4 pt-1">
+                    {/* Trigger — divider-line with centered text */}
+                    <div className="group w-full flex items-center gap-4 py-2">
+                      <div className="flex-1 h-px bg-border/40 group-hover:bg-border/70 transition-colors" />
+                      {/* 这一行原来整体压着 muted-foreground/60（实测 2.57:1），里面的搜索图标
                 /50、导入按钮 /35（1.67:1）更淡。它们全是可点的控件，不是装饰，
                 按 1.4.3/1.4.11 应当读得清——去掉 alpha 折扣，层次改由字号承担。 */}
-                  <div className="shrink-0 flex items-center gap-3 text-sm text-muted-foreground select-none">
-                    <button
-                      onClick={() => persistRecentOpen(!recentOpen)}
-                      className="flex items-center gap-2 rounded-md py-1 transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring focus-visible:outline-none cursor-pointer"
-                    >
-                      <Clock className="size-3.5" />
-                      {t('classroom.recentClassrooms')}
-                      <span className="text-xs tabular-nums opacity-60">{domainScoped.length}</span>
-                      <motion.div
-                        animate={{ rotate: recentOpen ? 180 : 0 }}
-                        transition={{ duration: 0.3, ease: 'easeInOut' }}
-                      >
-                        <ChevronDown className="size-3.5" />
-                      </motion.div>
-                    </button>
-
-                    {/* Search toggle — icon that expands into an input in place */}
-                    <AnimatePresence initial={false}>
-                      {!searchOpen ? (
-                        <motion.button
-                          key="search-icon"
-                          ref={searchButtonRef}
-                          type="button"
-                          aria-label={t('classroom.searchAriaLabel')}
-                          onClick={() => {
-                            setSearchOpen(true);
-                            if (!recentOpen) persistRecentOpen(true);
-                            requestAnimationFrame(() => searchInputRef.current?.focus());
-                          }}
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1 }}
-                          exit={{ opacity: 0 }}
-                          transition={{ duration: 0.12, ease: 'easeOut' }}
-                          className="flex items-center justify-center size-6 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors cursor-pointer"
+                      <div className="shrink-0 flex items-center gap-3 text-sm text-muted-foreground select-none">
+                        <button
+                          onClick={() => persistRecentOpen(!recentOpen)}
+                          className="flex items-center gap-2 rounded-md py-1 transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring focus-visible:outline-none cursor-pointer"
                         >
-                          <Search className="size-3.5" />
-                        </motion.button>
-                      ) : (
-                        <motion.div
-                          key="search-input"
-                          initial={{ opacity: 0, width: 0 }}
-                          animate={{ opacity: 1, width: 200 }}
-                          exit={{ opacity: 0, width: 0 }}
-                          transition={{ duration: 0.18, ease: [0.25, 0.1, 0.25, 1] }}
-                          className="overflow-hidden"
-                        >
-                          <InputGroup
-                            className={cn(
-                              'h-7 text-sm rounded-full bg-muted/40 border-transparent shadow-none',
-                              'transition-colors',
-                              'hover:bg-muted/60',
-                              'has-[[data-slot=input-group-control]:focus-visible]:bg-muted/60',
-                              'has-[[data-slot=input-group-control]:focus-visible]:border-transparent',
-                              'has-[[data-slot=input-group-control]:focus-visible]:ring-0',
-                            )}
+                          <Clock className="size-3.5" />
+                          {t('classroom.recentClassrooms')}
+                          <span className="text-xs tabular-nums opacity-60">
+                            {domainScoped.length}
+                          </span>
+                          <motion.div
+                            animate={{ rotate: recentOpen ? 180 : 0 }}
+                            transition={{ duration: 0.3, ease: 'easeInOut' }}
                           >
-                            <InputGroupInput
-                              ref={searchInputRef}
-                              value={searchQuery}
-                              onChange={(e) => setSearchQuery(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Escape') {
-                                  e.preventDefault();
-                                  if (searchQuery) {
-                                    setSearchQuery('');
-                                  } else {
-                                    setSearchOpen(false);
-                                    requestAnimationFrame(() => searchButtonRef.current?.focus());
-                                  }
-                                }
-                              }}
-                              onBlur={() => {
-                                if (!searchQuery) {
-                                  setSearchOpen(false);
-                                }
-                              }}
-                              placeholder={t('classroom.searchPlaceholder')}
+                            <ChevronDown className="size-3.5" />
+                          </motion.div>
+                        </button>
+
+                        {/* Search toggle — icon that expands into an input in place */}
+                        <AnimatePresence initial={false}>
+                          {!searchOpen ? (
+                            <motion.button
+                              key="search-icon"
+                              ref={searchButtonRef}
+                              type="button"
                               aria-label={t('classroom.searchAriaLabel')}
-                              className="h-7 pl-3 placeholder:text-muted-foreground/50"
-                            />
-                            {searchQuery && (
-                              <InputGroupButton
-                                size="icon-xs"
-                                aria-label={t('classroom.clearSearch')}
-                                onMouseDown={(e) => e.preventDefault()}
-                                onClick={() => {
-                                  setSearchQuery('');
-                                  searchInputRef.current?.focus();
-                                }}
+                              onClick={() => {
+                                setSearchOpen(true);
+                                if (!recentOpen) persistRecentOpen(true);
+                                requestAnimationFrame(() => searchInputRef.current?.focus());
+                              }}
+                              initial={{ opacity: 0 }}
+                              animate={{ opacity: 1 }}
+                              exit={{ opacity: 0 }}
+                              transition={{ duration: 0.12, ease: 'easeOut' }}
+                              className="flex items-center justify-center size-6 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors cursor-pointer"
+                            >
+                              <Search className="size-3.5" />
+                            </motion.button>
+                          ) : (
+                            <motion.div
+                              key="search-input"
+                              initial={{ opacity: 0, width: 0 }}
+                              animate={{ opacity: 1, width: 200 }}
+                              exit={{ opacity: 0, width: 0 }}
+                              transition={{ duration: 0.18, ease: [0.25, 0.1, 0.25, 1] }}
+                              className="overflow-hidden"
+                            >
+                              <InputGroup
+                                className={cn(
+                                  'h-7 text-sm rounded-full bg-muted/40 border-transparent shadow-none',
+                                  'transition-colors',
+                                  'hover:bg-muted/60',
+                                  'has-[[data-slot=input-group-control]:focus-visible]:bg-muted/60',
+                                  'has-[[data-slot=input-group-control]:focus-visible]:border-transparent',
+                                  'has-[[data-slot=input-group-control]:focus-visible]:ring-0',
+                                )}
                               >
-                                <X />
-                              </InputGroupButton>
-                            )}
-                          </InputGroup>
+                                <InputGroupInput
+                                  ref={searchInputRef}
+                                  value={searchQuery}
+                                  onChange={(e) => setSearchQuery(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Escape') {
+                                      e.preventDefault();
+                                      if (searchQuery) {
+                                        setSearchQuery('');
+                                      } else {
+                                        setSearchOpen(false);
+                                        requestAnimationFrame(() =>
+                                          searchButtonRef.current?.focus(),
+                                        );
+                                      }
+                                    }
+                                  }}
+                                  onBlur={() => {
+                                    if (!searchQuery) {
+                                      setSearchOpen(false);
+                                    }
+                                  }}
+                                  placeholder={t('classroom.searchPlaceholder')}
+                                  aria-label={t('classroom.searchAriaLabel')}
+                                  className="h-7 pl-3 placeholder:text-muted-foreground/50"
+                                />
+                                {searchQuery && (
+                                  <InputGroupButton
+                                    size="icon-xs"
+                                    aria-label={t('classroom.clearSearch')}
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={() => {
+                                      setSearchQuery('');
+                                      searchInputRef.current?.focus();
+                                    }}
+                                  >
+                                    <X />
+                                  </InputGroupButton>
+                                )}
+                              </InputGroup>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                      <div className="flex-1 h-px bg-border/40 group-hover:bg-border/70 transition-colors" />
+                    </div>
+
+                    {/* Expandable content */}
+                    <AnimatePresence>
+                      {recentOpen && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: 'auto', opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={{ duration: 0.4, ease: [0.25, 0.1, 0.25, 1] }}
+                          className="w-full overflow-hidden"
+                        >
+                          {searchQuery.trim() && filteredClassrooms.length === 0 ? (
+                            <div className="pt-8 pb-2 text-center text-sm text-muted-foreground">
+                              {t('classroom.searchEmpty')}
+                            </div>
+                          ) : (
+                            /* 等高栅格（规格 3.1 第 2 条，配方⑱值照抄）。
+                     min(300px,100%)：窄屏可用宽只有 288px 时，写死的 300px 下限会让
+                     卡片横向溢出卡片容器被切边，取 100% 让它退到容器宽。 */
+                            <div className="pt-8 grid grid-cols-[repeat(auto-fill,minmax(min(300px,100%),1fr))] gap-5">
+                              {filteredClassrooms.map((classroom, i) => (
+                                <motion.div
+                                  key={classroom.id}
+                                  initial={{ opacity: 0, y: 16 }}
+                                  animate={{ opacity: 1, y: 0 }}
+                                  transition={{
+                                    delay: i * 0.04,
+                                    duration: 0.35,
+                                    ease: 'easeOut',
+                                  }}
+                                >
+                                  <CourseCard
+                                    classroom={classroom}
+                                    slide={thumbnails[classroom.id]}
+                                    progress={progressMap[classroom.id]}
+                                    formatDate={formatDate}
+                                    onDelete={handleDelete}
+                                    onRename={handleRename}
+                                    confirmingDelete={pendingDeleteId === classroom.id}
+                                    onConfirmDelete={() => confirmDelete(classroom.id)}
+                                    onCancelDelete={() => setPendingDeleteId(null)}
+                                    onClick={() => router.push(`/classroom/${classroom.id}`)}
+                                  />
+                                </motion.div>
+                              ))}
+                            </div>
+                          )}
                         </motion.div>
                       )}
                     </AnimatePresence>
                   </div>
-                  <div className="flex-1 h-px bg-border/40 group-hover:bg-border/70 transition-colors" />
-                </div>
-
-                {/* Expandable content */}
-                <AnimatePresence>
-                  {recentOpen && (
-                    <motion.div
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: 'auto', opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      transition={{ duration: 0.4, ease: [0.25, 0.1, 0.25, 1] }}
-                      className="w-full overflow-hidden"
-                    >
-                      {searchQuery.trim() && filteredClassrooms.length === 0 ? (
-                        <div className="pt-8 pb-2 text-center text-sm text-muted-foreground">
-                          {t('classroom.searchEmpty')}
-                        </div>
-                      ) : (
-                        /* 等高栅格（规格 3.1 第 2 条，配方⑱值照抄）。
-                     min(300px,100%)：窄屏可用宽只有 288px 时，写死的 300px 下限会让
-                     卡片横向溢出卡片容器被切边，取 100% 让它退到容器宽。 */
-                        <div className="pt-8 grid grid-cols-[repeat(auto-fill,minmax(min(300px,100%),1fr))] gap-5">
-                          {filteredClassrooms.map((classroom, i) => (
-                            <motion.div
-                              key={classroom.id}
-                              initial={{ opacity: 0, y: 16 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              transition={{
-                                delay: i * 0.04,
-                                duration: 0.35,
-                                ease: 'easeOut',
-                              }}
-                            >
-                              <CourseCard
-                                classroom={classroom}
-                                slide={thumbnails[classroom.id]}
-                                progress={progressMap[classroom.id]}
-                                formatDate={formatDate}
-                                onDelete={handleDelete}
-                                onRename={handleRename}
-                                confirmingDelete={pendingDeleteId === classroom.id}
-                                onConfirmDelete={() => confirmDelete(classroom.id)}
-                                onCancelDelete={() => setPendingDeleteId(null)}
-                                onClick={() => router.push(`/classroom/${classroom.id}`)}
-                              />
-                            </motion.div>
-                          ))}
-                        </div>
-                      )}
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
-            </section>
-          )}
+                </section>
+              )}
+            </div>
+          </motion.main>
         </div>
-      </motion.main>
+      </div>
     </div>
   );
 }

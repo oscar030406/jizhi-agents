@@ -35,6 +35,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { SiteHeader } from '@/components/site-header';
+import { LearnerRail } from '@/components/nav/learner-rail';
 import { EvidenceTrajectoryChart } from '@/components/report/evidence-trajectory-chart';
 import { PathOrDomainCard } from '@/components/home/learning-overview';
 import {
@@ -1542,520 +1543,527 @@ export default function ReportPage() {
   const audit = course ? summarizeAudits(course.scenes) : null;
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      {/* 共享极简顶栏：返回 + 语言 + 主题（components/site-header.tsx） */}
-      <SiteHeader localized={false} maxWidth="max-w-5xl" />
-      {/* 字阶与留白照公共页那套（H1 28px 级、区块间距拉到 py-12/space-y-8）：
+    <div className="flex min-h-screen bg-background text-foreground">
+      {/* 左功能栏与首页同一条，学习者在子页之间来回不用先回首页 */}
+      <LearnerRail />
+      <div className="min-w-0 flex-1">
+        {/* 共享极简顶栏：返回 + 语言 + 主题（components/site-header.tsx） */}
+        <SiteHeader localized={false} maxWidth="max-w-5xl" />
+        {/* 字阶与留白照公共页那套（H1 28px 级、区块间距拉到 py-12/space-y-8）：
           用户 08-16 评审说这页「排版混乱、小字堆砌」，病根一半是行距字阶都挤在一档里。 */}
-      <div className="mx-auto max-w-5xl space-y-8 px-4 py-12 sm:px-6">
-        {/* header */}
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h1 className="text-[28px] font-semibold leading-snug tracking-tight">
-              个人学情与资源匹配度报告
-            </h1>
-            <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-              数据来源仅三处：当前账户的学习者画像、多智能体引擎诊断结果、本课程已生成的场景与审核记录。
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            {stages && stages.length > 1 && (
-              <select
-                value={stageId ?? ''}
-                onChange={(e) => setStageId(e.target.value)}
-                className="max-w-[14rem] rounded-md border bg-background px-2 py-1.5 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                aria-label="选择课程"
-              >
-                {stages.map((s) => (
-                  <option className="bg-background text-foreground" key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-            )}
-            {/* 反馈是必须的：没课程时重算会立刻返回空态，界面零变化，
+        <div className="mx-auto max-w-5xl space-y-8 px-4 py-12 sm:px-6">
+          {/* header */}
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h1 className="text-[28px] font-semibold leading-snug tracking-tight">
+                个人学情与资源匹配度报告
+              </h1>
+              <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                数据来源仅三处：当前账户的学习者画像、多智能体引擎诊断结果、本课程已生成的场景与审核记录。
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              {stages && stages.length > 1 && (
+                <select
+                  value={stageId ?? ''}
+                  onChange={(e) => setStageId(e.target.value)}
+                  className="max-w-[14rem] rounded-md border bg-background px-2 py-1.5 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  aria-label="选择课程"
+                >
+                  {stages.map((s) => (
+                    <option className="bg-background text-foreground" key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {/* 反馈是必须的：没课程时重算会立刻返回空态，界面零变化，
                 用户会以为按钮点不动（线上实拍反馈）。转圈 + 结果提示。
                 提示由上面那个加载 effect 在真实终止分支里发，这里只负责发起。 */}
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5 text-xs"
-              disabled={recomputing}
-              onClick={() => {
-                manualRef.current = true;
-                setRecomputing(true);
-                setReloadKey((k) => k + 1);
-              }}
-            >
-              <RefreshCw className={cn('size-3.5', recomputing && 'animate-spin')} />
-              {recomputing ? '计算中…' : '重新计算'}
-            </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 text-xs"
+                disabled={recomputing}
+                onClick={() => {
+                  manualRef.current = true;
+                  setRecomputing(true);
+                  setReloadKey((k) => k + 1);
+                }}
+              >
+                <RefreshCw className={cn('size-3.5', recomputing && 'animate-spin')} />
+                {recomputing ? '计算中…' : '重新计算'}
+              </Button>
+            </div>
           </div>
-        </div>
 
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.25 }}
-          className="space-y-8"
-        >
-          {/* ── 0. 核心大数（⑪㉑）── */}
-          {/* 等待中先占位，别让四张卡凭空插进来把下面整片推下去。
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.25 }}
+            className="space-y-8"
+          >
+            {/* ── 0. 核心大数（⑪㉑）── */}
+            {/* 等待中先占位，别让四张卡凭空插进来把下面整片推下去。
               条件必须是 bpState.kind === 'loading'，**不能写 bp === null**——
               no-profile / no-course / offline 三个终态下 bp 同样是 null，
               按 null 写会让骨架卡永久停在那里假装数据还在路上，
               那正是本页自己反对的事（下面「不会用默认画像冒充你的画像」同一条原则）。 */}
-          {bpState.kind === 'loading' && (
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-hidden>
-              {['覆盖概念数', '平均掌握度', '薄弱概念数', '当前难度'].map((label) => (
-                <div key={label} className="rounded-xl border bg-card p-5 shadow-card">
-                  <p className="text-sm text-muted-foreground">{label}</p>
-                  <p className="mt-1 h-8 w-16 animate-pulse rounded bg-muted" />
-                </div>
-              ))}
-            </div>
-          )}
-          {bp && (
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-              <StatCard label="覆盖概念数" value={masteryValues.length} />
-              <StatCard
-                label="平均掌握度"
-                value={avgMastery}
-                format={{ style: 'percent', maximumFractionDigits: 0 }}
-              />
-              <StatCard label="薄弱概念数" value={bp.weak_concepts.length} />
-              <StatCard
-                label="当前难度"
-                value={levelRank(dynLevel ?? bp.recommended_difficulty)}
-                prefix="第 "
-                suffix=" 档"
-              />
-            </div>
-          )}
-
-          {/* ── 1. 画像摘要条 ── */}
-          <SectionCard
-            icon={Target}
-            title="画像摘要"
-            description="左半是你为当前账户填写的画像，右半是多智能体引擎据此给出的学情诊断。"
-          >
-            {!profile ? (
-              <EmptyState
-                title="尚未填写学习者画像"
-                hint="回首页点右上角「学习者画像」填写后再来；本页不会用默认画像冒充你的画像。"
-              />
-            ) : (
-              <div className="space-y-3">
-                {isAiDomain && isUntouchedDefault(profile) && (
-                  <p className="flex items-start gap-2 rounded-lg border border-yellow-deep/20 bg-yellow-soft p-3 text-sm leading-relaxed text-yellow-deep">
-                    <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-                    <span>
-                      当前画像与系统默认值完全一致——说明你还没有改过它。下面的诊断结论是基于这份默认画像算出来的，
-                      不是针对你本人的。请回首页点右上角「学习者画像」按实际情况修改，再回来点「重新计算」。
-                    </span>
-                  </p>
-                )}
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-3">
-                    <div className="flex flex-wrap gap-1.5 text-xs">
-                      <span className="rounded-full border px-2 py-0.5">
-                        有效领域 · {effectiveDomainName}
-                      </span>
-                      {effectiveContext?.source === 'course-assignment' && (
-                        <span className="rounded-full border px-2 py-0.5">来源 · 当前课程指派</span>
-                      )}
-                      <span className="rounded-full border px-2 py-0.5">
-                        学历 ·{' '}
-                        {EDUCATION_LABEL[profile.education ?? ''] ?? profile.education ?? '未填'}
-                      </span>
-                      <span className="rounded-full border px-2 py-0.5">
-                        身份 · {profile.role || '未填'}
-                      </span>
-                      {profile.time_budget_hours !== undefined && (
-                        <span className="rounded-full border px-2 py-0.5">
-                          预算 · {profile.time_budget_hours}h
-                        </span>
-                      )}
-                    </div>
-                    {isAiDomain ? (
-                      <div className="space-y-1.5">
-                        {PROFILE_DIMENSIONS.map((d) => {
-                          const v = (profile[d.key] as number) ?? 0;
-                          return (
-                            <div key={String(d.key)} className="flex items-center gap-2">
-                              <span className="w-14 shrink-0 text-xs text-muted-foreground">
-                                {d.label}
-                              </span>
-                              <div className="flex flex-1 gap-1">
-                                {[0, 1, 2, 3, 4].map((lv) => (
-                                  <span
-                                    key={lv}
-                                    className={cn(
-                                      'h-1.5 flex-1 rounded-full',
-                                      lv <= v ? 'bg-primary' : 'bg-muted',
-                                    )}
-                                  />
-                                ))}
-                              </div>
-                              <span className="w-6 text-right text-xs tabular-nums text-muted-foreground">
-                                {v}
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <p className="rounded-md border border-dashed border-border/70 p-2.5 text-xs leading-relaxed text-muted-foreground">
-                        本领域能力维度以学情引擎产物为准；旧领域画像中的自评维度不会在此展示。
-                      </p>
-                    )}
-                    {profile.learning_preference && (
-                      <p className="text-xs text-muted-foreground">
-                        学习偏好：{profile.learning_preference}
-                      </p>
-                    )}
+            {bpState.kind === 'loading' && (
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-hidden>
+                {['覆盖概念数', '平均掌握度', '薄弱概念数', '当前难度'].map((label) => (
+                  <div key={label} className="rounded-xl border bg-card p-5 shadow-card">
+                    <p className="text-sm text-muted-foreground">{label}</p>
+                    <p className="mt-1 h-8 w-16 animate-pulse rounded bg-muted" />
                   </div>
-
-                  <div className="space-y-2 rounded-lg border border-border/70 bg-muted/30 p-3">
-                    {bp ? (
-                      <>
-                        <div className="flex flex-wrap items-center gap-2 text-xs">
-                          <span className="rounded-full bg-purple-soft px-2 py-0.5 font-medium text-purple-deep">
-                            学习者类型 · {learnerTypeLabel(bp.blueprint?.learner_type) || '未返回'}
-                          </span>
-                          <span className="rounded-full bg-blue-soft px-2 py-0.5 font-medium text-blue-deep">
-                            推荐难度 · {levelText(levelRank(bp.recommended_difficulty))}
-                          </span>
-                        </div>
-                        <p className="text-xs leading-relaxed text-muted-foreground">
-                          {humanize(bp.diagnosis_summary)}
-                        </p>
-                        {bp.blueprint?.refined_goal && (
-                          <p className="text-xs leading-relaxed text-muted-foreground">
-                            <span className="font-medium text-foreground">目标细化：</span>
-                            {humanize(bp.blueprint.refined_goal)}
-                          </p>
-                        )}
-                      </>
-                    ) : (
-                      blueprintFallback()
-                    )}
-                  </div>
-                </div>
+                ))}
               </div>
             )}
-          </SectionCard>
+            {bp && (
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                <StatCard label="覆盖概念数" value={masteryValues.length} />
+                <StatCard
+                  label="平均掌握度"
+                  value={avgMastery}
+                  format={{ style: 'percent', maximumFractionDigits: 0 }}
+                />
+                <StatCard label="薄弱概念数" value={bp.weak_concepts.length} />
+                <StatCard
+                  label="当前难度"
+                  value={levelRank(dynLevel ?? bp.recommended_difficulty)}
+                  prefix="第 "
+                  suffix=" 档"
+                />
+              </div>
+            )}
 
-          {/* ── 1.5 你的课为什么长这样（单人版差异归因）── */}
-          <div id="why-this-course" className="scroll-mt-6">
+            {/* ── 1. 画像摘要条 ── */}
             <SectionCard
-              icon={Sparkles}
-              title="你的课为什么长这样"
-              description="每一条都是「这门课的某个做法 ← 你画像里的哪个字段」。字段缺就不写那一条，不补占位。"
+              icon={Target}
+              title="画像摘要"
+              description="左半是你为当前账户填写的画像，右半是多智能体引擎据此给出的学情诊断。"
             >
-              {bp && profile ? (
-                isAiDomain ? (
-                  <WhyThisCourse bp={bp} profile={profile} course={course} />
-                ) : (
-                  <div className="space-y-2 rounded-lg border border-border/70 p-3 text-sm">
-                    <p className="leading-relaxed">{humanize(bp.diagnosis_summary)}</p>
-                    {(mix?.rationale ?? []).map((reason) => (
-                      <p key={reason} className="text-xs leading-relaxed text-muted-foreground">
-                        {humanize(reason)}
-                      </p>
-                    ))}
-                    <p className="text-xs leading-relaxed text-muted-foreground">
-                      本段只展示学情引擎返回的「{effectiveDomainName}」诊断，
-                      不套用其它领域的固定自评维度。
-                    </p>
-                  </div>
-                )
+              {!profile ? (
+                <EmptyState
+                  title="尚未填写学习者画像"
+                  hint="回首页点右上角「学习者画像」填写后再来；本页不会用默认画像冒充你的画像。"
+                />
               ) : (
-                blueprintFallback()
+                <div className="space-y-3">
+                  {isAiDomain && isUntouchedDefault(profile) && (
+                    <p className="flex items-start gap-2 rounded-lg border border-yellow-deep/20 bg-yellow-soft p-3 text-sm leading-relaxed text-yellow-deep">
+                      <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                      <span>
+                        当前画像与系统默认值完全一致——说明你还没有改过它。下面的诊断结论是基于这份默认画像算出来的，
+                        不是针对你本人的。请回首页点右上角「学习者画像」按实际情况修改，再回来点「重新计算」。
+                      </span>
+                    </p>
+                  )}
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-3">
+                      <div className="flex flex-wrap gap-1.5 text-xs">
+                        <span className="rounded-full border px-2 py-0.5">
+                          有效领域 · {effectiveDomainName}
+                        </span>
+                        {effectiveContext?.source === 'course-assignment' && (
+                          <span className="rounded-full border px-2 py-0.5">
+                            来源 · 当前课程指派
+                          </span>
+                        )}
+                        <span className="rounded-full border px-2 py-0.5">
+                          学历 ·{' '}
+                          {EDUCATION_LABEL[profile.education ?? ''] ?? profile.education ?? '未填'}
+                        </span>
+                        <span className="rounded-full border px-2 py-0.5">
+                          身份 · {profile.role || '未填'}
+                        </span>
+                        {profile.time_budget_hours !== undefined && (
+                          <span className="rounded-full border px-2 py-0.5">
+                            预算 · {profile.time_budget_hours}h
+                          </span>
+                        )}
+                      </div>
+                      {isAiDomain ? (
+                        <div className="space-y-1.5">
+                          {PROFILE_DIMENSIONS.map((d) => {
+                            const v = (profile[d.key] as number) ?? 0;
+                            return (
+                              <div key={String(d.key)} className="flex items-center gap-2">
+                                <span className="w-14 shrink-0 text-xs text-muted-foreground">
+                                  {d.label}
+                                </span>
+                                <div className="flex flex-1 gap-1">
+                                  {[0, 1, 2, 3, 4].map((lv) => (
+                                    <span
+                                      key={lv}
+                                      className={cn(
+                                        'h-1.5 flex-1 rounded-full',
+                                        lv <= v ? 'bg-primary' : 'bg-muted',
+                                      )}
+                                    />
+                                  ))}
+                                </div>
+                                <span className="w-6 text-right text-xs tabular-nums text-muted-foreground">
+                                  {v}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="rounded-md border border-dashed border-border/70 p-2.5 text-xs leading-relaxed text-muted-foreground">
+                          本领域能力维度以学情引擎产物为准；旧领域画像中的自评维度不会在此展示。
+                        </p>
+                      )}
+                      {profile.learning_preference && (
+                        <p className="text-xs text-muted-foreground">
+                          学习偏好：{profile.learning_preference}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="space-y-2 rounded-lg border border-border/70 bg-muted/30 p-3">
+                      {bp ? (
+                        <>
+                          <div className="flex flex-wrap items-center gap-2 text-xs">
+                            <span className="rounded-full bg-purple-soft px-2 py-0.5 font-medium text-purple-deep">
+                              学习者类型 ·{' '}
+                              {learnerTypeLabel(bp.blueprint?.learner_type) || '未返回'}
+                            </span>
+                            <span className="rounded-full bg-blue-soft px-2 py-0.5 font-medium text-blue-deep">
+                              推荐难度 · {levelText(levelRank(bp.recommended_difficulty))}
+                            </span>
+                          </div>
+                          <p className="text-xs leading-relaxed text-muted-foreground">
+                            {humanize(bp.diagnosis_summary)}
+                          </p>
+                          {bp.blueprint?.refined_goal && (
+                            <p className="text-xs leading-relaxed text-muted-foreground">
+                              <span className="font-medium text-foreground">目标细化：</span>
+                              {humanize(bp.blueprint.refined_goal)}
+                            </p>
+                          )}
+                        </>
+                      ) : (
+                        blueprintFallback()
+                      )}
+                    </div>
+                  </div>
+                </div>
               )}
             </SectionCard>
-          </div>
 
-          {/* ── 2. 知识盲区定位图 ── */}
-          <SectionCard
-            icon={AlertTriangle}
-            title="知识盲区定位"
-            description="每个概念的掌握度取自引擎的学情诊断；被判为薄弱的用强调色突出、其余压成灰色，并标出目标掌握度与缺口。"
-          >
-            <div className="space-y-4">
-              {bp ? <BlindSpotChart bp={bp} /> : blueprintFallback()}
-              {domainProfile ? (
-                <>
-                  <QuizMasteryBlock profile={domainProfile} />
-                  <ReviewNextBlock
-                    key={effectiveDomain}
-                    profile={domainProfile}
-                    domain={effectiveDomain!}
+            {/* ── 1.5 你的课为什么长这样（单人版差异归因）── */}
+            <div id="why-this-course" className="scroll-mt-6">
+              <SectionCard
+                icon={Sparkles}
+                title="你的课为什么长这样"
+                description="每一条都是「这门课的某个做法 ← 你画像里的哪个字段」。字段缺就不写那一条，不补占位。"
+              >
+                {bp && profile ? (
+                  isAiDomain ? (
+                    <WhyThisCourse bp={bp} profile={profile} course={course} />
+                  ) : (
+                    <div className="space-y-2 rounded-lg border border-border/70 p-3 text-sm">
+                      <p className="leading-relaxed">{humanize(bp.diagnosis_summary)}</p>
+                      {(mix?.rationale ?? []).map((reason) => (
+                        <p key={reason} className="text-xs leading-relaxed text-muted-foreground">
+                          {humanize(reason)}
+                        </p>
+                      ))}
+                      <p className="text-xs leading-relaxed text-muted-foreground">
+                        本段只展示学情引擎返回的「{effectiveDomainName}」诊断，
+                        不套用其它领域的固定自评维度。
+                      </p>
+                    </div>
+                  )
+                ) : (
+                  blueprintFallback()
+                )}
+              </SectionCard>
+            </div>
+
+            {/* ── 2. 知识盲区定位图 ── */}
+            <SectionCard
+              icon={AlertTriangle}
+              title="知识盲区定位"
+              description="每个概念的掌握度取自引擎的学情诊断；被判为薄弱的用强调色突出、其余压成灰色，并标出目标掌握度与缺口。"
+            >
+              <div className="space-y-4">
+                {bp ? <BlindSpotChart bp={bp} /> : blueprintFallback()}
+                {domainProfile ? (
+                  <>
+                    <QuizMasteryBlock profile={domainProfile} />
+                    <ReviewNextBlock
+                      key={effectiveDomain}
+                      profile={domainProfile}
+                      domain={effectiveDomain!}
+                    />
+                  </>
+                ) : (
+                  <EmptyState
+                    title="当前领域的证据画像未覆盖"
+                    hint={
+                      effectiveDomain
+                        ? `当前档案没有「${effectiveDomainName}」的分域掌握度；本页没有使用旧的全域扁平画像代替。完成该领域测验并成功写回证据后再查看。`
+                        : '当前有效领域尚未确认；本页没有展示任何全域扁平画像。'
+                    }
                   />
-                </>
+                )}
+                {effectiveDomain && (
+                  <MistakeBankBlock profile={domainProfile} domain={effectiveDomain} />
+                )}
+              </div>
+            </SectionCard>
+
+            {/* ── 3. 资源难度匹配曲线 ── */}
+            <SectionCard
+              icon={TrendingUp}
+              title="资源难度匹配"
+              description="把课程各场景的难度与学习者能力区间画在同一张图上，一眼看出哪些场景超出或低于学习者水平。"
+            >
+              {bp && course ? (
+                <DifficultyCurveChart bp={bp} course={course} profile={profile} />
+              ) : courseState.kind === 'ok' ? (
+                blueprintFallback()
+              ) : courseState.kind === 'loading' ? (
+                <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
+                  <Loader2 className="size-4 animate-spin" />
+                  正在读取课程…
+                </div>
+              ) : courseState.kind === 'error' ? (
+                blueprintFallback()
               ) : (
                 <EmptyState
-                  title="当前领域的证据画像未覆盖"
-                  hint={
-                    effectiveDomain
-                      ? `当前档案没有「${effectiveDomainName}」的分域掌握度；本页没有使用旧的全域扁平画像代替。完成该领域测验并成功写回证据后再查看。`
-                      : '当前有效领域尚未确认；本页没有展示任何全域扁平画像。'
-                  }
+                  title="没有可分析的课程"
+                  hint="请先在首页生成一门课程；本页只分析真实存在的课程场景，不会画示意曲线。"
                 />
               )}
-              {effectiveDomain && (
-                <MistakeBankBlock profile={domainProfile} domain={effectiveDomain} />
-              )}
+            </SectionCard>
+
+            {/* ── 4. 当前领域全景路径（与首页、/path 同源） ── */}
+            <div id="learning-path" className="scroll-mt-6">
+              <SectionCard
+                icon={GitBranch}
+                title="当前领域全景学习路径"
+                description="报告、首页与路径页读取同一份引擎产物；机构切换课程领域后，这里随有效领域一起切换。"
+              >
+                <PathOrDomainCard corpus={effectiveDomain ?? undefined} className="shadow-none" />
+              </SectionCard>
             </div>
-          </SectionCard>
 
-          {/* ── 3. 资源难度匹配曲线 ── */}
-          <SectionCard
-            icon={TrendingUp}
-            title="资源难度匹配"
-            description="把课程各场景的难度与学习者能力区间画在同一张图上，一眼看出哪些场景超出或低于学习者水平。"
-          >
-            {bp && course ? (
-              <DifficultyCurveChart bp={bp} course={course} profile={profile} />
-            ) : courseState.kind === 'ok' ? (
-              blueprintFallback()
-            ) : courseState.kind === 'loading' ? (
-              <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-                <Loader2 className="size-4 animate-spin" />
-                正在读取课程…
-              </div>
-            ) : courseState.kind === 'error' ? (
-              blueprintFallback()
-            ) : (
-              <EmptyState
-                title="没有可分析的课程"
-                hint="请先在首页生成一门课程；本页只分析真实存在的课程场景，不会画示意曲线。"
-              />
-            )}
-          </SectionCard>
+            {/* ── 5. 学情证据时间轨迹 ── */}
+            <div id="evidence-trajectory" className="scroll-mt-6">
+              <SectionCard
+                icon={Activity}
+                title="学情证据时间轨迹"
+                description="上面三张图画的是当前状态，这一张画的是发生过什么：每个点是一次真实判定，来自测验与导学的证据流。"
+              >
+                <EvidenceTrajectoryChart domain={effectiveDomain ?? undefined} />
+              </SectionCard>
+            </div>
 
-          {/* ── 4. 当前领域全景路径（与首页、/path 同源） ── */}
-          <div id="learning-path" className="scroll-mt-6">
+            {/* ── 6. 资源匹配度小结 ── */}
             <SectionCard
-              icon={GitBranch}
-              title="当前领域全景学习路径"
-              description="报告、首页与路径页读取同一份引擎产物；机构切换课程领域后，这里随有效领域一起切换。"
+              icon={BookOpen}
+              title="资源配比与推导依据"
+              description="引擎按画像算出的资源配比计划，每条都附它自己的推导链。"
             >
-              <PathOrDomainCard corpus={effectiveDomain ?? undefined} className="shadow-none" />
-            </SectionCard>
-          </div>
-
-          {/* ── 5. 学情证据时间轨迹 ── */}
-          <div id="evidence-trajectory" className="scroll-mt-6">
-            <SectionCard
-              icon={Activity}
-              title="学情证据时间轨迹"
-              description="上面三张图画的是当前状态，这一张画的是发生过什么：每个点是一次真实判定，来自测验与导学的证据流。"
-            >
-              <EvidenceTrajectoryChart domain={effectiveDomain ?? undefined} />
-            </SectionCard>
-          </div>
-
-          {/* ── 6. 资源匹配度小结 ── */}
-          <SectionCard
-            icon={BookOpen}
-            title="资源配比与推导依据"
-            description="引擎按画像算出的资源配比计划，每条都附它自己的推导链。"
-          >
-            {!bp ? (
-              blueprintFallback()
-            ) : !mix ? (
-              <EmptyState
-                title="学情诊断未返回资源配比"
-                hint="本次诊断没有返回资源配比（引擎降级时会这样），因此没有可展示的配比计划。"
-              />
-            ) : (
-              <div className="space-y-3">
-                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                  {[
-                    {
-                      label: '支架档',
-                      value: SCAFFOLD_LABEL[mix.scaffold_level] ?? mix.scaffold_level,
-                    },
-                    { label: '教具数量', value: `${mix.visual_widget_count} 个` },
-                    { label: '示意图数量', value: `${mix.diagram_count} 个` },
-                    { label: '代码示例数', value: `${mix.code_example_count} 个` },
-                    { label: '类比领域', value: mix.analogy_domain },
-                    { label: '每节篇幅', value: `${mix.section_length_band} 字` },
-                    {
-                      label: '测验难度带',
-                      value: levelBandText(mix.quiz_difficulty_band) || '未指定',
-                    },
-                  ].map((item) => (
-                    <div key={item.label} className="rounded-lg border border-border/70 p-2.5">
-                      <p className="text-xs uppercase tracking-wide text-muted-foreground">
-                        {item.label}
-                      </p>
-                      <p className="mt-0.5 text-xs font-medium leading-snug">{item.value}</p>
-                    </div>
-                  ))}
-                </div>
-
-                {mix.rationale.length > 0 && (
-                  <div className="space-y-1.5 rounded-lg border border-purple-deep/20 bg-purple-soft/60 p-3">
-                    <p className="text-xs font-medium text-purple-deep">
-                      这些配比是怎么从画像算出来的（引擎给的推导链）
-                    </p>
-                    {mix.rationale.map((r, i) => (
-                      <p key={i} className="text-xs leading-relaxed text-muted-foreground">
-                        {i + 1}. {humanize(r)}
-                      </p>
-                    ))}
-                  </div>
-                )}
-
-                {(bp.blueprint?.content_strategy?.length ||
-                  bp.blueprint?.practice_strategy?.length ||
-                  bp.blueprint?.assessment_strategy?.length) && (
-                  <div className="grid gap-2 sm:grid-cols-3">
+              {!bp ? (
+                blueprintFallback()
+              ) : !mix ? (
+                <EmptyState
+                  title="学情诊断未返回资源配比"
+                  hint="本次诊断没有返回资源配比（引擎降级时会这样），因此没有可展示的配比计划。"
+                />
+              ) : (
+                <div className="space-y-3">
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                     {[
-                      { title: '内容策略', items: bp.blueprint?.content_strategy ?? [] },
-                      { title: '练习策略', items: bp.blueprint?.practice_strategy ?? [] },
-                      { title: '评估策略', items: bp.blueprint?.assessment_strategy ?? [] },
-                    ].map((col) => (
-                      <div key={col.title} className="rounded-lg border border-border/70 p-2.5">
-                        <p className="text-xs font-medium">{col.title}</p>
-                        <ul className="mt-1 space-y-0.5">
-                          {col.items.map((it, i) => (
-                            <li key={i} className="text-xs leading-relaxed text-muted-foreground">
-                              · {humanize(it)}
-                            </li>
-                          ))}
-                        </ul>
+                      {
+                        label: '支架档',
+                        value: SCAFFOLD_LABEL[mix.scaffold_level] ?? mix.scaffold_level,
+                      },
+                      { label: '教具数量', value: `${mix.visual_widget_count} 个` },
+                      { label: '示意图数量', value: `${mix.diagram_count} 个` },
+                      { label: '代码示例数', value: `${mix.code_example_count} 个` },
+                      { label: '类比领域', value: mix.analogy_domain },
+                      { label: '每节篇幅', value: `${mix.section_length_band} 字` },
+                      {
+                        label: '测验难度带',
+                        value: levelBandText(mix.quiz_difficulty_band) || '未指定',
+                      },
+                    ].map((item) => (
+                      <div key={item.label} className="rounded-lg border border-border/70 p-2.5">
+                        <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                          {item.label}
+                        </p>
+                        <p className="mt-0.5 text-xs font-medium leading-snug">{item.value}</p>
                       </div>
                     ))}
                   </div>
-                )}
-              </div>
-            )}
-          </SectionCard>
 
-          {/* ── 6. 内容可信度小结 ── */}
-          <SectionCard
-            icon={ShieldCheck}
-            title="内容可信度小结"
-            description="汇总本课程各场景生成时留下的幻觉审核记录，与学情无关，只看内容本身。"
-          >
-            {!course ? (
-              <EmptyState title="没有可统计的课程" hint="请先在首页生成一门课程。" />
-            ) : !audit || audit.audited === 0 ? (
-              <EmptyState
-                title="本课程场景没有携带审核记录"
-                hint={`共 ${course.scenes.length} 个场景，都没有审核记录——通常是课程生成于审核门接入之前。重新生成一次即可带上。`}
-              />
-            ) : (
-              <div className="space-y-3">
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  {[
-                    {
-                      testid: 'audit-summary-audited',
-                      label: '已审核场景',
-                      value: `${audit.audited}/${audit.total}`,
-                      tone: 'text-foreground',
-                    },
-                    {
-                      testid: 'audit-summary-grounded',
-                      label: '证据接地率',
-                      value: `${Math.round((audit.grounded / audit.audited) * 100)}%`,
-                      tone:
-                        audit.grounded === audit.audited ? 'text-green-deep' : 'text-yellow-deep',
-                    },
-                    {
-                      testid: 'audit-summary-claims',
-                      label: '核验断言数',
-                      value: String(audit.claims),
-                      tone: 'text-foreground',
-                    },
-                    {
-                      testid: 'audit-summary-flagged',
-                      label: '标记 / 拦截',
-                      value: `${audit.flagged} / ${audit.blocked}`,
-                      tone: audit.blocked > 0 ? 'text-destructive' : 'text-foreground',
-                    },
-                  ].map((k) => (
-                    <div
-                      key={k.label}
-                      data-testid={k.testid}
-                      className="rounded-lg border border-border/70 p-2.5"
-                    >
-                      <p className="text-xs text-muted-foreground">{k.label}</p>
-                      <p className={cn('mt-0.5 text-lg font-semibold tabular-nums', k.tone)}>
-                        {k.value}
+                  {mix.rationale.length > 0 && (
+                    <div className="space-y-1.5 rounded-lg border border-purple-deep/20 bg-purple-soft/60 p-3">
+                      <p className="text-xs font-medium text-purple-deep">
+                        这些配比是怎么从画像算出来的（引擎给的推导链）
                       </p>
+                      {mix.rationale.map((r, i) => (
+                        <p key={i} className="text-xs leading-relaxed text-muted-foreground">
+                          {i + 1}. {humanize(r)}
+                        </p>
+                      ))}
                     </div>
-                  ))}
-                </div>
-
-                <p className="flex items-start gap-2 rounded-lg border border-border/70 bg-muted/30 p-3 text-sm leading-relaxed">
-                  {audit.blocked > 0 ? (
-                    <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" />
-                  ) : (
-                    <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-green-deep" />
                   )}
-                  <span>
-                    {audit.audited} 个场景经过独立的审核智能体核验，共核 {audit.claims} 条事实断言，
-                    其中 {audit.grounded} 个场景由受控知识库接地；
-                    {audit.blocked > 0
-                      ? `有 ${audit.blocked} 个场景被拦截转人工复核，${audit.warned} 个带风险标记放行——建议先处理被拦截的场景再交付。`
-                      : audit.warned > 0
-                        ? `无场景被拦截，${audit.warned} 个带风险标记放行（超出资料覆盖范围的断言已在课件上标注），可以交付。`
-                        : '无场景被拦截或标记，全部直接放行，可以交付。'}
-                  </span>
-                </p>
 
-                <details className="rounded-lg border border-border/70 p-2.5">
-                  <summary className="cursor-pointer text-xs text-muted-foreground">
-                    逐场景审核明细（{audit.audited} 条）
-                  </summary>
-                  {/* ⑯ 首尾圆角列表：外层圆角裁切，内部 divide 分隔，条目无独立边框 */}
-                  <div className="mt-2 divide-y divide-border-subtle overflow-hidden rounded-xl border border-border">
-                    {course.scenes
-                      .filter((s) => s.audit)
-                      .map((s) => (
-                        // 同上：窄屏上下堆。右列固定占约 200px，375px 视口下留给场景标题
-                        // 只剩五十来 px，标题被 truncate 到看不出是哪一节。
-                        <div
-                          key={s.id}
-                          className="flex flex-col gap-0.5 px-3 py-2 text-xs transition-colors hover:bg-accent md:flex-row md:items-start md:justify-between md:gap-3"
-                        >
-                          <span className="min-w-0 flex-1 truncate">{s.title}</span>
-                          <span className="text-muted-foreground md:shrink-0">
-                            {s.audit!.totalClaims} 断言 · {s.audit!.verdict} ·{' '}
-                            <span
-                              className={cn(
-                                s.audit!.decision === 'block_pending_review'
-                                  ? 'text-destructive'
-                                  : s.audit!.decision === 'publish_with_warnings'
-                                    ? 'text-yellow-deep'
-                                    : 'text-green-deep',
-                              )}
-                            >
-                              {s.audit!.decision === 'block_pending_review'
-                                ? '拦截复核'
-                                : s.audit!.decision === 'publish_with_warnings'
-                                  ? '带标记放行'
-                                  : '直接放行'}
-                            </span>
-                          </span>
+                  {(bp.blueprint?.content_strategy?.length ||
+                    bp.blueprint?.practice_strategy?.length ||
+                    bp.blueprint?.assessment_strategy?.length) && (
+                    <div className="grid gap-2 sm:grid-cols-3">
+                      {[
+                        { title: '内容策略', items: bp.blueprint?.content_strategy ?? [] },
+                        { title: '练习策略', items: bp.blueprint?.practice_strategy ?? [] },
+                        { title: '评估策略', items: bp.blueprint?.assessment_strategy ?? [] },
+                      ].map((col) => (
+                        <div key={col.title} className="rounded-lg border border-border/70 p-2.5">
+                          <p className="text-xs font-medium">{col.title}</p>
+                          <ul className="mt-1 space-y-0.5">
+                            {col.items.map((it, i) => (
+                              <li key={i} className="text-xs leading-relaxed text-muted-foreground">
+                                · {humanize(it)}
+                              </li>
+                            ))}
+                          </ul>
                         </div>
                       ))}
-                  </div>
-                </details>
-              </div>
-            )}
-          </SectionCard>
+                    </div>
+                  )}
+                </div>
+              )}
+            </SectionCard>
 
-          <p className="pb-4 text-center text-xs text-muted-foreground">
-            标有
-            <EstimateTag />
-            的数值为按规则推导的估计值，规则见对应图注。
-          </p>
-        </motion.div>
+            {/* ── 6. 内容可信度小结 ── */}
+            <SectionCard
+              icon={ShieldCheck}
+              title="内容可信度小结"
+              description="汇总本课程各场景生成时留下的幻觉审核记录，与学情无关，只看内容本身。"
+            >
+              {!course ? (
+                <EmptyState title="没有可统计的课程" hint="请先在首页生成一门课程。" />
+              ) : !audit || audit.audited === 0 ? (
+                <EmptyState
+                  title="本课程场景没有携带审核记录"
+                  hint={`共 ${course.scenes.length} 个场景，都没有审核记录——通常是课程生成于审核门接入之前。重新生成一次即可带上。`}
+                />
+              ) : (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {[
+                      {
+                        testid: 'audit-summary-audited',
+                        label: '已审核场景',
+                        value: `${audit.audited}/${audit.total}`,
+                        tone: 'text-foreground',
+                      },
+                      {
+                        testid: 'audit-summary-grounded',
+                        label: '证据接地率',
+                        value: `${Math.round((audit.grounded / audit.audited) * 100)}%`,
+                        tone:
+                          audit.grounded === audit.audited ? 'text-green-deep' : 'text-yellow-deep',
+                      },
+                      {
+                        testid: 'audit-summary-claims',
+                        label: '核验断言数',
+                        value: String(audit.claims),
+                        tone: 'text-foreground',
+                      },
+                      {
+                        testid: 'audit-summary-flagged',
+                        label: '标记 / 拦截',
+                        value: `${audit.flagged} / ${audit.blocked}`,
+                        tone: audit.blocked > 0 ? 'text-destructive' : 'text-foreground',
+                      },
+                    ].map((k) => (
+                      <div
+                        key={k.label}
+                        data-testid={k.testid}
+                        className="rounded-lg border border-border/70 p-2.5"
+                      >
+                        <p className="text-xs text-muted-foreground">{k.label}</p>
+                        <p className={cn('mt-0.5 text-lg font-semibold tabular-nums', k.tone)}>
+                          {k.value}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+
+                  <p className="flex items-start gap-2 rounded-lg border border-border/70 bg-muted/30 p-3 text-sm leading-relaxed">
+                    {audit.blocked > 0 ? (
+                      <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" />
+                    ) : (
+                      <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-green-deep" />
+                    )}
+                    <span>
+                      {audit.audited} 个场景经过独立的审核智能体核验，共核 {audit.claims}{' '}
+                      条事实断言， 其中 {audit.grounded} 个场景由受控知识库接地；
+                      {audit.blocked > 0
+                        ? `有 ${audit.blocked} 个场景被拦截转人工复核，${audit.warned} 个带风险标记放行——建议先处理被拦截的场景再交付。`
+                        : audit.warned > 0
+                          ? `无场景被拦截，${audit.warned} 个带风险标记放行（超出资料覆盖范围的断言已在课件上标注），可以交付。`
+                          : '无场景被拦截或标记，全部直接放行，可以交付。'}
+                    </span>
+                  </p>
+
+                  <details className="rounded-lg border border-border/70 p-2.5">
+                    <summary className="cursor-pointer text-xs text-muted-foreground">
+                      逐场景审核明细（{audit.audited} 条）
+                    </summary>
+                    {/* ⑯ 首尾圆角列表：外层圆角裁切，内部 divide 分隔，条目无独立边框 */}
+                    <div className="mt-2 divide-y divide-border-subtle overflow-hidden rounded-xl border border-border">
+                      {course.scenes
+                        .filter((s) => s.audit)
+                        .map((s) => (
+                          // 同上：窄屏上下堆。右列固定占约 200px，375px 视口下留给场景标题
+                          // 只剩五十来 px，标题被 truncate 到看不出是哪一节。
+                          <div
+                            key={s.id}
+                            className="flex flex-col gap-0.5 px-3 py-2 text-xs transition-colors hover:bg-accent md:flex-row md:items-start md:justify-between md:gap-3"
+                          >
+                            <span className="min-w-0 flex-1 truncate">{s.title}</span>
+                            <span className="text-muted-foreground md:shrink-0">
+                              {s.audit!.totalClaims} 断言 · {s.audit!.verdict} ·{' '}
+                              <span
+                                className={cn(
+                                  s.audit!.decision === 'block_pending_review'
+                                    ? 'text-destructive'
+                                    : s.audit!.decision === 'publish_with_warnings'
+                                      ? 'text-yellow-deep'
+                                      : 'text-green-deep',
+                                )}
+                              >
+                                {s.audit!.decision === 'block_pending_review'
+                                  ? '拦截复核'
+                                  : s.audit!.decision === 'publish_with_warnings'
+                                    ? '带标记放行'
+                                    : '直接放行'}
+                              </span>
+                            </span>
+                          </div>
+                        ))}
+                    </div>
+                  </details>
+                </div>
+              )}
+            </SectionCard>
+
+            <p className="pb-4 text-center text-xs text-muted-foreground">
+              标有
+              <EstimateTag />
+              的数值为按规则推导的估计值，规则见对应图注。
+            </p>
+          </motion.div>
+        </div>
       </div>
     </div>
   );

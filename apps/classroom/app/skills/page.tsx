@@ -43,6 +43,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { SiteHeader } from '@/components/site-header';
+import { LearnerRail } from '@/components/nav/learner-rail';
 import {
   PracticeCard,
   projectsForJob,
@@ -506,348 +507,354 @@ export default function SkillsPage() {
     mlJob?.skills.filter((skill) => !skill.covered).map((skill) => skill.skill) ?? [];
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      {/* 共享极简顶栏：返回 + 语言 + 主题（components/site-header.tsx） */}
-      <SiteHeader localized={false} maxWidth="max-w-5xl" />
-      {/* 区块间距 24px、区块内最大 16px：相邻层级差 1.5 倍以上，分组才读得出来 */}
-      <div className="mx-auto max-w-5xl space-y-6 px-4 pb-24 pt-6 sm:px-6">
-        {/* 非 AI 域：整页换空态主体（见 ForeignDomainEmpty 的注释）。
+    <div className="flex min-h-screen bg-background text-foreground">
+      {/* 左功能栏与首页同一条，学习者在子页之间来回不用先回首页 */}
+      <LearnerRail />
+      <div className="min-w-0 flex-1">
+        {/* 共享极简顶栏：返回 + 语言 + 主题（components/site-header.tsx） */}
+        <SiteHeader localized={false} maxWidth="max-w-5xl" />
+        {/* 区块间距 24px、区块内最大 16px：相邻层级差 1.5 倍以上，分组才读得出来 */}
+        <div className="mx-auto max-w-5xl space-y-6 px-4 pb-24 pt-6 sm:px-6">
+          {/* 非 AI 域：整页换空态主体（见 ForeignDomainEmpty 的注释）。
             原来是「一条注记 + 照常展示整张 AI 图谱」——注记会被略过，图谱不会。 */}
-        {/* header */}
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">
-              岗位技能地图 · 企业内训与转岗培训
-            </h1>
-            <p className="mt-2 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-              数据来源：机构接入的岗位与技能清单、受控知识库的检索结果、各领域语料库的当前状态。
-            </p>
-          </div>
-          <div className="flex flex-col items-end gap-1.5">
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5 text-xs"
-              onClick={() => setReloadKey((k) => k + 1)}
-            >
-              <RefreshCw className="size-3.5" />
-              重新读取
-            </Button>
-            {asOf && (
-              <p className="text-xs text-muted-foreground tabular-nums">
-                数据截至{' '}
-                {new Date(asOf).toLocaleString('zh-CN', {
-                  dateStyle: 'medium',
-                  timeStyle: 'short',
-                })}
+          {/* header */}
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h1 className="text-2xl font-semibold tracking-tight">
+                岗位技能地图 · 企业内训与转岗培训
+              </h1>
+              <p className="mt-2 max-w-2xl text-xs leading-relaxed text-muted-foreground">
+                数据来源：机构接入的岗位与技能清单、受控知识库的检索结果、各领域语料库的当前状态。
               </p>
-            )}
-            {asOfStale && (
-              <p className="max-w-xs text-right text-xs leading-relaxed text-amber-700 dark:text-amber-300">
-                缓存数据可能已过期；系统恢复实时读取后会自动更新。
-              </p>
-            )}
-          </div>
-        </div>
-
-        {(profileState.kind === 'loading' ||
-          (profileState.kind === 'ready' && contextState.kind === 'loading')) && (
-          <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" />
-            正在确认当前账户的课程指派与学习领域…
-          </div>
-        )}
-        {profileState.kind === 'error' && (
-          <EmptyState title="当前账户画像暂时无法读取" hint={profileState.reason} />
-        )}
-        {profileState.kind !== 'error' && contextState.kind === 'error' && (
-          <EmptyState title="当前学习领域暂时无法确认" hint={contextState.reason} />
-        )}
-        {contextState.kind === 'ready' && !contextState.context.domain && (
-          <EmptyState
-            title={
-              contextState.context.status === 'assignment-unavailable'
-                ? '机构课程暂不可用'
-                : '机构指派课程的领域尚未确认'
-            }
-            hint={contextState.context.reason ?? '课程归属产物补齐前不会展示其它领域的岗位或项目。'}
-          />
-        )}
-
-        {!foreignDomain && data && totalSkills > 0 && (
-          <section
-            role="note"
-            className="rounded-xl border border-amber-300/70 bg-amber-50/70 px-4 py-3 text-xs leading-relaxed text-amber-900 dark:border-amber-700/50 dark:bg-amber-950/30 dark:text-amber-100"
-          >
-            <p>
-              <span className="font-medium">供给边界：</span>AI 是当前有策展岗位图谱的领域，
-              不是完整覆盖域。当前引擎返回 {coveredSkills}/{totalSkills} 项技能可接地， 其余{' '}
-              {totalSkills - coveredSkills} 项没有达到本页的受控语料证据门槛；
-              可接地也不等于已经成课或完整教学供给。
-            </p>
-            {mlJob && mlSkillGaps.length > 0 && (
-              <p className="mt-1.5">
-                「{mlJob.title}」的引擎画像为“{mlJob.summary}”，但当前只可接地 {mlJob.covered_count}
-                /{mlJob.skills.length}，仍有未接地技能：
-                {mlSkillGaps.slice(0, 4).join('、')}
-                {mlSkillGaps.length > 4 ? `等 ${mlSkillGaps.length} 项` : ''}。
-                岗位定义与缺项名称都直接取自引擎返回，不以其它课程补齐。
-              </p>
-            )}
-          </section>
-        )}
-
-        {context?.domain && practice.kind === 'ready' && (
-          <section className="mb-8">
-            <h2 className="mb-1 text-sm font-medium">「{effectiveDomainLabel}」实操项目</h2>
-            <p className="mb-3 text-[11px] leading-relaxed text-muted-foreground">
-              从 GitHub 实时搜索、经管理员逐条审核后发布的真实开源项目。星数、许可、
-              链接均来自搜索时的实拉数据。
-            </p>
-            <div className="space-y-2">
-              {practice.projects.map((p) => (
-                <PracticeCard key={p.id} project={p} courseTitles={courseTitles} />
-              ))}
             </div>
-          </section>
-        )}
-        {context?.domain && practice.kind === 'loading' && (
-          <section className="rounded-xl border border-border bg-card px-5 py-4 text-sm text-muted-foreground">
-            正在读取「{effectiveDomainLabel}」的引擎实操项目产物…
-          </section>
-        )}
-        {context?.domain && (practice.kind === 'missing' || practice.kind === 'unavailable') && (
-          <section className="rounded-xl border border-border bg-card px-5 py-4">
-            <h2 className="text-sm font-medium">
-              {practice.kind === 'missing' ? '实操项目尚未生成或发布' : '实操项目状态暂时不可用'}
-            </h2>
-            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-              {practice.reason} 本区只展示引擎生成并经管理员审核发布的本领域项目，不使用 AI
-              项目或示例卡代替。
-            </p>
-          </section>
-        )}
-        {foreignDomain && (
-          <ForeignDomainEmpty
-            label={context?.label ?? domainLabel(corpus || data?.domain)}
-            reason={serverEmpty ? data?.reason : undefined}
-          />
-        )}
-
-        {contextState.kind === 'ready' && context?.domain && !foreignDomain && skillsLoading && (
-          <div className="flex items-center gap-2 py-16 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" />
-            正在读取岗位技能地图…
+            <div className="flex flex-col items-end gap-1.5">
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 text-xs"
+                onClick={() => setReloadKey((k) => k + 1)}
+              >
+                <RefreshCw className="size-3.5" />
+                重新读取
+              </Button>
+              {asOf && (
+                <p className="text-xs text-muted-foreground tabular-nums">
+                  数据截至{' '}
+                  {new Date(asOf).toLocaleString('zh-CN', {
+                    dateStyle: 'medium',
+                    timeStyle: 'short',
+                  })}
+                </p>
+              )}
+              {asOfStale && (
+                <p className="max-w-xs text-right text-xs leading-relaxed text-amber-700 dark:text-amber-300">
+                  缓存数据可能已过期；系统恢复实时读取后会自动更新。
+                </p>
+              )}
+            </div>
           </div>
-        )}
 
-        {contextState.kind === 'ready' &&
-          context?.domain &&
-          !foreignDomain &&
-          state.kind === 'offline' && (
+          {(profileState.kind === 'loading' ||
+            (profileState.kind === 'ready' && contextState.kind === 'loading')) && (
+            <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" />
+              正在确认当前账户的课程指派与学习领域…
+            </div>
+          )}
+          {profileState.kind === 'error' && (
+            <EmptyState title="当前账户画像暂时无法读取" hint={profileState.reason} />
+          )}
+          {profileState.kind !== 'error' && contextState.kind === 'error' && (
+            <EmptyState title="当前学习领域暂时无法确认" hint={contextState.reason} />
+          )}
+          {contextState.kind === 'ready' && !contextState.context.domain && (
             <EmptyState
-              title="岗位技能地图暂时不可用"
-              hint="当前会话无法从机构过滤接口读取岗位技能数据。点「重新读取」再试一次。"
+              title={
+                contextState.context.status === 'assignment-unavailable'
+                  ? '机构课程暂不可用'
+                  : '机构指派课程的领域尚未确认'
+              }
+              hint={
+                contextState.context.reason ?? '课程归属产物补齐前不会展示其它领域的岗位或项目。'
+              }
             />
           )}
 
-        {contextState.kind === 'ready' && context?.domain && !foreignDomain && data && (
-          <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.25 }}
-            className="space-y-6"
-          >
-            {/* ── 1. 岗位市场事实 ── */}
-            <SectionCard
-              icon={TrendingUp}
-              title="岗位市场事实"
-              description={`统计口径：${market.sample ?? '未提供样本口径'}。数据来源与生成时间见本页说明。`}
+          {!foreignDomain && data && totalSkills > 0 && (
+            <section
+              role="note"
+              className="rounded-xl border border-amber-300/70 bg-amber-50/70 px-4 py-3 text-xs leading-relaxed text-amber-900 dark:border-amber-700/50 dark:bg-amber-950/30 dark:text-amber-100"
             >
-              {Object.keys(market).length === 0 ? (
-                <EmptyState
-                  title="引擎未返回市场统计"
-                  hint="引擎数据中没有市场统计字段，本卡片留空。"
-                />
-              ) : (
-                <div className="space-y-4">
-                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                    {market.yoy_burst && (
-                      <StatTile
-                        icon={TrendingUp}
-                        // The multiple is read out of the engine's own string —
-                        // no number on this page is typed by hand.
-                        value={market.yoy_burst.match(/（([^）]+)）/)?.[1] ?? '见下'}
-                        label="需求跃迁"
-                        note={`${market.yoy_burst}（同一数据集内跨年对比）`}
-                      />
-                    )}
-                    {market.education?.['本科'] !== undefined && (
-                      <StatTile
-                        icon={GraduationCap}
-                        value={pct(market.education['本科'])}
-                        label="学历要求 · 本科"
-                        note={`硕士 ${pct(market.education['硕士'] ?? 0)}、大专 ${pct(
-                          market.education['大专'] ?? 0,
-                        )}——门槛落在职业培训可达区间`}
-                      />
-                    )}
-                    {juniorShare > 0 && (
-                      <StatTile
-                        icon={Briefcase}
-                        value={pct(juniorShare)}
-                        label="经验要求 ≤3 年 / 不限"
-                        note={`1-3年 ${pct(exp['1-3年'] ?? 0)} + 经验不限 ${pct(
-                          exp['经验不限'] ?? 0,
-                        )}——转岗人群的窗口`}
-                      />
-                    )}
-                    {market.salary_monthly_mid_median !== undefined && (
-                      <StatTile
-                        icon={Wallet}
-                        value={`${(market.salary_monthly_mid_median / 1000).toFixed(1)}k`}
-                        label="月薪中位数"
-                        note="薪资区间中位数的中位，货币单位：元/月"
-                      />
-                    )}
-                  </div>
-
-                  {market.demand_trend_share_of_ai_jobs && (
-                    <div>
-                      <p className="mb-2 text-xs font-medium">
-                        大模型相关岗位占 AI 招聘集比例（逐年）
-                      </p>
-                      <TrendChart data={market.demand_trend_share_of_ai_jobs} />
-                    </div>
-                  )}
-
-                  {market.skill_mention_share && (
-                    <div>
-                      <p className="mb-2 text-xs font-medium">JD 高频技能提及率</p>
-                      <ShareBars data={market.skill_mention_share} />
-                      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                        这份技能分布就是下方岗位技能地图与我们概念图的对照基准：
-                        课程概念覆盖到的技能项在这里都能找到对应的真实提及率。
-                      </p>
-                    </div>
-                  )}
-
-                  <p className="text-xs leading-relaxed text-muted-foreground">
-                    岗位与技能清单由平台按已接入资料完成清洗、归并与来源核验；提炼方式：
-                    {prov.method ?? '按资料来源与岗位技能映射规则生成'}。
-                  </p>
-                </div>
+              <p>
+                <span className="font-medium">供给边界：</span>AI 是当前有策展岗位图谱的领域，
+                不是完整覆盖域。当前引擎返回 {coveredSkills}/{totalSkills} 项技能可接地， 其余{' '}
+                {totalSkills - coveredSkills} 项没有达到本页的受控语料证据门槛；
+                可接地也不等于已经成课或完整教学供给。
+              </p>
+              {mlJob && mlSkillGaps.length > 0 && (
+                <p className="mt-1.5">
+                  「{mlJob.title}」的引擎画像为“{mlJob.summary}”，但当前只可接地{' '}
+                  {mlJob.covered_count}/{mlJob.skills.length}，仍有未接地技能：
+                  {mlSkillGaps.slice(0, 4).join('、')}
+                  {mlSkillGaps.length > 4 ? `等 ${mlSkillGaps.length} 项` : ''}。
+                  岗位定义与缺项名称都直接取自引擎返回，不以其它课程补齐。
+                </p>
               )}
-            </SectionCard>
+            </section>
+          )}
 
-            {/* ── 2. 岗位技能地图 ── */}
-            <SectionCard
-              icon={Briefcase}
-              title="岗位技能地图"
-              description={`${data.jobs.length} 个岗位，点开任一岗位可看它的技能项；${
-                data.coverage_rule ?? ''
-              } 点击任一技能即以它为主题去造课。`}
-            >
-              <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
-                当前展示的是「{effectiveDomainLabel}
-                」领域的引擎结果。岗位技能与该领域的全景学习路径按
-                概念对应；路径结构来自领域知识索引，个人进度再根据本账户的测验记录移动。
+          {context?.domain && practice.kind === 'ready' && (
+            <section className="mb-8">
+              <h2 className="mb-1 text-sm font-medium">「{effectiveDomainLabel}」实操项目</h2>
+              <p className="mb-3 text-[11px] leading-relaxed text-muted-foreground">
+                从 GitHub 实时搜索、经管理员逐条审核后发布的真实开源项目。星数、许可、
+                链接均来自搜索时的实拉数据。
               </p>
               <div className="space-y-2">
-                {data.jobs.map((job) => (
-                  <JobCard
-                    key={job.job_id}
-                    job={job}
-                    open={openJob === job.job_id}
-                    onToggle={() => setOpenJob(openJob === job.job_id ? null : job.job_id)}
-                    onPickSkill={pickSkill}
-                    courseTitles={courseTitles}
-                    projects={practice.kind === 'ready' ? practice.projects : []}
-                  />
+                {practice.projects.map((p) => (
+                  <PracticeCard key={p.id} project={p} courseTitles={courseTitles} />
                 ))}
               </div>
-              <p className="mt-4 flex items-start gap-2 rounded-lg border border-amber-300/70 bg-amber-50/70 p-3 text-xs leading-relaxed text-amber-800 dark:border-amber-700/50 dark:bg-amber-950/30 dark:text-amber-200">
-                <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-                <span>
-                  「可接地」只表示受控知识库里有可引用的证据（附来源编号可复核），
-                  不等于已有成课；标灰的技能照样能造课，只是内容无证据约束，
-                  课堂里会显示「未接地」徽标。
-                </span>
+            </section>
+          )}
+          {context?.domain && practice.kind === 'loading' && (
+            <section className="rounded-xl border border-border bg-card px-5 py-4 text-sm text-muted-foreground">
+              正在读取「{effectiveDomainLabel}」的引擎实操项目产物…
+            </section>
+          )}
+          {context?.domain && (practice.kind === 'missing' || practice.kind === 'unavailable') && (
+            <section className="rounded-xl border border-border bg-card px-5 py-4">
+              <h2 className="text-sm font-medium">
+                {practice.kind === 'missing' ? '实操项目尚未生成或发布' : '实操项目状态暂时不可用'}
+              </h2>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                {practice.reason} 本区只展示引擎生成并经管理员审核发布的本领域项目，不使用 AI
+                项目或示例卡代替。
               </p>
-            </SectionCard>
+            </section>
+          )}
+          {foreignDomain && (
+            <ForeignDomainEmpty
+              label={context?.label ?? domainLabel(corpus || data?.domain)}
+              reason={serverEmpty ? data?.reason : undefined}
+            />
+          )}
 
-            {/* ── 3. 语料库建设状态 ── */}
-            <SectionCard
-              icon={Database}
-              title="各领域语料库建设状态"
-              description="学习者画像里的「培训领域」或「知识库」决定检索用哪个语料库。未建设的领域检索返回空。"
+          {contextState.kind === 'ready' && context?.domain && !foreignDomain && skillsLoading && (
+            <div className="flex items-center gap-2 py-16 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" />
+              正在读取岗位技能地图…
+            </div>
+          )}
+
+          {contextState.kind === 'ready' &&
+            context?.domain &&
+            !foreignDomain &&
+            state.kind === 'offline' && (
+              <EmptyState
+                title="岗位技能地图暂时不可用"
+                hint="当前会话无法从机构过滤接口读取岗位技能数据。点「重新读取」再试一次。"
+              />
+            )}
+
+          {contextState.kind === 'ready' && context?.domain && !foreignDomain && data && (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.25 }}
+              className="space-y-6"
             >
-              <div className="grid gap-4 sm:grid-cols-2">
-                {data.corpora.map((c) => (
-                  <div
-                    key={c.corpus}
-                    className={cn(
-                      'rounded-lg border p-3',
-                      c.available
-                        ? 'border-emerald-400/60 bg-emerald-50/40 dark:border-emerald-700/50 dark:bg-emerald-950/20'
-                        : 'border-dashed border-border/70',
-                    )}
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-sm font-medium">{domainLabel(c.corpus)}</span>
-                      <span
-                        className={cn(
-                          'shrink-0 rounded-full px-2 py-px text-xs',
-                          c.available
-                            ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-                            : 'bg-muted text-muted-foreground',
-                        )}
-                      >
-                        {c.available ? `已建设 · ${c.chunk_count} 条证据块` : '尚未建设'}
-                      </span>
+              {/* ── 1. 岗位市场事实 ── */}
+              <SectionCard
+                icon={TrendingUp}
+                title="岗位市场事实"
+                description={`统计口径：${market.sample ?? '未提供样本口径'}。数据来源与生成时间见本页说明。`}
+              >
+                {Object.keys(market).length === 0 ? (
+                  <EmptyState
+                    title="引擎未返回市场统计"
+                    hint="引擎数据中没有市场统计字段，本卡片留空。"
+                  />
+                ) : (
+                  <div className="space-y-4">
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                      {market.yoy_burst && (
+                        <StatTile
+                          icon={TrendingUp}
+                          // The multiple is read out of the engine's own string —
+                          // no number on this page is typed by hand.
+                          value={market.yoy_burst.match(/（([^）]+)）/)?.[1] ?? '见下'}
+                          label="需求跃迁"
+                          note={`${market.yoy_burst}（同一数据集内跨年对比）`}
+                        />
+                      )}
+                      {market.education?.['本科'] !== undefined && (
+                        <StatTile
+                          icon={GraduationCap}
+                          value={pct(market.education['本科'])}
+                          label="学历要求 · 本科"
+                          note={`硕士 ${pct(market.education['硕士'] ?? 0)}、大专 ${pct(
+                            market.education['大专'] ?? 0,
+                          )}——门槛落在职业培训可达区间`}
+                        />
+                      )}
+                      {juniorShare > 0 && (
+                        <StatTile
+                          icon={Briefcase}
+                          value={pct(juniorShare)}
+                          label="经验要求 ≤3 年 / 不限"
+                          note={`1-3年 ${pct(exp['1-3年'] ?? 0)} + 经验不限 ${pct(
+                            exp['经验不限'] ?? 0,
+                          )}——转岗人群的窗口`}
+                        />
+                      )}
+                      {market.salary_monthly_mid_median !== undefined && (
+                        <StatTile
+                          icon={Wallet}
+                          value={`${(market.salary_monthly_mid_median / 1000).toFixed(1)}k`}
+                          label="月薪中位数"
+                          note="薪资区间中位数的中位，货币单位：元/月"
+                        />
+                      )}
                     </div>
-                    <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                      {c.available
-                        ? '检索、审核与生成的事实边界都取自该语料库。'
-                        : '所属机构尚未接入该领域知识材料，因此暂不提供接地课程。管理者可在「接入新的知识库」中补充资料并发起处理。'}
+
+                    {market.demand_trend_share_of_ai_jobs && (
+                      <div>
+                        <p className="mb-2 text-xs font-medium">
+                          大模型相关岗位占 AI 招聘集比例（逐年）
+                        </p>
+                        <TrendChart data={market.demand_trend_share_of_ai_jobs} />
+                      </div>
+                    )}
+
+                    {market.skill_mention_share && (
+                      <div>
+                        <p className="mb-2 text-xs font-medium">JD 高频技能提及率</p>
+                        <ShareBars data={market.skill_mention_share} />
+                        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                          这份技能分布就是下方岗位技能地图与我们概念图的对照基准：
+                          课程概念覆盖到的技能项在这里都能找到对应的真实提及率。
+                        </p>
+                      </div>
+                    )}
+
+                    <p className="text-xs leading-relaxed text-muted-foreground">
+                      岗位与技能清单由平台按已接入资料完成清洗、归并与来源核验；提炼方式：
+                      {prov.method ?? '按资料来源与岗位技能映射规则生成'}。
                     </p>
                   </div>
-                ))}
-              </div>
-            </SectionCard>
+                )}
+              </SectionCard>
 
-            {/* ── 4. 怎么用 ── */}
-            <SectionCard
-              icon={Sparkles}
-              title="企业内训 / 转岗培训怎么用"
-              description="换语料库即换领域，流程不变——同一套多智能体管线服务不同行业。"
-            >
-              <ol className="space-y-2 text-xs leading-relaxed text-muted-foreground">
-                <li>
-                  <span className="font-medium text-foreground">① 定岗位</span>
-                  ：在上面的岗位技能地图里选目标岗位（转岗要去的岗、内训要补的岗），
-                  按技能项逐条造课；缺口大的技能优先。
-                </li>
-                <li>
-                  <span className="font-medium text-foreground">② 填画像</span>
-                  ：首页右上角「学习者画像」里选培训领域与五维自评。领域决定检索语料库，
-                  自评决定难度档、支架深度与类比域——同一技能给不同背景的人会生成不同的课。
-                </li>
-                <li>
-                  <span className="font-medium text-foreground">③ 造课</span>
-                  ：检索 Agent 从该领域语料库取证据块 → 生成器只在证据边界内讲 →
-                  审核智能体逐条核对断言 → 裁决决定放行/警告/拦截。企业自有 SOP、设备手册、
-                  合规文件进语料库后，生成内容就被圈死在企业口径内。
-                </li>
-                <li>
-                  <span className="font-medium text-foreground">④ 换行业</span>
-                  ：管理者在「接入新的知识库」中提交行业资料，平台自动完成解析、切片、索引与质量检查；
-                  处理完成后即可面向对应学员造课。标「尚未建设」表示所属机构还没有提供可用资料。
-                </li>
-              </ol>
-            </SectionCard>
-          </motion.div>
-        )}
+              {/* ── 2. 岗位技能地图 ── */}
+              <SectionCard
+                icon={Briefcase}
+                title="岗位技能地图"
+                description={`${data.jobs.length} 个岗位，点开任一岗位可看它的技能项；${
+                  data.coverage_rule ?? ''
+                } 点击任一技能即以它为主题去造课。`}
+              >
+                <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
+                  当前展示的是「{effectiveDomainLabel}
+                  」领域的引擎结果。岗位技能与该领域的全景学习路径按
+                  概念对应；路径结构来自领域知识索引，个人进度再根据本账户的测验记录移动。
+                </p>
+                <div className="space-y-2">
+                  {data.jobs.map((job) => (
+                    <JobCard
+                      key={job.job_id}
+                      job={job}
+                      open={openJob === job.job_id}
+                      onToggle={() => setOpenJob(openJob === job.job_id ? null : job.job_id)}
+                      onPickSkill={pickSkill}
+                      courseTitles={courseTitles}
+                      projects={practice.kind === 'ready' ? practice.projects : []}
+                    />
+                  ))}
+                </div>
+                <p className="mt-4 flex items-start gap-2 rounded-lg border border-amber-300/70 bg-amber-50/70 p-3 text-xs leading-relaxed text-amber-800 dark:border-amber-700/50 dark:bg-amber-950/30 dark:text-amber-200">
+                  <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                  <span>
+                    「可接地」只表示受控知识库里有可引用的证据（附来源编号可复核），
+                    不等于已有成课；标灰的技能照样能造课，只是内容无证据约束，
+                    课堂里会显示「未接地」徽标。
+                  </span>
+                </p>
+              </SectionCard>
+
+              {/* ── 3. 语料库建设状态 ── */}
+              <SectionCard
+                icon={Database}
+                title="各领域语料库建设状态"
+                description="学习者画像里的「培训领域」或「知识库」决定检索用哪个语料库。未建设的领域检索返回空。"
+              >
+                <div className="grid gap-4 sm:grid-cols-2">
+                  {data.corpora.map((c) => (
+                    <div
+                      key={c.corpus}
+                      className={cn(
+                        'rounded-lg border p-3',
+                        c.available
+                          ? 'border-emerald-400/60 bg-emerald-50/40 dark:border-emerald-700/50 dark:bg-emerald-950/20'
+                          : 'border-dashed border-border/70',
+                      )}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-sm font-medium">{domainLabel(c.corpus)}</span>
+                        <span
+                          className={cn(
+                            'shrink-0 rounded-full px-2 py-px text-xs',
+                            c.available
+                              ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                              : 'bg-muted text-muted-foreground',
+                          )}
+                        >
+                          {c.available ? `已建设 · ${c.chunk_count} 条证据块` : '尚未建设'}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                        {c.available
+                          ? '检索、审核与生成的事实边界都取自该语料库。'
+                          : '所属机构尚未接入该领域知识材料，因此暂不提供接地课程。管理者可在「接入新的知识库」中补充资料并发起处理。'}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </SectionCard>
+
+              {/* ── 4. 怎么用 ── */}
+              <SectionCard
+                icon={Sparkles}
+                title="企业内训 / 转岗培训怎么用"
+                description="换语料库即换领域，流程不变——同一套多智能体管线服务不同行业。"
+              >
+                <ol className="space-y-2 text-xs leading-relaxed text-muted-foreground">
+                  <li>
+                    <span className="font-medium text-foreground">① 定岗位</span>
+                    ：在上面的岗位技能地图里选目标岗位（转岗要去的岗、内训要补的岗），
+                    按技能项逐条造课；缺口大的技能优先。
+                  </li>
+                  <li>
+                    <span className="font-medium text-foreground">② 填画像</span>
+                    ：首页右上角「学习者画像」里选培训领域与五维自评。领域决定检索语料库，
+                    自评决定难度档、支架深度与类比域——同一技能给不同背景的人会生成不同的课。
+                  </li>
+                  <li>
+                    <span className="font-medium text-foreground">③ 造课</span>
+                    ：检索 Agent 从该领域语料库取证据块 → 生成器只在证据边界内讲 →
+                    审核智能体逐条核对断言 → 裁决决定放行/警告/拦截。企业自有 SOP、设备手册、
+                    合规文件进语料库后，生成内容就被圈死在企业口径内。
+                  </li>
+                  <li>
+                    <span className="font-medium text-foreground">④ 换行业</span>
+                    ：管理者在「接入新的知识库」中提交行业资料，平台自动完成解析、切片、索引与质量检查；
+                    处理完成后即可面向对应学员造课。标「尚未建设」表示所属机构还没有提供可用资料。
+                  </li>
+                </ol>
+              </SectionCard>
+            </motion.div>
+          )}
+        </div>
       </div>
     </div>
   );

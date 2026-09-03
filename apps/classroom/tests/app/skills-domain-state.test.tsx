@@ -23,7 +23,11 @@ vi.mock('@/lib/knowledge/account-profile', () => ({
 }));
 vi.mock('motion/react', () => ({ motion: { div: 'div' } }));
 vi.mock('@/components/site-header', () => ({ SiteHeader: () => null }));
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: vi.fn() }),
+  // 左功能栏（components/nav/learner-rail.tsx）按当前路由高亮，随 /skills 页一起挂载。
+  usePathname: () => '/skills',
+}));
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
