@@ -251,7 +251,12 @@ with tarfile.open(output, "w:gz", compresslevel=9) as handle:
     (Join-Path $classroom 'public') (Join-Path $workDir 'start-standalone.mjs') `
     $webPackage $committedAt
   if ($LASTEXITCODE -ne 0) { throw 'Web standalone package creation failed.' }
-  & tar.exe -czf $enginePackage --exclude='__pycache__' --exclude='*.pyc' -C $engine `
+  # 写死 System32 的 bsdtar：PATH 里排在前面的常常是 Git Bash 带的 GNU tar，
+  # 它把 `D:\...` 当成「主机 D 上的路径」去连远程（报 Cannot connect to D），
+  # 引擎包必然打不出来。裸写 tar.exe 时打不打得成取决于谁的 shell 在跑脚本。
+  $bsdtar = Join-Path $env:SystemRoot 'System32\tar.exe'
+  if (-not (Test-Path -LiteralPath $bsdtar)) { throw "bsdtar not found: $bsdtar" }
+  & $bsdtar -czf $enginePackage --exclude='__pycache__' --exclude='*.pyc' -C $engine `
     app backend requirements.txt requirements.production.txt requirements.production.lock `
     scripts/build_embedding_index.py `
     scripts/compute_kc_coverage.py `
