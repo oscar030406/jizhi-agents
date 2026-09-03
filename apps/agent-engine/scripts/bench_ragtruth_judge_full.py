@@ -5,15 +5,16 @@
 2. two_level            确定性初筛 + LLM 判官只复核存疑句（bench_ragtruth.py --judge 的口径，但跑全量不抽样）
 3. judge_all            LLM 判官审全部句子（生产里判官看的是全部断言，这才是"判官层"的检测能力）
 
-与 bench_ragtruth.py 的差别：不抽平衡样本、判官看全部句子、并发调用、逐条落盘可续跑。
+与 bench_ragtruth.py 的差别：不抽平衡样本、判官看全部句子、判官看完整 passage（原脚本每段截 400 字符）、并发调用、逐条落盘可续跑。
+v1 产物（截 400 字符）保留为 ragtruth_judge_full.jsonl/.csv，本版写 *_v2。
 不改 bench_ragtruth.py，只 import 它的函数。
 
 用法：
     cd apps/agent-engine
     python scripts/bench_ragtruth_judge_full.py --concurrency 6
 产物：
-    data/eval/ragtruth_judge_full.jsonl   每条回答的 gold / 三种口径的无据句占比
-    data/eval/ragtruth_judge_full.csv     三种口径在 τ 扫描下的 P/R/F1，含最优操作点
+    data/eval/ragtruth_judge_full_v2.jsonl 每条回答的 gold / 三种口径的无据句占比
+    data/eval/ragtruth_judge_full_v2.csv   三种口径在 τ 扫描下的 P/R/F1，含最优操作点
 """
 from __future__ import annotations
 
@@ -33,8 +34,35 @@ import bench_ragtruth as B  # noqa: E402
 from backend.schemas.resources import ClaimVerdict, KnowledgeChunk  # noqa: E402
 
 TAUS = [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5]
-OUT_JSONL = ROOT / "data" / "eval" / "ragtruth_judge_full.jsonl"
-OUT_CSV = ROOT / "data" / "eval" / "ragtruth_judge_full.csv"
+OUT_JSONL = ROOT / "data" / "eval" / "ragtruth_judge_full_v2.jsonl"
+OUT_CSV = ROOT / "data" / "eval" / "ragtruth_judge_full_v2.csv"
+
+
+EVIDENCE_CHARS = 6000  # RAGTruth QA 的 passage 常有几百词；原脚本每段截 400 字符，证据被截掉会把有据句判成无据
+
+
+def judge_disputed(verdicts: list[ClaimVerdict], chunks: list[KnowledgeChunk], gateway) -> list[ClaimVerdict]:
+    """两级审核：只把确定性初筛判为非 supported 的句子交判官，判官看完整证据。"""
+    disputed = [(i, v) for i, v in enumerate(verdicts) if v.verdict != "supported"]
+    if not disputed:
+        return verdicts
+    batch = disputed[:24]
+    claim_lines = "\n".join(f"{k + 1}. {v.claim}" for k, (_, v) in enumerate(batch))
+    evidence_lines = "\n".join(f"[{c.source_id}] {c.content[:EVIDENCE_CHARS]}" for c in chunks)
+    parsed = gateway.structured_chat(
+        "EvaluationJudge", B.JUDGE_SYSTEM,
+        f"Claims:\n{claim_lines}\n\nEvidence:\n{evidence_lines}", temperature=0.0, max_tokens=1200,
+    )
+    if not parsed or not isinstance(parsed.get("verdicts"), list):
+        return verdicts
+    merged = [v.model_copy() for v in verdicts]
+    allowed = {"supported", "weak", "unsupported"}
+    for item in parsed["verdicts"]:
+        if isinstance(item, dict):
+            k, verdict = item.get("index"), str(item.get("verdict", "")).lower()
+            if isinstance(k, int) and 1 <= k <= len(batch) and verdict in allowed:
+                merged[batch[k - 1][0]] = merged[batch[k - 1][0]].model_copy(update={"verdict": verdict})
+    return merged
 
 
 def judge_all(verdicts: list[ClaimVerdict], chunks: list[KnowledgeChunk], gateway) -> list[ClaimVerdict] | None:
@@ -43,7 +71,7 @@ def judge_all(verdicts: list[ClaimVerdict], chunks: list[KnowledgeChunk], gatewa
         return verdicts
     batch = verdicts[:24]
     claim_lines = "\n".join(f"{k + 1}. {v.claim}" for k, v in enumerate(batch))
-    evidence_lines = "\n".join(f"[{c.source_id}] {c.content[:400]}" for c in chunks)
+    evidence_lines = "\n".join(f"[{c.source_id}] {c.content[:EVIDENCE_CHARS]}" for c in chunks)
     parsed = gateway.structured_chat(
         "EvaluationJudge", B.JUDGE_SYSTEM,
         f"Claims:\n{claim_lines}\n\nEvidence:\n{evidence_lines}", temperature=0.0, max_tokens=1200,
@@ -126,7 +154,7 @@ def main() -> int:
     print(f"已完成 {len(done)}，待跑 {len(todo)}", flush=True)
 
     def work(r: dict) -> dict:
-        two = B.judge_review(r["verdicts"], r["chunks"], llm_gateway)
+        two = judge_disputed(r["verdicts"], r["chunks"], llm_gateway)
         full = judge_all(r["verdicts"], r["chunks"], llm_gateway)
         return {
             "id": r["id"], "source_id": r["source_id"], "gold": r["gold"], "n_claims": r["n_claims"],
