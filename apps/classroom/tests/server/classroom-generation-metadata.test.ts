@@ -420,6 +420,88 @@ describe('生成期元数据落库', () => {
     expect('concepts' in result.scenes[0]).toBe(false);
   });
 
+  // ── 掌握度 → 检索（引擎侧 outer-fringe 选段）────────────────────────────
+  //
+  // 引擎早就收 `mastery` 并回传 `skipped`，但生成链这一头一直传 undefined，
+  // 于是「已掌握的教材块直接跳过」这条对外说法在真实生成里从未触发过。
+
+  /** ai 域两个概念都到线，但 llm_basics 的置信度不够；另一个域故意放高值。 */
+  const masteryProfile = {
+    ...profile,
+    conceptMasteryByDomain: { ai: { rag: 0.9, llm_basics: 0.95 }, other: { 控制: 0.99 } },
+    conceptConfidenceByDomain: { ai: { rag: 0.8, llm_basics: 0.1 }, other: { 控制: 0.9 } },
+  };
+
+  it('分域掌握度进检索：只送本域、且估计值与置信度都够的概念', async () => {
+    mocks.fetchEvidence.mockResolvedValue(evidenceOk);
+
+    await generate({ learnerProfile: masteryProfile });
+
+    // 调用序：0 = 大纲期术语基准（不带掌握度，那是全课术语锚点），1 = 屏级检索。
+    const sceneCall = mocks.fetchEvidence.mock.calls[1];
+    expect(sceneCall[1]).toBe('ai');
+    // llm_basics 置信度 0.1 < 0.3 被挡（蒙对一次不该让整块教材被跳过）；
+    // other 域的「控制」不跨域兜底。
+    expect(sceneCall[2]).toEqual({ rag: 0.9 });
+
+    // 大纲可行性预检与屏级检索必须看到同一张表，否则预检说能讲、真检索却跳成另一副样子。
+    const probe = mocks.generateSceneOutlinesFromRequirements.mock.calls[0][4].sceneEvidenceProbe;
+    mocks.fetchEvidence.mockClear();
+    await probe({ title: 'x', description: 'y' }, '课');
+    expect(mocks.fetchEvidence.mock.calls[0][2]).toEqual({ rag: 0.9 });
+  });
+
+  it('画像没有掌握度（或一个都不够格）：照旧传 undefined，检索退回全量选段', async () => {
+    mocks.fetchEvidence.mockResolvedValue(evidenceOk);
+
+    await generate({ learnerProfile: profile });
+    expect(mocks.fetchEvidence.mock.calls[1][2]).toBeUndefined();
+
+    mocks.fetchEvidence.mockClear();
+    await generate({
+      learnerProfile: {
+        ...profile,
+        conceptMasteryByDomain: { ai: { rag: 0.9 } },
+        conceptConfidenceByDomain: { ai: { rag: 0.1 } },
+      },
+    });
+    expect(mocks.fetchEvidence.mock.calls[1][2]).toBeUndefined();
+  });
+
+  it('引擎跳过了块：条数与第一条理由落盘，没跳过就整个字段不写', async () => {
+    mocks.fetchEvidence.mockResolvedValue({
+      status: 'ok',
+      bundle: {
+        ...evidence,
+        selectionMode: 'fringe',
+        skipped: [
+          {
+            source_id: 'k7',
+            title: 'D',
+            content: '',
+            reason: '概念（rag）掌握度均已达标（≥0.7），跳过以省篇幅',
+          },
+          {
+            source_id: 'k8',
+            title: 'E',
+            content: '',
+            reason: '概念（llm_basics）掌握度均已达标（≥0.7），跳过以省篇幅',
+          },
+        ],
+      },
+    });
+
+    const skippedRun = await generate({ learnerProfile: masteryProfile });
+    expect(skippedRun.scenes[0].grounding?.skipped).toEqual({
+      count: 2,
+      reason: '概念（rag）掌握度均已达标（≥0.7），跳过以省篇幅',
+    });
+
+    mocks.fetchEvidence.mockResolvedValue(evidenceOk);
+    const plainRun = await generate({ learnerProfile: masteryProfile });
+    expect(plainRun.scenes[0].grounding).toBeUndefined();
+  });
+
   it('完课快照在教学契约复核前写入全课程事实终审，审核不可用时 fail closed', async () => {
     await generate();
 

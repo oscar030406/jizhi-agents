@@ -115,6 +115,7 @@ const EDUCATION_LABEL: Record<string, string> = {
 // 领域/语料显示名的真源在 `lib/knowledge/domain-labels.ts`（原先这里、报告页、
 // 生成入口各抄一份，且都缺实际接入的语料库）。这里只做转出，老调用点不用改 import。
 import { domainLabel } from '@/lib/knowledge/domain-labels';
+import { keysFromProfile } from './decompression';
 export { domainLabel };
 
 /**
@@ -262,6 +263,36 @@ export function excerptCodeLineCap(profile: LearnerProfileInput): number {
   const prog = profile.programming_level;
   if (typeof prog !== 'number') return 0;
   return prog <= 1 ? 5 : 0;
+}
+
+/**
+ * 送往检索的掌握度表——引擎据此整块跳过已会的教材（outer-fringe 选段，
+ * `backend/integration/personalize_service.py`）。
+ *
+ * 两条纪律：
+ *
+ * 1. **按域取，不跨域兜底。** 分域桶在就只读本域那一格；「另一个领域的同名概念」
+ *    不算这门课的已掌握（与 `projectProfileToDomain`、报告页 `profileForDomain`
+ *    同一条口径）。只有连 `conceptMasteryByDomain` 都没有的老画像才退回扁平表——
+ *    那时扁平表本身就是当前域视图（见 `lib/evidence/profile-bridge.ts`）。
+ * 2. **估计值与置信度成对才算数。** 复用 `keysFromProfile` 的两条阈值：蒙对一次
+ *    （估计值高、置信度低）不该让一整块教材被跳过。置信度缺席按不够处理。
+ *
+ * 一个概念都不够格就返回 undefined——空表和没传是一回事，检索退回全量选段。
+ */
+export function masteryForCorpus(
+  profile: LearnerProfileInput | undefined,
+  corpus: string | undefined,
+): Record<string, number> | undefined {
+  if (!profile) return undefined;
+  const byDomain = profile.conceptMasteryByDomain;
+  const mastery = byDomain ? byDomain[corpus ?? ''] : profile.conceptMastery;
+  const confidence = byDomain
+    ? profile.conceptConfidenceByDomain?.[corpus ?? '']
+    : profile.conceptConfidence;
+  const trusted = keysFromProfile(mastery, confidence);
+  if (trusted.size === 0) return undefined;
+  return Object.fromEntries(Object.entries(mastery ?? {}).filter(([k]) => trusted.has(k)));
 }
 
 /**

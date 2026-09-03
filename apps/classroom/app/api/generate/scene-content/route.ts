@@ -72,6 +72,7 @@ import {
   excerptDifficultyCap,
   excerptCodeLineCap,
   beginnerCodeFormOnly,
+  masteryForCorpus,
 } from '@/lib/generation/learner-profile';
 import { sceneConceptsFromChunks } from '@/lib/evidence/scene-concepts';
 import { sortDocumentImagesForVision } from '@/lib/document/bundle';
@@ -231,7 +232,10 @@ export async function POST(req: NextRequest) {
         // 顶上（见 fetchEvidence）。
         corpus,
         // 掌握度触发 outer-fringe 选段：已会概念的块被引擎跳过（带理由）。
-        requirements?.learnerProfile?.conceptMastery,
+        // 走 `masteryForCorpus`：只送本语料库那一格、且估计值与置信度都够的概念。
+        // 原来直接送扁平的 `conceptMastery`，跨域同名概念会把别的领域的历史
+        // 算成这门课的已掌握，而且蒙对一次就足以让整块教材被跳过。
+        masteryForCorpus(requirements?.learnerProfile, corpus),
         onBridgeFailure,
         // 摘录难度跟姿态档走——超档摘录会把 L1 讲义整段拖硬（2A 纯净测病根）。
         requirements?.learnerProfile

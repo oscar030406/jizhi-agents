@@ -883,11 +883,18 @@ function WhyThisCourse({
   profile: LearnerProfileFields;
   course: CourseData | null;
 }) {
+  // 按掌握度跳过的教材：屏数汇总，理由取第一条命中的（引擎原话，这里只做概念名人话化）。
+  const skips = (course?.scenes ?? []).flatMap((s) =>
+    s.grounding?.skipped ? [s.grounding.skipped] : [],
+  );
   const rows = whyThisCourse({
     profile,
     bp,
     weakConcepts: bp.weak_concepts.map(conceptLabel),
     courseName: course?.stage.name,
+    ...(skips.length > 0
+      ? { skippedEvidence: { scenes: skips.length, reason: skips[0].reason } }
+      : {}),
     humanize,
   });
   if (rows.length === 0) {

@@ -172,6 +172,12 @@ export type AppScene = DslScene<Action, SceneContent> & {
     placements: import('@/lib/generation/evidence-grounding').ExcerptPlacement[];
     /** 生成时挂上的证据条数（`EvidenceBundle` 给了几条候选）。 */
     candidates?: number;
+    /**
+     * 按学习者掌握度整块跳过的教材（引擎 outer-fringe 选段）。没跳过就不写。
+     * 只留条数与第一条理由：学情报告要凭它说「这段没给你重讲」，
+     * 全量理由在生成时的车间面板里（`ScenePipelineMeta.evidence`）。
+     */
+    skipped?: { count: number; reason: string };
   };
   /**
    * 这一页讲的是哪个知识点——**生成时**从检索到的教材块的 `concept_tags` 算出来

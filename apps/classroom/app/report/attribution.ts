@@ -16,7 +16,11 @@
 import type { AttributedDifference } from '@/app/compare/report';
 import { trimStop } from '@/app/compare/report';
 import { TIER_TEXT, NO_BLUEPRINT } from '@/components/generation/profile-impact-preview';
-import { corpusOf, presentationTier, type LearnerBlueprint } from '@/lib/generation/learner-profile';
+import {
+  corpusOf,
+  presentationTier,
+  type LearnerBlueprint,
+} from '@/lib/generation/learner-profile';
 import { domainLabel } from '@/lib/knowledge/domain-labels';
 import type { LearnerProfileFields } from '@/lib/types/generation';
 
@@ -34,7 +38,9 @@ export const levelRank = (level: string): number => Math.max(1, LEVELS.indexOf(l
  * 所以落在档间时按区间写。
  */
 export function levelText(rank: number): string {
-  return Number.isInteger(rank) ? `第 ${rank} 档` : `第 ${Math.floor(rank)}–${Math.ceil(rank)} 档之间`;
+  return Number.isInteger(rank)
+    ? `第 ${rank} 档`
+    : `第 ${Math.floor(rank)}–${Math.ceil(rank)} 档之间`;
 }
 
 /** 一串引擎档位（如测验难度带）转人话：`L1/L2` → `第 1–2 档`。 */
@@ -110,6 +116,11 @@ export interface WhyInput {
   /** 这门课的名字；没有课时不传，相关条目自动不出。 */
   courseName?: string;
   /**
+   * 按掌握度整块跳过的教材（`Scene.grounding.skipped` 汇总）。一屏都没跳就不传，
+   * 这一条自动不出——与本模块其余条目同一条纪律：字段缺就不写。
+   */
+  skippedEvidence?: { scenes: number; reason: string };
+  /**
    * 引擎自由文本的人话化钩子（页面传 `humanizeEngineText` + 它那份概念词表）。
    * 不传就原样出——纯逻辑单测不需要词表。
    */
@@ -121,6 +132,7 @@ export function whyThisCourse({
   bp,
   weakConcepts,
   courseName,
+  skippedEvidence,
   humanize = (s) => s,
 }: WhyInput): AttributedDifference[] {
   const out: AttributedDifference[] = [];
@@ -139,7 +151,9 @@ export function whyThisCourse({
     because: [
       typeof prog === 'number' ? `编程自评 ${prog}/4` : '',
       typeof profile.agent_level === 'number' ? `Agent 自评 ${profile.agent_level}/4` : '',
-      typeof profile.engineering_level === 'number' ? `工程自评 ${profile.engineering_level}/4` : '',
+      typeof profile.engineering_level === 'number'
+        ? `工程自评 ${profile.engineering_level}/4`
+        : '',
       recRank ? `学情诊断给的推荐难度${levelText(recRank)}` : '',
     ].filter(Boolean),
   });
@@ -167,6 +181,19 @@ export function whyThisCourse({
         `${weakConcepts.slice(0, 4).join('、')} 这 ${weakConcepts.length} 个概念的掌握度不到线，` +
         `${courseName ? `「${courseName}」` : '这门课'}按它们的优先级插了补基础的小节。`,
       because: [`学情诊断标记的薄弱概念 ${weakConcepts.length} 个`],
+    });
+  }
+
+  // 3.5) 已掌握的整块教材被跳过 ← 逐概念掌握度
+  //      与上一条正好相反的一面：不到线的补，到线的不重讲。理由是引擎原话
+  //      （`personalize_service.evidence_retrieve_api` 的 fringe 选段），不在这里改写。
+  if (skippedEvidence) {
+    out.push({
+      dimension: '已掌握内容不再重讲',
+      observation:
+        `有 ${skippedEvidence.scenes} 屏跳过了你已经掌握的教材段落：` +
+        `${trimStop(humanize(skippedEvidence.reason))}。`,
+      because: ['你的逐概念掌握度（估计值与置信度都够才算数）'],
     });
   }
 
@@ -211,9 +238,10 @@ export function whyThisCourse({
     out.push({
       dimension: '测验难度',
       observation: `测验题落在${bandText}。`,
-      because: [`学情诊断给的测验难度带`, typeof prog === 'number' ? `编程自评 ${prog}/4` : ''].filter(
-        Boolean,
-      ),
+      because: [
+        `学情诊断给的测验难度带`,
+        typeof prog === 'number' ? `编程自评 ${prog}/4` : '',
+      ].filter(Boolean),
     });
   }
 

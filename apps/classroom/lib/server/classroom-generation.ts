@@ -40,7 +40,6 @@ import {
   evidenceForJudge,
   excerptDirective,
   injectExcerpts,
-  type ExcerptPlacement,
   type EvidenceBundle,
   type EvidenceChunk,
 } from '@/lib/generation/evidence-grounding';
@@ -50,6 +49,7 @@ import {
   blueprintDirective,
   excerptDifficultyCap,
   excerptCodeLineCap,
+  masteryForCorpus,
   presentationTier,
 } from '@/lib/generation/learner-profile';
 import {
@@ -92,6 +92,8 @@ import {
 import { readDomainRegistry } from '@/lib/server/domain-registry';
 
 const log = createLogger('Classroom');
+
+type SceneGrounding = NonNullable<Scene['grounding']>;
 
 export interface GenerateClassroomInput {
   requirement: string;
@@ -502,9 +504,13 @@ async function generateClassroomInner(
         const probe = await fetchEvidence(
           `${title} ${outline.title} ${outline.description ?? ''}`.trim(),
           effectiveCorpus,
+          // 预检看到的必须就是生成时会看到的，掌握度也一样。掌握度为空时是 undefined，
+          // 与改动之前逐字相同；非空时引擎保底留最后一块，可行性判定不会因跳过翻面。
+          masteryForCorpus(requirements.learnerProfile, effectiveCorpus),
           undefined,
-          undefined,
-          requirements.learnerProfile ? excerptDifficultyCap(requirements.learnerProfile) : undefined,
+          requirements.learnerProfile
+            ? excerptDifficultyCap(requirements.learnerProfile)
+            : undefined,
           requirements.learnerProfile ? excerptCodeLineCap(requirements.learnerProfile) : undefined,
         );
         // 桥不可达/未配置按覆盖处理（不拦车）；只有引擎明确回「空」才算未覆盖。
@@ -660,7 +666,7 @@ async function generateClassroomInner(
     content: NonNullable<Awaited<ReturnType<typeof generateSceneContent>>>;
     sceneEvidence: EvidenceBundle | null;
     sceneCorpus: string | undefined;
-    grounding: { placements: ExcerptPlacement[]; candidates?: number } | undefined;
+    grounding: SceneGrounding | undefined;
   };
   // 每屏一个槽位：生产者（串行的内容生成循环）填，消费者（落盘循环）从第一个开始等。
   // 两者**同时跑**——这是首屏时间的最后一道坎。
@@ -978,7 +984,8 @@ async function generateClassroomInner(
         await fetchEvidence(
           `${courseTitle ?? ''} ${safeOutline.title} ${safeOutline.description ?? ''}`.trim(),
           sceneCorpus,
-          undefined,
+          // 已掌握的整块教材由引擎跳过并回传理由（selection_mode=fringe）。
+          masteryForCorpus(requirements.learnerProfile, sceneCorpus),
           undefined,
           // 摘录难度跟姿态档走（2A 纯净测 beginner 44.4% 病根修复）
           requirements.learnerProfile
@@ -1082,13 +1089,19 @@ async function generateClassroomInner(
       // 摘录占位符 → 教材原文，机械替换（位置模型排、内容机器贴——模型手抄必漂移）。
       // 客户端主链在 scene-content 路由里做这一步；批量路径此前漏了，落盘的课正文里
       // 直接露出 {{摘录:xxx}} 原样占位符。usedExcerpts 跨场景去重，同一段教材不重复贴。
-      let grounding: { placements: ExcerptPlacement[]; candidates?: number } | undefined;
+      // 掌握度跳过：跳了几块、第一条理由，跟着资源落盘。**与拼装模式无关**——
+      // 拼装关掉时依然要留痕，否则学情报告没法说「这段没给你重讲」。
+      const skipped = sceneEvidence?.skipped?.length
+        ? { count: sceneEvidence.skipped.length, reason: sceneEvidence.skipped[0].reason }
+        : undefined;
+      let grounding: SceneGrounding | undefined = skipped ? { placements: [], skipped } : undefined;
       if (assemblyMode && sceneEvidence) {
         const stats = await injectExcerpts(content, sceneEvidence, usedExcerpts);
         // 依据子盒落盘：贴了哪几条教材出处，跟着资源走。判官跑不跑都在。
         grounding = {
           placements: stats.placements,
           candidates: sceneEvidence.chunks.length,
+          ...(skipped ? { skipped } : {}),
         };
         if (Object.values(stats).some((n) => typeof n === 'number' && n > 0)) {
           log.info(
@@ -1324,7 +1337,10 @@ async function generateClassroomInner(
                 evidence: courseEvidenceText,
                 evidenceCount: chunks.length,
                 ...(stage.origin?.corpus ? { corpus: stage.origin.corpus } : {}),
-                sources: chunks.map((chunk) => ({ source_id: chunk.source_id, title: chunk.title })),
+                sources: chunks.map((chunk) => ({
+                  source_id: chunk.source_id,
+                  title: chunk.title,
+                })),
               }
             : {}),
         });
@@ -1357,7 +1373,10 @@ async function generateClassroomInner(
             ? {
                 evidence: courseEvidenceText!,
                 evidenceCount: chunks.length,
-                sources: chunks.map((chunk) => ({ source_id: chunk.source_id, title: chunk.title })),
+                sources: chunks.map((chunk) => ({
+                  source_id: chunk.source_id,
+                  title: chunk.title,
+                })),
                 ...(stage.origin?.corpus ? { corpus: stage.origin.corpus } : {}),
               }
             : { evidenceCount: 0 }),
