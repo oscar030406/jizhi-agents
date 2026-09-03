@@ -33,7 +33,7 @@ vi.mock('@/lib/store', () => ({
     select({ scenes: mocks.scenes }),
 }));
 vi.mock('@/components/skills/practice-projects', () => ({
-  licenseNote: (project: PracticeProject) => `许可证 ${project.license ?? '未标注'}`,
+  licenseNote: () => '许可证 Apache-2.0',
   usePublishedPractice: (corpus: string | null) => {
     mocks.hookCalls.push(corpus);
     return corpus
