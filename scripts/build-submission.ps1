@@ -1,4 +1,4 @@
-<#
+﻿<#
   作品提交包装配器（赛题「作品提交形式」三件套）。
 
   每次提交前重跑本脚本，不手工拼包——手工每次都会漏。
@@ -67,13 +67,7 @@ elseif (-not $SkipVideoCheck) {
 # ---- ② 软件模块 --------------------------------------------------------------
 $mod = Join-Path $stage '02-软件模块'
 New-Item -ItemType Directory -Force -Path $mod | Out-Null
-@"
-# 源代码与线上实例
-
-- 开源仓库：https://github.com/oscar030406/jizhi-agents
-- 线上实例：https://jizhi.chenmingkun.cn （未登录即可访问示例课程与审核记录）
-- 知识库数据包（教材语料）因版权按书单登记制发放，仓库 README 有说明。
-"@ | Out-File (Join-Path $mod '源代码与在线地址.md') -Encoding utf8
+Copy-Item (Join-Path $defense 'source-and-live.md') (Join-Path $mod '源代码与在线地址.md')
 Copy-Item (Join-Path $defense 'deployment.md') (Join-Path $mod '部署说明.md')
 Copy-Item (Join-Path $defense 'unit-tests.md') (Join-Path $mod '单元测试用例说明.md')
 
