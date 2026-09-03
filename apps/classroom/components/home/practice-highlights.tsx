@@ -112,8 +112,8 @@ export function PracticeHighlights({
         <>
           <div className="mt-2 flex items-start justify-between gap-6">
             <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
-              这些项目由引擎从真实开源仓库中检索生成，并经管理者逐条审核发布。每项都写清操作步骤、
-              验收标准和对口课程。
+              这些项目是引擎从 GitHub 上真实的仓库里搜来、管理者逐条审过才发布的。每张卡写清步骤、
+              做到什么算完成、对口哪几门课，仓库用什么许可证。
             </p>
             <img
               src="/illustrations/ill-path.png"
@@ -146,12 +146,12 @@ export function PracticeHighlights({
               {/* 引擎给的原因原样上屏，不改写：它知道缺的到底是什么。 */}
               <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{state.reason}</p>
               <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                这一区放的是引擎从 GitHub 实时搜索、管理者逐条审核后发布的真实开源项目：
-                每张卡写清操作步骤、做到什么算完成、对口哪几门课，以及仓库的许可证。
-                这里不摆示例卡，也不拿别的领域的项目顶上——凑数的项目学习者做不下去。
+                这一区放的是引擎从 GitHub 搜来、管理者逐条审过才发布的真实项目：每张卡写清步骤、
+                做到什么算完成、对口哪几门课、仓库用什么许可证。没有就空着，不摆示例，
+                也不拿别的领域的项目顶上。
                 {state.kind === 'missing'
-                  ? ' 现在可以先按上面的课程墙逐门学，理论部分不依赖这一区。'
-                  : ' 刷新页面可以重试；反复取不到就是实操服务暂时不可用。'}
+                  ? ' 眼下可以先按上面的课程墙逐门学，理论部分不依赖这一区。'
+                  : ' 刷新可以重试；反复取不到就是实操服务暂时不可用。'}
               </p>
             </>
           )}

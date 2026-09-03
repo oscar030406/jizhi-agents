@@ -17,7 +17,7 @@ export function DemoStrip() {
       data-tour="demo-strip"
       className="flex h-8 w-full shrink-0 items-center justify-center gap-2 bg-yellow-soft px-3 text-xs text-foreground/80"
     >
-      <span>演示账号，多人共用，请不要填写真实信息</span>
+      <span>你现在用的是演示账号，多人共用，别填真实信息</span>
       <span aria-hidden>·</span>
       <button
         type="button"

@@ -406,8 +406,8 @@ function ProfileEffect({ path, courses }: { path: CoursePath; courses: Classroom
       {contrast ? (
         <>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            教材是同一批，阶次也是同一条路径；变的是讲解档和铺开的场景数。下面这两门课都落在 「
-            {conceptLabel(contrast.concept)}」上，是两份不同画像各自生成的：
+            教材同一批，路径同一条，变的是讲解档和铺开的场景数。下面两门课都落在「
+            {conceptLabel(contrast.concept)}」上，是两份画像各自生成的：
           </p>
           <ul className="mt-3 space-y-2 text-sm">
             {[contrast.low, contrast.high].map((row) => (
@@ -429,16 +429,15 @@ function ProfileEffect({ path, courses }: { path: CoursePath; courses: Classroom
             ))}
           </ul>
           <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-            两门课都进得去，点开就能对比同一个概念被讲成什么样。登录后填自己的画像，
-            再发起生成的课按同一套规则定档。
+            两门都能进，点开对比同一个概念被讲成什么样。登录后填自己的画像，生成的课按同一套规则定档。
           </p>
         </>
       ) : (
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
           画像会记{allFields.length ? profileFieldNames(allFields) : '学历档与五维自评'}，
-          用来决定讲解档与铺开的场景数。当前已发布的课里还没有「同一个概念、两份画像」的成对
-          样本，所以这里不摆对照——凑一对无关的课看不出画像改了什么。登录后按自己的画像生成
-          一门，报告页会逐条列出这门课为什么长成这样。
+          用来定讲解档和铺开的场景数。已发布的课里还没有「同一个概念、两份画像」的成对样本，
+          所以这里先不摆对照，凑两门无关的课看不出画像改了什么。登录后按自己的画像生成一门，
+          报告页会逐条写这门课为什么长成这样。
         </p>
       )}
     </div>
@@ -469,9 +468,8 @@ function CourseWallByStage({
   return (
     <div className="mt-5">
       <p className="text-xs leading-relaxed text-muted-foreground">
-        阶次来自知识库的概念前置图（{path.conceptCount} 个概念、{path.edgeCount} 条前置边）现算的
-        拓扑分层，不是人工排的；同一阶内的课没有先后。每门课挂在哪一阶，由它的场景实际引用了
-        哪些教材段落投票得出。
+        阶次来自知识库的概念前置图（{path.conceptCount} 个概念、{path.edgeCount} 条前置边）现算出来的分层，
+        不是人排的；同一阶内没有先后。每门课挂在哪一阶，看它的场景实际引用了哪些教材段落。
       </p>
       <ProfileEffect path={path} courses={courses} />
       {path.stages.map((stage) => {
@@ -496,8 +494,7 @@ function CourseWallByStage({
             ) : (
               /* 空阶不删。删掉它，路径就从 1、2、3、4 变成 1、2、3，看不出这一阶存在但还没人开课。 */
               <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
-                这一阶的概念已经排进路径，但还没有已发布的课。登录后可以按其中任一概念发起生成，
-                生成的课通过审核后会落在这一阶。
+                这一阶的概念排进了路径，课还没有。登录后按其中任一概念发起生成，过了审核就会落在这里。
               </p>
             )}
           </section>
@@ -513,8 +510,8 @@ function CourseWallByStage({
             </span>
           </div>
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-            多数是引用的教材段落上没有概念标签，或引用落在本库路径之外的概念上。
-            它们照样是已审核发布的课，只是这一版排不出阶次，所以摆在最后而不是藏起来。
+            这些课引用的教材段落没有概念标签，或者落在本库路径之外。它们同样审核发布过，
+            只是这一版排不出阶次，所以放在最后，没有藏。
           </p>
           {/* 这里不出概念角标：这些课要么没概念，要么落在本库路径之外的概念上
               （比如反推表把「大模型上下文与 KV 缓存」判成了 embodied 域的概念）。
