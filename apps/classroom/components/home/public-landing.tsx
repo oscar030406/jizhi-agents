@@ -192,7 +192,64 @@ function AuditBadges({ audit }: { audit: NonNullable<ClassroomSummary['audit']> 
   );
 }
 
-/** 课程墙的一组卡（模块内一组、扩展域一组，卡面完全一样）。 */
+/**
+ * 同题折叠：标题相同的课只露一张卡，其余收起来。
+ *
+ * 课程墙上「RAG 如何减少幻觉」有 5 门、「注意力机制计算详解」有 5 门——它们是同一句
+ * 需求在不同时间、不同画像下各生成一次的真结果，一门都不该删，但一眼看去像刷屏。
+ * 所以只在展示层折，**数据一条不动**。
+ *
+ * 代表卡取审核打回最少、场景数最多的那门：打回少说明这一版审下来问题最少，
+ * 场景多说明它铺得最开。没有审核账单的课排最后——「没审过」不是「零打回」。
+ */
+export function groupSameTitle(
+  courses: ClassroomSummary[],
+): Array<{ rep: ClassroomSummary; others: ClassroomSummary[] }> {
+  const groups = new Map<string, ClassroomSummary[]>();
+  for (const course of courses) {
+    const key = course.title.trim();
+    const bucket = groups.get(key);
+    if (bucket) bucket.push(course);
+    else groups.set(key, [course]);
+  }
+  return [...groups.values()].map((rows) => {
+    const sorted = [...rows].sort(
+      (a, b) =>
+        (a.audit?.flagged ?? Number.MAX_SAFE_INTEGER) -
+          (b.audit?.flagged ?? Number.MAX_SAFE_INTEGER) || b.sceneCount - a.sceneCount,
+    );
+    return { rep: sorted[0], others: sorted.slice(1) };
+  });
+}
+
+/**
+ * 首屏输入框下那三个示例 chip。
+ *
+ * 原来是 `courses.slice(0, 3)`——课程墙按时间排，最新三门恰好是同一句需求生成的
+ * 三门「RAG 如何减少幻觉」，三个 chip 一模一样。这里先按同题折叠取代表，
+ * 再尽量让三门分属不同阶次；阶次没取到就只保证标题不重复。
+ */
+export function pickSampleChips(
+  courses: ClassroomSummary[],
+  stages?: CoursePath['stages'],
+  n = 3,
+): ClassroomSummary[] {
+  const reps = groupSameTitle(courses).map((group) => group.rep);
+  if (!stages?.length) return reps.slice(0, n);
+  const stageOf = new Map<string, number>();
+  for (const stage of stages) for (const id of stage.courseIds) stageOf.set(id, stage.index);
+  const usedStages = new Set<number>();
+  const spread = reps.filter((course) => {
+    const index = stageOf.get(course.id);
+    if (index === undefined || usedStages.has(index)) return false;
+    usedStages.add(index);
+    return true;
+  });
+  // 阶次不够摊到 n 个时，用剩下的代表卡补齐（它们标题仍然互不相同）
+  return [...spread, ...reps.filter((course) => !spread.includes(course))].slice(0, n);
+}
+
+/** 课程墙的一组卡（模块内一组、扩展域一组，卡面完全一样）。同题的折进代表卡。 */
 function CourseGrid({
   courses,
   practiceProjects,
@@ -203,52 +260,72 @@ function CourseGrid({
   /** courseId → 这门课的生成期摘要。取其中的主概念做角标；没有就不出。 */
   conceptOf?: CoursePath['courses'];
 }) {
+  // 展开状态按代表卡的 id 记；折叠是展示层的事，不回写任何数据。
+  const [openIds, setOpenIds] = useState<string[]>([]);
+  const groups = groupSameTitle(courses);
   return (
     <ul className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      {courses.map((course) => {
-        const linkedProjects = projectsForCourse(practiceProjects, course.id);
-        return (
-          <li key={course.id}>
-            <Link
-              href={`/classroom/${course.id}`}
-              className={cn(
-                CARD_RECIPE,
-                'group block overflow-hidden transition-[filter,border-color,transform] hover:-translate-y-1',
-              )}
-            >
-              {/* 生成式封面（§4.4）：hover 微缩放给「可进入」的物理暗示。
+      {groups.flatMap(({ rep, others }) => {
+        const open = openIds.includes(rep.id);
+        return (open ? [rep, ...others] : [rep]).map((course) => {
+          const linkedProjects = projectsForCourse(practiceProjects, course.id);
+          return (
+            <li key={course.id}>
+              <Link
+                href={`/classroom/${course.id}`}
+                className={cn(
+                  CARD_RECIPE,
+                  'group block overflow-hidden transition-[filter,border-color,transform] hover:-translate-y-1',
+                )}
+              >
+                {/* 生成式封面（§4.4）：hover 微缩放给「可进入」的物理暗示。
                 saturate 提一档：封面的粉彩字母在纯白基底上显灰（农家感来源之一）。 */}
-              <div className="overflow-hidden saturate-[1.3]">
-                <GenerativeCover
-                  name={course.title}
-                  className="h-24 transition-transform duration-slow group-hover:scale-105"
-                />
-              </div>
-              {/* 卡面留白加大（WO-E1 §2）：p-4→p-5，课名 sm→base */}
-              <div className="p-5">
-                <h3 className="line-clamp-2 text-base font-semibold transition-colors group-hover:text-primary">
-                  {course.title}
-                </h3>
-                <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                  <span>{course.sceneCount} 个场景</span>
-                  {/* 主概念取自这门课场景实际引用的教材块标签，与阶次同一个判据。 */}
-                  {conceptOf?.[course.id]?.concept && (
-                    <span className="rounded-full bg-muted px-2 py-0.5 text-foreground/80">
-                      {conceptLabel(conceptOf[course.id].concept!)}
-                    </span>
-                  )}
-                  {/* 课程边只由当前已发布项目的 courseIds 反查，不在课程数据里落第二份。 */}
-                  {linkedProjects.length > 0 && (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-green-soft px-2 py-0.5 text-foreground/80">
-                      <Hammer className="size-3" aria-hidden />配 {linkedProjects.length} 个实操
-                    </span>
-                  )}
-                </p>
-                {course.audit && <AuditBadges audit={course.audit} />}
-              </div>
-            </Link>
-          </li>
-        );
+                <div className="overflow-hidden saturate-[1.3]">
+                  <GenerativeCover
+                    name={course.title}
+                    className="h-24 transition-transform duration-slow group-hover:scale-105"
+                  />
+                </div>
+                {/* 卡面留白加大（WO-E1 §2）：p-4→p-5，课名 sm→base */}
+                <div className="p-5">
+                  <h3 className="line-clamp-2 text-base font-semibold transition-colors group-hover:text-primary">
+                    {course.title}
+                  </h3>
+                  <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <span>{course.sceneCount} 个场景</span>
+                    {/* 主概念取自这门课场景实际引用的教材块标签，与阶次同一个判据。 */}
+                    {conceptOf?.[course.id]?.concept && (
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-foreground/80">
+                        {conceptLabel(conceptOf[course.id].concept!)}
+                      </span>
+                    )}
+                    {/* 课程边只由当前已发布项目的 courseIds 反查，不在课程数据里落第二份。 */}
+                    {linkedProjects.length > 0 && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-green-soft px-2 py-0.5 text-foreground/80">
+                        <Hammer className="size-3" aria-hidden />配 {linkedProjects.length} 个实操
+                      </span>
+                    )}
+                  </p>
+                  {course.audit && <AuditBadges audit={course.audit} />}
+                </div>
+              </Link>
+              {course.id === rep.id && others.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setOpenIds((ids) =>
+                      ids.includes(rep.id) ? ids.filter((id) => id !== rep.id) : [...ids, rep.id],
+                    )
+                  }
+                  aria-expanded={open}
+                  className="mt-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring"
+                >
+                  {open ? '收起同题' : `另有 ${others.length} 门同题`}
+                </button>
+              )}
+            </li>
+          );
+        });
       })}
     </ul>
   );
@@ -263,7 +340,10 @@ export interface CoursePath {
   courses: Record<string, { concept: string | null; tier?: string; profileFields?: string[] }>;
 }
 
-type CoursePathState = { kind: 'loading' } | { kind: 'ready'; path: CoursePath } | { kind: 'failed' };
+type CoursePathState =
+  | { kind: 'loading' }
+  | { kind: 'ready'; path: CoursePath }
+  | { kind: 'failed' };
 
 /** 画像字段的中文名。字段清单跟着 `CourseGenerationMeta.profile` 走，认不出就原样出 id。 */
 const PROFILE_FIELD_LABEL: Record<string, string> = {
@@ -319,17 +399,15 @@ export function pickProfileContrast(path: CoursePath, courses: ClassroomSummary[
  */
 function ProfileEffect({ path, courses }: { path: CoursePath; courses: ClassroomSummary[] }) {
   const contrast = pickProfileContrast(path, courses);
-  const allFields = [
-    ...new Set(Object.values(path.courses).flatMap((c) => c.profileFields ?? [])),
-  ];
+  const allFields = [...new Set(Object.values(path.courses).flatMap((c) => c.profileFields ?? []))];
   return (
-    <div className="mt-5 rounded-xl border border-border bg-card p-5">
+    <div data-tour="learner-profile" className="mt-5 rounded-xl border border-border bg-card p-5">
       <p className="text-sm font-medium">画像改变了什么</p>
       {contrast ? (
         <>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            教材是同一批，阶次也是同一条路径；变的是讲解档和铺开的场景数。下面这两门课都落在
-            「{conceptLabel(contrast.concept)}」上，是两份不同画像各自生成的：
+            教材是同一批，阶次也是同一条路径；变的是讲解档和铺开的场景数。下面这两门课都落在 「
+            {conceptLabel(contrast.concept)}」上，是两份不同画像各自生成的：
           </p>
           <ul className="mt-3 space-y-2 text-sm">
             {[contrast.low, contrast.high].map((row) => (
@@ -337,7 +415,10 @@ function ProfileEffect({ path, courses }: { path: CoursePath; courses: Classroom
                 <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-foreground/80">
                   {row.tier} 档
                 </span>
-                <Link href={`/classroom/${row.course.id}`} className="font-medium hover:text-primary">
+                <Link
+                  href={`/classroom/${row.course.id}`}
+                  className="font-medium hover:text-primary"
+                >
                   {row.course.title}
                 </Link>
                 <span className="text-xs text-muted-foreground">
@@ -426,9 +507,7 @@ function CourseWallByStage({
         <section className="mt-8 border-t border-border/60 pt-5">
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
             <h3 className="text-lg font-semibold">未归入路径</h3>
-            <p className="text-sm text-muted-foreground">
-              这些课的场景没有对上本库路径里的概念
-            </p>
+            <p className="text-sm text-muted-foreground">这些课的场景没有对上本库路径里的概念</p>
             <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">
               {ungrouped.length} 门课
             </span>
@@ -621,9 +700,7 @@ export function PublicLanding() {
         <div className={`${CONTAINER} relative flex flex-col items-center pb-24 pt-16 text-center`}>
           {/* hero kicker：朱批色细下划线呼应评点本视觉 */}
           <p className="mb-5 text-sm font-semibold tracking-wide text-annot-zhu">
-            <span className="border-b border-annot-zhu/50 pb-0.5">
-              资料换了，课就换了
-            </span>
+            <span className="border-b border-annot-zhu/50 pb-0.5">资料换了，课就换了</span>
           </p>
           {/* 68px：全幅宽下最长一行「一句需求，生成一门」九个字 612px，容器内一行放下。
               中文笔画密，不追英文站 88px 的量级，68 是可读与气势的平衡点。 */}
@@ -695,7 +772,10 @@ export function PublicLanding() {
             {courses.length > 0 && (
               <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5 text-xs">
                 <span className="text-muted-foreground">或者直接看已发布课程：</span>
-                {courses.slice(0, 3).map((course) => (
+                {pickSampleChips(
+                  courses,
+                  pathState.kind === 'ready' ? pathState.path.stages : undefined,
+                ).map((course) => (
                   <Link
                     key={course.id}
                     href={`/classroom/${course.id}`}
