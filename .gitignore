@@ -59,3 +59,6 @@ apps/classroom/assets/
 # 对外仓库保留的两份文档（放在末尾，压过上面的 /docs/* 与 *.pdf）
 !/docs/技术实现文档.pdf
 !/docs/部署说明.md
+
+# 根目录误存的录屏（录屏应放 docs/06-defense/video/raw/）
+/*.mp4
