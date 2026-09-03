@@ -22,6 +22,13 @@ vi.mock('@/lib/knowledge/account-profile', () => ({
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+// jsdom 没有 ResizeObserver，概念图用的 @xyflow/react 一挂载就要它。图的排版本身
+// 在 concept-graph-layout.test.ts 里单测，这里只要它别把整棵树炸掉。
+(globalThis as Record<string, unknown>).ResizeObserver = class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+};
 
 const { DomainLearningPath } = await import('@/components/path/domain-learning-path');
 
@@ -120,6 +127,7 @@ describe('/path effective domain', () => {
           });
         }
         if (url === '/api/course-domains') return ok({});
+        if (url.startsWith('/api/course-path/')) return ok({ courses: {} });
         throw new Error(`unexpected ${url}`);
       }),
     );
@@ -130,8 +138,10 @@ describe('/path effective domain', () => {
     expect(host.textContent).not.toContain('不应出现的手工路径');
     expect(host.textContent).toContain('这条路径不是人工排的');
     expect(host.textContent).toContain('我的当前路线');
-    expect(host.textContent).toContain('模块一 · 大模型基础');
     expect(host.textContent).toContain('当前推荐：线性代数核心三要素');
+    // 阶段卡没了，结构改由概念图承担：节点标签与左侧统计都要在。
+    expect(host.textContent).toContain('节点总数');
+    expect(host.textContent).toContain('Python 零基础第一课');
     expect(seen).toContain('/api/domain-path/ai');
   });
 
@@ -165,6 +175,7 @@ describe('/path effective domain', () => {
           });
         }
         if (url === '/api/course-domains') return ok({});
+        if (url.startsWith('/api/course-path/')) return ok({ courses: {} });
         throw new Error(`unexpected ${url}`);
       }),
     );
@@ -253,6 +264,7 @@ describe('/path effective domain', () => {
           });
         }
         if (url === '/api/course-domains') return ok({});
+        if (url.startsWith('/api/course-path/')) return ok({ courses: {} });
         throw new Error(`unexpected ${url}`);
       }),
     );
@@ -262,9 +274,11 @@ describe('/path effective domain', () => {
     await flush();
 
     expect(host.textContent).toContain('这是当前账户自己的路线');
-    expect(host.textContent).toContain('PLC 基础已掌握');
-    expect(host.textContent).toContain('顺序控制当前推荐');
-    expect(host.textContent).toContain('产线联调后续节点');
+    expect(host.textContent).toContain('当前推荐：顺序控制');
+    expect(host.textContent).toContain('已掌握 1 · 当前推荐 1 · 后续 1');
+    for (const name of ['PLC 基础', '顺序控制', '产线联调']) {
+      expect(host.textContent).toContain(name);
+    }
   });
 
   it('该 corpus 没有同 ID mastery_vector 时明确显示尚无匹配记录', async () => {
@@ -311,6 +325,7 @@ describe('/path effective domain', () => {
           });
         }
         if (url === '/api/course-domains') return ok({});
+        if (url.startsWith('/api/course-path/')) return ok({ courses: {} });
         throw new Error(`unexpected ${url}`);
       }),
     );
@@ -320,7 +335,8 @@ describe('/path effective domain', () => {
     await flush();
 
     expect(host.textContent).toContain('尚无与路径概念 ID 同源的测评记录');
-    expect(host.textContent).toContain('控制基础尚未测评');
-    expect(host.textContent).not.toContain('控制基础已掌握');
+    expect(host.textContent).toContain('还没有同源测评，路线从第 1 阶的推荐概念开始：控制基础');
+    expect(host.textContent).toContain('尚未测评');
+    expect(host.textContent).not.toContain('已掌握 1');
   });
 });

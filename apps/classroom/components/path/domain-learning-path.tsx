@@ -12,24 +12,27 @@
  * 三种终态必须能分辨（这正是本轮要修的病：它们曾被压成同一个「没有路径」）：
  *   - 引擎不可达/报错 → 「学习路径服务暂时不可用」，不冒充「这个域没有路径」；
  *   - `source=none` → 引擎给的 reason 原样上屏（该库没跑过接入流水线之类）；
- *   - 有路径 → 逐阶列概念，命中已生成课的可点进课堂，没课的给造课入口。
+ *   - 有路径 → 画概念前置图（components/path/concept-graph.tsx），掌握度是节点着色。
+ *
+ * 2026-09 改版：原来逐阶列概念卡，没测评过的账户看到的是一屏「尚未测评」，
+ * 库里 66 个概念 51 条前置边一个都看不出来。现在结构上图，掌握度着色，
+ * 概念详情（先修、证据出处、挂的课、造课入口）收进图右侧的面板。
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
-import { AlertTriangle, ArrowRight, Sparkles } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 
 import { loadLearnerProfile } from '@/components/generation/learner-profile-popover';
+import { ConceptGraph, type ConceptGraphNode } from '@/components/path/concept-graph';
 import { DomainPathNotice } from '@/components/path/domain-path-notice';
 import { TrackPractice } from '@/components/path/track-practice';
 import { EmptyState } from '@/components/ui/empty-state';
+import { conceptLabel } from '@/lib/knowledge/concept-labels';
 import { domainLabel } from '@/lib/knowledge/domain-labels';
-import { truncateLabel } from '@/lib/knowledge/domain-registry';
 import { useAccountProfile } from '@/lib/knowledge/account-profile';
 import { useEffectiveDomainContext } from '@/lib/knowledge/use-domain-context';
 import { REQUIREMENT_DRAFT_KEY } from '@/lib/hooks/use-draft-cache';
-import { cn } from '@/lib/utils';
 
 /** 引擎 `/internal/v1/personalize/domain-path/{corpus}` 的返回体（跨工单契约）。 */
 export interface DomainPathConcept {
@@ -37,6 +40,8 @@ export interface DomainPathConcept {
   name: string;
   depth: number;
   prereq?: string[];
+  /** 概念 id 形式的前置（连边用它，`prereq` 是给人看的名字） */
+  prereq_ids?: string[];
   /** 该概念入边的最低置信度；没有入边（入口概念）时为 null */
   confidence?: number | null;
   because?: string | null;
@@ -88,13 +93,6 @@ type State =
   | { kind: 'error'; message: string; detail?: string }
   | { kind: 'ok'; path: DomainPath };
 
-/** 与 app/path/page.tsx 同名常量同一口径：--ring 带 alpha 实测看不见，借 chart-2 顶上。 */
-const FOCUS_RING =
-  'focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-chart-2';
-
-/** 概念名与课程标题的对齐口径：大小写与空格不敏感，其余原样比。 */
-const norm = (s: string) => s.toLowerCase().replace(/\s+/g, '');
-
 export function DomainLearningPath({ children: _children }: { children?: React.ReactNode }) {
   // 指派解析前不能先画 AI children：残留 AI 画像 + 智能制造指派时，那会造成一次可见的错域闪屏。
   const profileState = useAccountProfile(loadLearnerProfile);
@@ -134,6 +132,9 @@ function DomainPathBody({ corpus, contextLabel }: { corpus: string; contextLabel
   // 概念 → 课程的映射用运行时归属（/api/course-domains 现读磁盘），不用构建期快照：
   // 新生成的课不在快照里，会在这一页上隐形（首页域课程卡踩过同一个坑）。
   const [courses, setCourses] = useState<Array<{ id: string; title: string }>>([]);
+  // 课程挂到哪个概念上由 /api/course-path 说（它汇总场景的概念票），不在前端拿标题瞎匹配：
+  // 「概念名是课程标题的子串」这种口径在智能制造那 66 个概念上几乎全不命中。
+  const [conceptOfCourse, setConceptOfCourse] = useState<Record<string, string | null>>({});
 
   useEffect(() => {
     let alive = true;
@@ -188,6 +189,24 @@ function DomainPathBody({ corpus, contextLabel }: { corpus: string; contextLabel
     };
   }, [corpus]);
 
+  useEffect(() => {
+    let alive = true;
+    fetch(`/api/course-path/${encodeURIComponent(corpus)}`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { courses?: Record<string, { concept: string | null }> } | null) => {
+        if (!alive || !data?.courses) return;
+        setConceptOfCourse(
+          Object.fromEntries(Object.entries(data.courses).map(([id, v]) => [id, v.concept])),
+        );
+      })
+      .catch(() => {
+        /* 挂载关系拉不到就是节点上没有课程角标，图本身照常画 */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [corpus]);
+
   // 域名优先用引擎给的 label（域注册清单里的中文名），它没给就走前端那张兜底表。
   // `|| ` 不是 `?? `：老库的 label 会退化成目录名同名的空串/占位，那不是名字。
   // 引擎给的 label 若只是目录名本身（如 ai），不算名字，走登记表的中文名。
@@ -210,6 +229,43 @@ function DomainPathBody({ corpus, contextLabel }: { corpus: string; contextLabel
     },
     [label, router],
   );
+
+  /** 把引擎的阶段结构摊平成图的节点表：中文名、挂的课、掌握度状态在这里合。 */
+  const graphNodes = useMemo<ConceptGraphNode[]>(() => {
+    if (state.kind !== 'ok') return [];
+    const titles = new Map(courses.map((c) => [c.id, c.title]));
+    const attached = new Map<string, Array<{ id: string; title: string }>>();
+    for (const [courseId, concept] of Object.entries(conceptOfCourse)) {
+      if (!concept) continue;
+      const title = titles.get(courseId);
+      if (!title) continue;
+      (attached.get(concept) ?? attached.set(concept, []).get(concept)!).push({
+        id: courseId,
+        title,
+      });
+    }
+    return (state.path.stages ?? []).flatMap((stage) =>
+      stage.concepts.map((concept) => {
+        const id = concept.id ?? concept.name;
+        // 概念表里有中文名就用它（AI 库的 id 是 llm_basics 这种内部代号，不能上屏）；
+        // 表里没有再退回引擎给的 name，最后才是 id 原样——不编名字。
+        const known = conceptLabel(id);
+        return {
+          id,
+          label: known !== id ? known : concept.name || id,
+          stage: stage.index,
+          prereq: concept.prereq_ids ?? concept.prereq ?? [],
+          status: concept.status,
+          mastery: concept.mastery ?? null,
+          confidence: concept.confidence ?? null,
+          because: concept.because ?? null,
+          section: concept.sections?.[0] ?? null,
+          courses: attached.get(id) ?? [],
+        };
+      }),
+    );
+  }, [state, courses, conceptOfCourse]);
+
   return (
     <>
       <h1 className="text-2xl font-semibold tracking-tight">{label} · 学习路径</h1>
@@ -219,9 +275,12 @@ function DomainPathBody({ corpus, contextLabel }: { corpus: string; contextLabel
           拓扑深度分档。同一阶内的概念没有先后，学完一阶再进下一阶。
         </p>
       )}
+      {/* 边数只在图左侧说一次，用真正画出来的那批边。引擎的 edge_count 与逐概念
+          prereq_ids 展开后的条数不是同一个口径（智能制造 51 对 85），同屏印两个数
+          没法解释，留画出来的那个。 */}
       {state.kind === 'ok' && (
         <p className="mt-2 text-xs tabular-nums text-muted-foreground">
-          {state.path.concept_count ?? 0} 个概念 · {state.path.edge_count ?? 0} 条前置边
+          {state.path.concept_count ?? 0} 个概念
           {state.path.run_id ? ' · 接入批次已记录' : ''}
           {state.path.generated_at
             ? ` · ${new Date(state.path.generated_at).toLocaleDateString('zh-CN')} 生成`
@@ -269,29 +328,12 @@ function DomainPathBody({ corpus, contextLabel }: { corpus: string; contextLabel
         </div>
       )}
 
-      {state.kind === 'ok' && Boolean(state.path.stages?.length) && (
-        <PersonalRouteSummary path={state.path} />
+      {state.kind === 'ok' && graphNodes.length > 0 && (
+        <>
+          <PersonalRouteSummary path={state.path} nodes={graphNodes} />
+          <ConceptGraph nodes={graphNodes} onDraft={(node) => draftCourse(node.label)} />
+        </>
       )}
-
-      {state.kind === 'ok' &&
-        (state.path.stages ?? []).map((stage) => (
-          <section key={stage.index} className="mt-10">
-            <div className="flex items-center gap-2">
-              <h2 className="text-xl font-semibold tracking-tight">{stage.title}</h2>
-              <StatusBadge status={stage.status} />
-            </div>
-            <div className="mt-4 grid gap-4 sm:grid-cols-2">
-              {stage.concepts.map((concept) => (
-                <ConceptCard
-                  key={concept.name}
-                  concept={concept}
-                  course={courses.find((c) => norm(c.title).includes(norm(concept.name)))}
-                  onDraft={() => draftCourse(concept.name)}
-                />
-              ))}
-            </div>
-          </section>
-        ))}
 
       <TrackPractice
         corpus={corpus}
@@ -301,157 +343,50 @@ function DomainPathBody({ corpus, contextLabel }: { corpus: string; contextLabel
   );
 }
 
-function ConceptCard({
-  concept,
-  course,
-  onDraft,
+/**
+ * 「我的当前路线」压成一条：四张几乎全空的阶段卡去掉了——没测评过的账户看到四张
+ * 「本阶段尚无同源测评」，读者会以为这一页什么都没有。结构现在由图承担，
+ * 这一条只说与账户有关的那几个数和当前推荐的概念。
+ */
+function PersonalRouteSummary({
+  path,
+  nodes,
 }: {
-  concept: DomainPathConcept;
-  course?: { id: string; title: string };
-  onDraft: () => void;
+  path: DomainPath;
+  nodes: ReadonlyArray<ConceptGraphNode>;
 }) {
-  const prereq = concept.prereq ?? [];
-  const section = concept.sections?.[0];
-  return (
-    <div
-      className={cn(
-        'rounded-xl border bg-card p-4 shadow-card',
-        concept.status === 'current' ? 'border-primary/60 bg-primary/5' : 'border-border',
-      )}
-    >
-      <div className="flex items-center justify-between gap-2">
-        {course ? (
-          <Link
-            href={`/classroom/${course.id}`}
-            className={cn(
-              'group flex min-w-0 items-center gap-2 font-medium hover:text-primary',
-              FOCUS_RING,
-            )}
-          >
-            <span className="min-w-0 truncate">{concept.name}</span>
-            <ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-          </Link>
-        ) : (
-          <p className="min-w-0 truncate font-medium">{concept.name}</p>
-        )}
-        <StatusBadge status={concept.status} />
-      </div>
-      {course && (
-        <p className="mt-1 truncate text-xs text-muted-foreground">已有课程：{course.title}</p>
-      )}
-
-      {prereq.length > 0 && (
-        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-          先修：{prereq.join('、')}
-        </p>
-      )}
-      {section && (
-        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-          证据出处：{truncateLabel(section, 30)}
-        </p>
-      )}
-      {/* 没有置信度分两种：真是入口概念（前置图排的），或这条路径压根不是前置图排的
-          （source=index-tags 时按覆盖块数分档）。后者说「入口概念」是在陈述一个没算过的
-          拓扑事实——引擎在 because 里写了真正的依据，用它。 */}
-      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-        {typeof concept.confidence === 'number'
-          ? `前置判定置信度 ${concept.confidence.toFixed(2)}`
-          : concept.because || '入口概念，没有前置'}
-      </p>
-      {typeof concept.mastery === 'number' && (
-        <p className="mt-1 text-xs tabular-nums text-muted-foreground">
-          当前掌握度 {concept.mastery.toFixed(2)}
-        </p>
-      )}
-
-      {!course && (
-        <button
-          type="button"
-          onClick={onDraft}
-          className={cn(
-            'mt-3 inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs',
-            'transition-colors hover:bg-muted/60 active:bg-muted',
-            FOCUS_RING,
-          )}
-        >
-          <Sparkles className="size-3.5" />
-          按此概念造课
-        </button>
-      )}
-    </div>
-  );
-}
-
-function PersonalRouteSummary({ path }: { path: DomainPath }) {
   const counts = path.personalization?.counts ?? {};
+  const current = nodes.filter((node) => node.status === 'current').map((node) => node.label);
+  const measured = (path.personalization?.matched_mastery ?? 0) > 0;
+  const first = nodes.filter((node) => node.stage === Math.min(...nodes.map((n) => n.stage)));
   return (
     <section
       aria-label="我的当前路线"
-      className="mb-8 rounded-xl border border-primary/30 bg-primary/5 p-4 shadow-card"
+      className="mt-6 rounded-lg border border-primary/30 bg-primary/5 px-4 py-3 text-sm"
     >
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <p className="font-semibold">我的当前路线</p>
-        <p className="text-xs tabular-nums text-muted-foreground">
+        <p className="min-w-0 flex-1 text-muted-foreground">
+          {current.length
+            ? `当前推荐：${current.slice(0, 3).join('、')}`
+            : measured
+              ? '本领域概念均已达标，没有待推进的节点。'
+              : `还没有同源测评，路线从第 ${first[0]?.stage ?? 1} 阶的推荐概念开始：${first
+                  .slice(0, 3)
+                  .map((node) => node.label)
+                  .join('、')}`}
+        </p>
+        <p className="shrink-0 text-xs tabular-nums text-muted-foreground">
           已掌握 {counts.mastered ?? 0} · 当前推荐 {counts.current ?? 0} · 后续 {counts.future ?? 0}{' '}
           · 尚未测评 {counts.unmeasured ?? 0}
         </p>
       </div>
-      <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+      {/* 这句连同引擎的 reason 一起保留：没有测评记录时得说清是「没测过」而不是「没内容」，
+          这也是图上大片灰节点的唯一解释。 */}
+      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
         这是当前账户自己的路线：引擎只用账户级画像与测验掌握度移动游标，不改知识库已有概念和顺序。
-        {path.personalization?.matched_mastery === 0
-          ? (path.personalization.reason ?? '当前尚无与本路径概念 ID 同源的测评记录。')
-          : ''}
+        {measured ? '' : (path.personalization?.reason ?? '')}
       </p>
-      <div className="mt-3 grid gap-2 sm:grid-cols-3">
-        {(path.stages ?? []).map((stage) => {
-          const current = stage.concepts
-            .filter((concept) => concept.status === 'current')
-            .map((concept) => concept.name);
-          return (
-            <div key={stage.index} className="rounded-lg border border-border bg-card px-3 py-2.5">
-              <div className="flex items-center justify-between gap-2">
-                <p className="truncate text-sm font-medium">{stage.title}</p>
-                <StatusBadge status={stage.status} />
-              </div>
-              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                {current.length
-                  ? `当前推荐：${current.slice(0, 3).join('、')}`
-                  : stage.status === 'mastered'
-                    ? '本阶段已掌握'
-                    : stage.status === 'unmeasured'
-                      ? '本阶段尚无同源测评'
-                      : '完成前置内容后进入'}
-              </p>
-            </div>
-          );
-        })}
-      </div>
     </section>
-  );
-}
-
-function StatusBadge({ status }: { status?: PathStatus }) {
-  if (!status) return null;
-  const label =
-    status === 'mastered'
-      ? '已掌握'
-      : status === 'current'
-        ? '当前推荐'
-        : status === 'unmeasured'
-          ? '尚未测评'
-          : '后续节点';
-  return (
-    <span
-      className={cn(
-        'shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium',
-        status === 'mastered'
-          ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-          : status === 'current'
-            ? 'bg-primary/10 text-primary'
-            : 'bg-muted text-muted-foreground',
-      )}
-    >
-      {label}
-    </span>
   );
 }
