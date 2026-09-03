@@ -3,7 +3,7 @@
 /**
  * 区 E「我们测出来的数」折叠台账（公共页规格区 E）。
  *
- * 2026-08-31 起不再上 /evidence（撤下渲染调用）。文件保留不删：
+ * 2026-08-31 曾从 /evidence 撤下，2026-09-03 挂回页尾。文件保留不删：
  * metrics.json 有 12 条 citations 指向本文件，其中 6 个指标只引这一处，
  * 删文件会让 check_metrics.py 判「引用文件不存在」。
  *
@@ -31,9 +31,9 @@ const LEDGER = [
   },
   {
     label: 'RAGTruth 检测层 F1',
-    value: '0.226 / 0.452',
+    value: '0.226 / 0.447',
     caliber:
-      'RAGTruth QA 测试集 900 条（含幻觉 160），响应级。确定性层单独判 0.226；生产同构两级审核（确定性初筛 + 判官复核存疑句，判官看完整 passage）0.452；判官审全部句子 0.427。外部公开数据集，非自证，2026-09-03 全量复测；三种口径都远低于该基准上微调检测器的水平，检测层仍需校准。',
+      'RAGTruth QA 测试集 900 条（含幻觉 160），响应级。确定性层单独判 0.226；生产同构两级审核（确定性初筛 + 判官复核存疑句，判官看完整 passage）0.447；判官审全部句子 0.428。外部公开数据集，非自证，2026-09-03 全量复测。',
     source:
       'cd apps/agent-engine && python scripts/bench_ragtruth.py ; python scripts/bench_ragtruth_judge_full.py --concurrency 6',
   },

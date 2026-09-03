@@ -1,5 +1,6 @@
 # ── 内部工作区（对外仓库不含，原地保留） ──────────────────────────────
 .claude/
+.agents/
 CLAUDE.md
 AGENTS.md
 PLAYBOOK.md
