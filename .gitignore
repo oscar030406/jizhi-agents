@@ -68,3 +68,10 @@ apps/classroom/assets/
 
 # 根目录误存的录屏（录屏应放 docs/06-defense/video/raw/）
 /*.mp4
+
+# 交付打包与仓库整理脚本只在本机用，不进公开仓库
+/scripts/build-submission.ps1
+/scripts/make-package.ps1
+/scripts/publish-repo.ps1
+/scripts/repo_hygiene_scan.py
+/scripts/scan-package-hygiene.py
