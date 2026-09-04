@@ -69,13 +69,19 @@ def speaker_overlays(spans: list[dict], total: float):
         end = min(float(sp["end"]) + 0.3, total)
         if end <= start:
             continue
-        bust = (ImageClip(str(ipath)).resized(height=BUST)
+        # 立绘是带调色板透明的 PNG（rembg 去底后压过色板），直接喂路径会丢透明变黑方块；
+        # 先用 PIL 展成 RGBA 再交给 moviepy，第四通道自动当遮罩。
+        import numpy as np
+        from PIL import Image
+        rgba = np.array(Image.open(ipath).convert("RGBA"))
+        bust = (ImageClip(rgba, transparent=True).resized(height=BUST)
                 .with_start(start).with_duration(end - start)
                 .with_position((W - BUST - 36, H - BUST - 120)))
         tag = (TextClip(font=FONT, text=f"{sp['role']} · {art[1]}", font_size=28,
                         color="white", bg_color="#00000088", margin=(12, 6))
-               .with_start(start).with_duration(end - start)
-               .with_position((W - BUST - 36, H - 108)))
+               .with_start(start).with_duration(end - start))
+        # 名牌右对齐到头像右边缘：名牌比头像宽，左对齐会伸出画面
+        tag = tag.with_position((W - 36 - tag.w, H - 108))
         out += [bust, tag]
     return out
 
