@@ -81,7 +81,9 @@ app.include_router(model_cache_router)
 # 本地开发常起 backend.main:app，而生产 systemd 起的是 app.main:app——
 # 2026-08-16 部署时就因为只挂了前者，线上 404 了一轮。
 from backend.api.intake_routes import router as intake_router  # noqa: E402
+from backend.api.knowledge_graph_routes import router as knowledge_graph_router  # noqa: E402
 from backend.api.practice_scout_routes import router as practice_scout_router  # noqa: E402
 
 app.include_router(intake_router)
 app.include_router(practice_scout_router)
+app.include_router(knowledge_graph_router)

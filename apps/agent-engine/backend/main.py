@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.api.intake_routes import router as intake_router
+from backend.api.knowledge_graph_routes import router as knowledge_graph_router
 from backend.api.practice_scout_routes import router as practice_scout_router
 from backend.api.routes import router
 from backend.integration.personalize_api import router as personalize_router
@@ -40,6 +41,8 @@ app.include_router(personalize_router)
 app.include_router(intake_router)
 # 域级实操项目侦察：GitHub 实搜 + 模型起草 + 管理员确认。挂载点两个 main 都要有。
 app.include_router(practice_scout_router)
+# 知识宇宙：该库的概念/教材/章节/证据块结构图，只读。挂载点同样两个 main 都要有。
+app.include_router(knowledge_graph_router)
 
 if FRONTEND_DIR.exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIR / "assets"), name="assets")
