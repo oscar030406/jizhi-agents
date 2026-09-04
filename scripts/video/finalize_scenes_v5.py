@@ -16,6 +16,10 @@ VIDEO = REPO / "docs" / "06-defense" / "video"
 SCENES = VIDEO / "scenes-v5.json"
 
 SPEEDUPS = {
+    "raw/v5-08-机构与隔离.mp4": [
+        {"start": 17.0, "end": 24.0, "factor": 3},
+        {"start": 31.0, "end": 36.0, "factor": 3},
+    ],
     "raw/v5-06-B反馈与导学.mp4": [
         {"start": 8.0, "end": 70.0, "factor": 1.02},
         {"start": 96.0, "end": 96.0, "factor": 1.02},
@@ -54,6 +58,10 @@ def main() -> int:
                 spec["speedups"] = wins
             else:
                 spec.pop("speedups", None)
+    # 图卡只需盖住口播再留 0.7 秒；片尾原来的 12 秒是给 v3 音频留的
+    for spec in scenes:
+        if spec.get("image") and spec.get("narration"):
+            spec["duration"] = round(max(11.0, duration(VIDEO / spec["narration"]) + 0.7), 1)
     grand = 0.0
     for spec in scenes:
         if spec.get("video") and not (VIDEO / spec["video"]).exists():
