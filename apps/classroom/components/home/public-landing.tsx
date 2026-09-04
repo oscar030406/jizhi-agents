@@ -368,13 +368,17 @@ function CourseGrid({
  * 还没成课的节点。路径上排着但盘上没有的课如实摆一张空卡：不可点、不带审核角标。
  * 删掉它，路径就只剩已经做完的那些，看不出这一阶还差什么。
  */
-function PendingTile({ title, status }: { title: string; status: 'planned' | 'blocked' }) {
+const PENDING_LABEL = {
+  planned: '规划中',
+  blocked: '重生成中',
+  restricted: '机构内课，用演示学习端账号可看',
+} as const;
+
+function PendingTile({ title, status }: { title: string; status: keyof typeof PENDING_LABEL }) {
   return (
     <div className="h-full rounded-xl border border-dashed border-border bg-card/60 p-5">
       <p className="line-clamp-2 text-base font-medium text-muted-foreground">{title}</p>
-      <p className="mt-2 text-xs text-muted-foreground/80">
-        {status === 'blocked' ? '重生成中' : '规划中'}
-      </p>
+      <p className="mt-2 text-xs text-muted-foreground/80">{PENDING_LABEL[status]}</p>
     </div>
   );
 }
@@ -514,7 +518,7 @@ function StageGrid({
             <li key={node.id}>
               <PendingTile
                 title={node.title}
-                status={node.status === 'blocked' ? 'blocked' : 'planned'}
+                status={node.status === 'live' ? 'planned' : node.status}
               />
             </li>
           );

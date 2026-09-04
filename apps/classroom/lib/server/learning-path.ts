@@ -120,7 +120,8 @@ function primaryConcept(scenes: ReadonlyArray<Record<string, unknown>>): string 
 export interface WallNode {
   id: string;
   title: string;
-  status: PathNodeStatus;
+  /** restricted = 课在盘上、已放行，但只对所属机构可见（管理者人工复核放行的课都是这样） */
+  status: PathNodeStatus | 'restricted';
   /** live 才有；planned / blocked 一律 null（被门禁挡下那一版不外发）。 */
   courseId: string | null;
   altCourseIds: string[];
@@ -137,6 +138,8 @@ export interface WallStage {
   courseIds: string[];
   plannedTitles: string[];
   blockedTitles: string[];
+  /** 已放行但只对所属机构可见的课（访客看不到内容，只看到有这么一门） */
+  restrictedTitles: string[];
 }
 
 export interface CuratedPath {
@@ -196,6 +199,13 @@ export async function readCuratedWall(sessionToken?: string): Promise<{
   }
 
   const nodeById = new Map((learningPath.nodes ?? []).map((n) => [n.id, n]));
+  // 盘上有、本会话看不见的 live 课：先查一遍，map 里就不用 await
+  const restricted = new Set<string>();
+  for (const node of learningPath.nodes ?? []) {
+    if (node.status !== 'live' || !node.courseId || visibleInCorpus.has(node.courseId)) continue;
+    const onDisk = await readClassroom(node.courseId).catch(() => null);
+    if (onDisk) restricted.add(node.courseId);
+  }
   const claimed = new Set<string>();
   const stages: WallStage[] = (learningPath.stages ?? []).map((stage, i) => {
     const nodes: WallNode[] = [];
@@ -203,9 +213,15 @@ export async function readCuratedWall(sessionToken?: string): Promise<{
       const node = nodeById.get(nodeId);
       if (!node) continue;
       if (node.status === 'live' && node.courseId) {
-        // 这门课这个会话看不见（机构私有库、没指派给他）就整个节点不出，
-        // 不退化成「规划中」——那会把一门真有的课说成还没做。
-        if (!visibleInCorpus.has(node.courseId)) continue;
+        // 这门课这个会话看不见：课在盘上就说「机构内课」（管理者复核放行的课只对本机构
+        // 开放，访客换演示账号能看），盘上都没有才整个节点不出。不退化成「规划中」——
+        // 那会把一门真有的课说成还没做。
+        if (!visibleInCorpus.has(node.courseId)) {
+          if (restricted.has(node.courseId)) {
+            nodes.push({ id: node.id, title: node.title, status: 'restricted', courseId: null, altCourseIds: [] });
+          }
+          continue;
+        }
         const alts = (node.altCourseIds ?? []).filter((id) => visibleInCorpus.has(id));
         claimed.add(node.courseId);
         for (const alt of alts) claimed.add(alt);
@@ -236,6 +252,7 @@ export async function readCuratedWall(sessionToken?: string): Promise<{
       courseIds: nodes.flatMap((n) => (n.courseId ? [n.courseId, ...n.altCourseIds] : [])),
       plannedTitles: nodes.filter((n) => n.status === 'planned').map((n) => n.title),
       blockedTitles: nodes.filter((n) => n.status === 'blocked').map((n) => n.title),
+      restrictedTitles: nodes.filter((n) => n.status === 'restricted').map((n) => n.title),
     };
   });
 

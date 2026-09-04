@@ -1,6 +1,6 @@
 {
   "version": "2026-09-04",
-  "note": "人工智能应用开发（主库 ai）学习路径的单一真源。首页课程墙、/api/course-path/ai、岗位技能页的「已有课」都从这里读，不再从引擎拓扑阶次现算。结构：stages（五阶，nodeIds 即阶内展示顺序，是排序的唯一真源）+ nodes（stage 字段必须与 stages[].nodeIds 一致，tests 校验）。status：live = 课程墙可见；planned = 还没生成，页面渲成「规划中」，不可点、不计入已生成门数；blocked = 已生成一版但没过屏级审核门禁（blockedCourseId 记着那一版，直链能开，课程墙不列），重生成后改回 live。altCourseIds = 同题重复生成的课，课程墙折叠到主课下。textbookRef 写的是本节取材的教材章节，source_id 前缀可在 knowledge_index.jsonl 复核；不在库内的教材如实标注。jobSkillCourses：「AI Agent 开发工程师」13 项技能各对应哪些节点，岗位技能页据此显示「已有课」。",
+  "note": "人工智能应用开发（主库 ai）学习路径的单一真源。首页课程墙、/api/course-path/ai、岗位技能页的「已有课」都从这里读，不再从引擎拓扑阶次现算。结构：stages（五阶，nodeIds 即阶内展示顺序，是排序的唯一真源）+ nodes（stage 字段必须与 stages[].nodeIds 一致，tests 校验）。status：live = 课程墙可见；planned = 还没生成，页面渲成「规划中」，不可点、不计入已生成门数；blocked = 已生成一版但没过屏级审核门禁（blockedCourseId 记着那一版，直链能开，课程墙不列），重生成后改回 live。altCourseIds = 同题重复生成的课，课程墙折叠到主课下。draftCourseId = 已生成但没过机器门的机构态草稿（归「甲方培训中心」），只作人工复核放行的候选，课程墙与 pathCourseIds 都不收它，判词摘要见 tmp/path-courses/release-review.md。textbookRef 写的是本节取材的教材章节，source_id 前缀可在 knowledge_index.jsonl 复核；不在库内的教材如实标注。jobSkillCourses：「AI Agent 开发工程师」13 项技能各对应哪些节点，岗位技能页据此显示「已有课」。",
   "stages": [
     {
       "id": "foundation",
@@ -144,6 +144,7 @@
       "prereq": ["calculus-gradient"],
       "courseId": null,
       "blockedCourseId": "aXsRqhL8ut",
+      "draftCourseId": "pnWZ_80r31",
       "status": "blocked",
       "requirement": "面向初学者的概率与信息论第一课：概率分布、期望、熵与交叉熵，讲清交叉熵为什么能当分类损失，最后引出语言模型的困惑度",
       "textbookRef": "《动手学深度学习》2.6 概率、3.4 softmax 回归、8.4.4 困惑度。这三节不在库内（库内只有第 6 章卷积）。"
@@ -193,6 +194,7 @@
       "prereq": ["linear-algebra", "llm-intro"],
       "courseId": null,
       "blockedCourseId": "PlmiDG4fkU",
+      "draftCourseId": "kw7h0HvpoA",
       "status": "blocked",
       "requirement": "面向初学者讲文本怎么进模型：分词（BPE 思路）、词表、词嵌入向量与相似度，配一个可运行的小例子",
       "textbookRef": "Happy-LLM 第 1 章 1.4 文本表示的发展历程（hl01s04）"
@@ -386,6 +388,7 @@
       "difficulty": 4,
       "prereq": ["rag-eval"],
       "courseId": null,
+      "draftCourseId": "7ZMd_LcoyE",
       "status": "planned",
       "requirement": "面向搭过 RAG 的学员：关键词检索与向量检索怎么混合，重排模型放在哪一步，GraphRAG 解决什么问题，每种方法给出适用与不适用的场景",
       "textbookRef": "TinyGraphRAG 图检索算法与社区聚类（tu07–tu11）"
@@ -411,6 +414,7 @@
       "prereq": ["llm-intro"],
       "courseId": null,
       "blockedCourseId": "kO-NfL-ZdV",
+      "draftCourseId": "lvq6JGxt4m",
       "status": "blocked",
       "requirement": "面向初学者的提示工程：提示词要素、零样本与少样本、链式思考、自我一致性，每种技巧配一个改前改后的对照",
       "textbookRef": "提示工程指南（pg01–pg10）"
@@ -534,6 +538,7 @@
       "prereq": ["agent-tools"],
       "courseId": null,
       "blockedCourseId": "LnnLswdN1c",
+      "draftCourseId": "2osof7sTSf",
       "status": "blocked",
       "requirement": "面向「AI Agent 开发工程师」岗位：什么任务值得拆给多个智能体，状态图编排怎么定义节点与停止条件，协作失败怎么恢复，配一个三智能体的编排例子",
       "textbookRef": "Hello-Agents 第 6 章 框架开发实践、第 7 章 构建你的 Agent 框架（ha06s05、ha07）"
@@ -559,6 +564,7 @@
       "prereq": ["research-agent"],
       "courseId": null,
       "blockedCourseId": "CO38kedYbT",
+      "draftCourseId": "WU6IU0UPb0",
       "status": "blocked",
       "requirement": "面向「AI Agent 开发工程师」岗位的技能培训课：智能体评测与守卫。任务成功率、轨迹质量、成本各量什么，输入校验、工具权限、输出审核、人工兜底各拦什么，学员为转岗/内训背景，请给出讲解、实操与测验",
       "textbookRef": "Hello-Agents 第 12 章 智能体性能评估（ha12s01）；AgentGuide 评测指标（ag004）"
@@ -571,6 +577,7 @@
       "difficulty": 4,
       "prereq": ["enterprise-platform"],
       "courseId": null,
+      "draftCourseId": "CfPogXNFXz",
       "status": "planned",
       "requirement": "面向「AI Agent 开发工程师」岗位的技能培训课：Agent 安全评测与 AgentOps 运维。提示注入、工具越权、沙箱隔离各怎么防，上线后的监控、回滚与事故复盘怎么做，学员为转岗/内训背景，请给出讲解、实操与测验",
       "textbookRef": "AgentGuide Agent 安全防护、沙箱指南、生产环境实践（ag015、ag011、ag020）"
@@ -583,6 +590,7 @@
       "difficulty": 4,
       "prereq": ["enterprise-platform"],
       "courseId": null,
+      "draftCourseId": "Jwzrb1d9cn",
       "status": "planned",
       "requirement": "面向「AI Agent 开发工程师」岗位的技能培训课：编码 Agent 与 AgentOS 工程实践。编码智能体怎么读仓库、改代码、跑测试，AgentOS 里进程、权限、会话是怎么组织的，学员为转岗/内训背景，请给出讲解、实操与测验",
       "textbookRef": "AgentGuide 生产环境实践与经验教训（ag020、ag010）"
@@ -595,6 +603,7 @@
       "difficulty": 5,
       "prereq": ["agent-eval-guard"],
       "courseId": null,
+      "draftCourseId": "0QxuE6JMXo",
       "status": "planned",
       "requirement": "面向「AI Agent 开发工程师」岗位的技能培训课：Agent Harness Engineering（运行时脚手架工程）。Harness 和模型各管什么，轨迹采集、评测回放、回归测试怎么搭，学员为转岗/内训背景，请给出讲解、实操与测验",
       "textbookRef": "AgentGuide Agent Harness Engineering、评测 Harness 指南（ag014、ag012）"

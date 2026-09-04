@@ -7,7 +7,11 @@
  *
  * 用法（生产在服务器上 nohup 跑）：
  *   node scripts/generate-path-courses.mjs --base http://127.0.0.1:3210 \
- *     --nodes prob-entropy,tokenization-embedding --concurrency 2
+ *     --nodes prob-entropy,tokenization-embedding --concurrency 2 --as-manager
+ *
+ * `--as-manager` 用演示管理者会话建单，草稿因此带上 ownerOrgId（甲方培训中心）。
+ * 这一格决定草稿能不能走仲裁三出口的第三条「人工复核放行」——没有它，机器门一挡，
+ * 这门课就没有第二条路。
  */
 
 import fs from 'node:fs';
@@ -44,7 +48,34 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const stamp = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
 const log = (...a) => console.log(stamp(), ...a);
 
-/** 门禁复核：课在 /api/classroom 里出现 = 过了 decideCourseLearnerRelease。 */
+/**
+ * 演示管理者会话。**不建单则草稿没有 ownerOrgId，就走不了仲裁三出口的第三条**
+ * （人工复核放行只认课程所属机构的所有者，见 app/api/classroom/release/route.ts
+ * 的 courseVisibleToOrg）。`/api/auth/demo` 按角色解析成固定演示账号、不收密码，
+ * 与管理端页面登录同一条路。
+ */
+let COOKIE = '';
+async function loginManager() {
+  // 参数解析出来的键是原样的 `as-manager`，不是驼峰——写错了不会报错，只会静默跳过登录，
+  // 草稿照样生成但没有 ownerOrgId，人工放行那条路直接没了。所以这里断言而不是 return。
+  if (!args['as-manager']) return;
+  const res = await fetch(`${BASE}/api/auth/demo`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role: 'manager' }),
+  });
+  if (!res.ok) throw new Error(`演示管理者登录失败 HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  COOKIE = res.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
+  const who = await res.json();
+  log(`已登录管理者会话：${who?.account?.username ?? '?'}（role=${who?.account?.role ?? '?'}）`);
+}
+const auth = () => (COOKIE ? { Cookie: COOKIE } : {});
+
+/**
+ * 门禁复核：课在**匿名** /api/classroom 里出现 = 过了 decideCourseLearnerRelease。
+ * 这里故意不带会话——带上管理者 cookie 会连本机构的草稿一起列出来，那问的就不是
+ * 「学习者能不能看到」了。
+ */
 async function isReleased(id) {
   const res = await fetch(`${BASE}/api/classroom`);
   const body = await res.json();
@@ -52,10 +83,11 @@ async function isReleased(id) {
 }
 
 async function generateOne(node) {
+  if (args['as-manager'] && !COOKIE) throw new Error('要求管理者会话但没拿到 cookie，拒绝裸建单');
   const started = Date.now();
   const res = await fetch(`${BASE}/api/generate-classroom`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-user-locale': 'zh-CN' },
+    headers: { 'Content-Type': 'application/json', 'x-user-locale': 'zh-CN', ...auth() },
     body: JSON.stringify({ requirement: node.requirement }),
   });
   const body = await res.json();
@@ -68,7 +100,9 @@ async function generateOne(node) {
   let lastStep = '';
   while (Date.now() - started < MAX_WAIT_MS) {
     await sleep(POLL_MS);
-    const job = await (await fetch(`${BASE}/api/generate-classroom/${body.jobId}`)).json();
+    const job = await (
+      await fetch(`${BASE}/api/generate-classroom/${body.jobId}`, { headers: auth() })
+    ).json();
     const step = `${job?.step ?? '?'} ${job?.progress ?? ''}% ${job?.message ?? ''}`;
     if (step !== lastStep) {
       log(`[${node.id}] ${Math.round((Date.now() - started) / 1000)}s ${step}`);
@@ -92,6 +126,8 @@ async function generateOne(node) {
 }
 
 const ATTEMPTS = Number(args.attempts || 1);
+
+await loginManager();
 
 const queue = [...targets];
 const results = [];
