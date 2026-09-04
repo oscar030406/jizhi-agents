@@ -25,6 +25,7 @@ import { AlertTriangle } from 'lucide-react';
 
 import { loadLearnerProfile } from '@/components/generation/learner-profile-popover';
 import { ConceptGraph, type ConceptGraphNode } from '@/components/path/concept-graph';
+import { KnowledgeUniverse } from '@/components/path/knowledge-universe';
 import { DomainPathNotice } from '@/components/path/domain-path-notice';
 import { TrackPractice } from '@/components/path/track-practice';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -88,6 +89,10 @@ interface CourseDomainEntry {
   title: string;
 }
 
+/** 图的两种看法。默认 3D：一屏能看见教材/章节/证据块这三层，2D 只有概念。 */
+type GraphView = 'universe' | 'prereq';
+const VIEW_KEY = 'jizhi.path.graphView';
+
 type State =
   | { kind: 'loading' }
   | { kind: 'error'; message: string; detail?: string }
@@ -135,6 +140,25 @@ function DomainPathBody({ corpus, contextLabel }: { corpus: string; contextLabel
   // 课程挂到哪个概念上由 /api/course-path 说（它汇总场景的概念票），不在前端拿标题瞎匹配：
   // 「概念名是课程标题的子串」这种口径在智能制造那 66 个概念上几乎全不命中。
   const [conceptOfCourse, setConceptOfCourse] = useState<Record<string, string | null>>({});
+  // 初值直接在渲染时读：这段只在画像与领域都定下来之后才挂载，服务端渲染到不了这里，
+  // 所以不会有 hydration 不一致。带 #universe 进来的（首页那条入口）一律先看 3D。
+  const [view, setView] = useState<GraphView>(() => {
+    if (typeof window === 'undefined' || window.location.hash === '#universe') return 'universe';
+    try {
+      return localStorage.getItem(VIEW_KEY) === 'prereq' ? 'prereq' : 'universe';
+    } catch {
+      return 'universe';
+    }
+  });
+
+  const chooseView = useCallback((next: GraphView) => {
+    setView(next);
+    try {
+      localStorage.setItem(VIEW_KEY, next);
+    } catch {
+      /* 记不住就下次还是默认视图，不影响本次浏览 */
+    }
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -266,6 +290,13 @@ function DomainPathBody({ corpus, contextLabel }: { corpus: string; contextLabel
     );
   }, [state, courses, conceptOfCourse]);
 
+  // 掌握度已经在 domain-path 的返回体里了，3D 图不再单独去桥上要一遍——
+  // 那会把 fetchLearnerBlueprint 那次诊断调用打两遍，换来同一份数据。
+  const statusOfConcept = useMemo(
+    () => Object.fromEntries(graphNodes.map((node) => [node.id, node.status])),
+    [graphNodes],
+  );
+
   return (
     <>
       <h1 className="text-2xl font-semibold tracking-tight">{label} · 学习路径</h1>
@@ -331,7 +362,40 @@ function DomainPathBody({ corpus, contextLabel }: { corpus: string; contextLabel
       {state.kind === 'ok' && graphNodes.length > 0 && (
         <>
           <PersonalRouteSummary path={state.path} nodes={graphNodes} />
-          <ConceptGraph nodes={graphNodes} onDraft={(node) => draftCourse(node.label)} />
+          <div role="tablist" aria-label="图的视图" className="mt-6 flex gap-2">
+            {(
+              [
+                ['universe', '知识宇宙（3D）'],
+                ['prereq', '前置图（2D）'],
+              ] as const
+            ).map(([key, text]) => (
+              <button
+                key={key}
+                type="button"
+                role="tab"
+                aria-selected={view === key}
+                onClick={() => chooseView(key)}
+                className={
+                  view === key
+                    ? 'rounded-md border border-primary/50 bg-primary/10 px-3 py-1.5 text-sm'
+                    : 'rounded-md border border-border px-3 py-1.5 text-sm text-muted-foreground'
+                }
+              >
+                {text}
+              </button>
+            ))}
+          </div>
+          {view === 'universe' ? (
+            <KnowledgeUniverse
+              corpus={corpus}
+              courses={courses}
+              conceptOfCourse={conceptOfCourse}
+              statusOfConcept={statusOfConcept}
+              onDraft={draftCourse}
+            />
+          ) : (
+            <ConceptGraph nodes={graphNodes} onDraft={(node) => draftCourse(node.label)} />
+          )}
         </>
       )}
 

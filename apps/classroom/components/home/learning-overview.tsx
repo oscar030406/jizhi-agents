@@ -138,6 +138,12 @@ export function PathOrDomainCard({ corpus, className }: { corpus?: string; class
             <p className="text-xs leading-relaxed text-muted-foreground">
               路径由当前知识库的概念与前置关系生成，并随本领域学习证据更新。
             </p>
+            <Link
+              href="/path#universe"
+              className="inline-block text-xs text-purple-deep hover:underline"
+            >
+              打开知识宇宙 →
+            </Link>
             {state.path.personalization?.reason && (
               <p role="status" className="text-xs leading-relaxed text-yellow-deep">
                 {state.path.personalization.reason}

@@ -49,6 +49,20 @@ async function flush() {
 let host: HTMLElement;
 let root: Root;
 
+/**
+ * 切到「前置图（2D）」。/path 默认开在 3D 的知识宇宙上（那张图是 WebGL 画的，
+ * jsdom 里建不出来），本文件断言的都是 2D 前置图的内容，先按一下 tab。
+ */
+async function switchToPrereqGraph() {
+  const tab = Array.from(host.querySelectorAll('button')).find(
+    (button) => button.textContent === '前置图（2D）',
+  );
+  expect(tab, '找不到「前置图（2D）」切换按钮').toBeTruthy();
+  await act(async () => {
+    tab?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+}
+
 beforeEach(() => {
   accountProfileState = {
     kind: 'ready',
@@ -128,6 +142,8 @@ describe('/path effective domain', () => {
         }
         if (url === '/api/course-domains') return ok({});
         if (url.startsWith('/api/course-path/')) return ok({ courses: {} });
+        if (url.startsWith('/api/knowledge-graph/'))
+          return ok({ success: true, graph: { nodes: [], links: [] } });
         throw new Error(`unexpected ${url}`);
       }),
     );
@@ -140,6 +156,7 @@ describe('/path effective domain', () => {
     expect(host.textContent).toContain('我的当前路线');
     expect(host.textContent).toContain('当前推荐：线性代数核心三要素');
     // 阶段卡没了，结构改由概念图承担：节点标签与左侧统计都要在。
+    await switchToPrereqGraph();
     expect(host.textContent).toContain('节点总数');
     expect(host.textContent).toContain('Python 零基础第一课');
     expect(seen).toContain('/api/domain-path/ai');
@@ -176,6 +193,8 @@ describe('/path effective domain', () => {
         }
         if (url === '/api/course-domains') return ok({});
         if (url.startsWith('/api/course-path/')) return ok({ courses: {} });
+        if (url.startsWith('/api/knowledge-graph/'))
+          return ok({ success: true, graph: { nodes: [], links: [] } });
         throw new Error(`unexpected ${url}`);
       }),
     );
@@ -265,6 +284,8 @@ describe('/path effective domain', () => {
         }
         if (url === '/api/course-domains') return ok({});
         if (url.startsWith('/api/course-path/')) return ok({ courses: {} });
+        if (url.startsWith('/api/knowledge-graph/'))
+          return ok({ success: true, graph: { nodes: [], links: [] } });
         throw new Error(`unexpected ${url}`);
       }),
     );
@@ -276,6 +297,7 @@ describe('/path effective domain', () => {
     expect(host.textContent).toContain('这是当前账户自己的路线');
     expect(host.textContent).toContain('当前推荐：顺序控制');
     expect(host.textContent).toContain('已掌握 1 · 当前推荐 1 · 后续 1');
+    await switchToPrereqGraph();
     for (const name of ['PLC 基础', '顺序控制', '产线联调']) {
       expect(host.textContent).toContain(name);
     }
@@ -326,6 +348,8 @@ describe('/path effective domain', () => {
         }
         if (url === '/api/course-domains') return ok({});
         if (url.startsWith('/api/course-path/')) return ok({ courses: {} });
+        if (url.startsWith('/api/knowledge-graph/'))
+          return ok({ success: true, graph: { nodes: [], links: [] } });
         throw new Error(`unexpected ${url}`);
       }),
     );
