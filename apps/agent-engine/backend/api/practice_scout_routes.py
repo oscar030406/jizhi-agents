@@ -159,3 +159,64 @@ def build_guide(corpus: str, payload: dict = Body(...)) -> dict:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except practice_scout.ScoutError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/{corpus}/guide/tasks", dependencies=[Depends(verify_internal_token)])
+def build_guide_tasks(corpus: str, payload: dict = Body(...)) -> dict:
+    """项目带练：一个里程碑拆成代码任务（骨架 + 判分要点 + 三级提示）。同档缓存。"""
+    from backend.services import practice_coach
+
+    project_id = str(payload.get("project_id") or "").strip()
+    try:
+        milestone = int(payload.get("milestone") or 0)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="milestone 必须是整数") from exc
+    if not project_id or milestone < 1:
+        raise HTTPException(status_code=400, detail="project_id 与 milestone 必填")
+    profile = payload.get("profile") if isinstance(payload.get("profile"), dict) else {}
+    try:
+        return practice_coach.build_code_tasks(corpus, project_id, profile, milestone, refresh=bool(payload.get("refresh")))
+    except (practice_coach.CoachError, practice_scout.ScoutError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 上一层的 GuideError 也归这里
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/{corpus}/guide/grade", dependencies=[Depends(verify_internal_token)])
+def grade_guide_task(corpus: str, payload: dict = Body(...)) -> dict:
+    """判学习者对某个代码任务提交的代码。任务原文由客户端回传（引擎无状态）。"""
+    from backend.services import practice_coach
+
+    task = payload.get("task")
+    if not isinstance(task, dict):
+        raise HTTPException(status_code=400, detail="task 必填")
+    try:
+        return practice_coach.grade_code(task, str(payload.get("code") or ""), int(payload.get("hints_used") or 0))
+    except practice_coach.CoachError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/{corpus}/guide/chat", dependencies=[Depends(verify_internal_token)])
+def chat_guide_coach(corpus: str, payload: dict = Body(...)) -> dict:
+    """伴学教练单轮：带里程碑、当前任务、README 与知识库证据回答学习者的问题。"""
+    from backend.services import practice_coach
+
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id 必填")
+    profile = payload.get("profile") if isinstance(payload.get("profile"), dict) else {}
+    history = payload.get("history") if isinstance(payload.get("history"), list) else []
+    try:
+        return practice_coach.coach_chat(
+            corpus,
+            project_id,
+            profile,
+            int(payload.get("milestone") or 1),
+            str(payload.get("task_id") or ""),
+            [h for h in history if isinstance(h, dict)],
+            str(payload.get("message") or ""),
+        )
+    except practice_coach.CoachError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=str(exc)) from exc

@@ -14,6 +14,9 @@ import { useParams } from 'next/navigation';
 import { CheckCircle2, Circle, ExternalLink, Loader2, RefreshCw } from 'lucide-react';
 
 import type { GuideMilestone, PracticeGuidePayload } from '@/app/api/practice-guide/route';
+import type { CodeTask } from '@/app/api/practice-guide/[action]/route';
+import { CoachChat } from '@/components/practice/coach-chat';
+import { CodeTasks } from '@/components/practice/code-tasks';
 import { MilestoneCoach } from '@/components/practice/milestone-coach';
 import { SiteHeader } from '@/components/site-header';
 import {
@@ -36,7 +39,7 @@ type GuideState =
   | { kind: 'ready'; payload: PracticeGuidePayload }
   | { kind: 'failed'; message: string };
 
-type Progress = { done: number[]; updatedAt: string };
+type Progress = { done: number[]; updatedAt: string; tasks?: Record<string, string[]> };
 
 function progressKey(corpus: string, projectId: string) {
   return `${corpus}/${projectId}`;
@@ -85,12 +88,8 @@ function useProgress(corpus: string, projectId: string) {
     };
   }, [key, storageKey]);
 
-  const markDone = useCallback(
-    async (index: number) => {
-      const next: Progress = {
-        done: Array.from(new Set([...progress.done, index])).sort((a, b) => a - b),
-        updatedAt: new Date().toISOString(),
-      };
+  const persist = useCallback(
+    async (next: Progress) => {
       setProgress(next);
       try {
         localStorage.setItem(storageKey, JSON.stringify(next));
@@ -117,10 +116,34 @@ function useProgress(corpus: string, projectId: string) {
         /* 账户没写上不拦住继续做；本地已经记了 */
       }
     },
-    [key, progress.done, signedIn, storageKey],
+    [key, signedIn, storageKey],
   );
 
-  return { progress, markDone, signedIn };
+  const markDone = useCallback(
+    (index: number) =>
+      persist({
+        ...progress,
+        done: Array.from(new Set([...progress.done, index])).sort((a, b) => a - b),
+        updatedAt: new Date().toISOString(),
+      }),
+    [persist, progress],
+  );
+
+  /** 某一段里某个代码任务过关。段本身要不要算过关仍由教练检查决定，这里只记任务。 */
+  const markTaskDone = useCallback(
+    (milestone: number, taskId: string) => {
+      const prev = progress.tasks?.[String(milestone)] ?? [];
+      if (prev.includes(taskId)) return Promise.resolve();
+      return persist({
+        ...progress,
+        tasks: { ...(progress.tasks ?? {}), [String(milestone)]: [...prev, taskId] },
+        updatedAt: new Date().toISOString(),
+      });
+    },
+    [persist, progress],
+  );
+
+  return { progress, markDone, markTaskDone, signedIn };
 }
 
 export default function PracticeGuidePage() {
@@ -136,7 +159,8 @@ export default function PracticeGuidePage() {
 
   const [guide, setGuide] = useState<GuideState>({ kind: 'loading' });
   const [picked, setPicked] = useState<number | null>(null);
-  const { progress, markDone, signedIn } = useProgress(corpus, projectId);
+  const { progress, markDone, markTaskDone, signedIn } = useProgress(corpus, projectId);
+  const [activeTask, setActiveTask] = useState<CodeTask | null>(null);
 
   const loadGuide = useCallback(
     async (refresh = false) => {
@@ -234,6 +258,21 @@ export default function PracticeGuidePage() {
                   {milestone && (
                     <div className="min-w-0 space-y-5">
                       <MilestoneDetail milestone={milestone} />
+                      <CodeTasks
+                        corpus={corpus}
+                        projectId={projectId}
+                        milestone={milestone.index}
+                        doneTaskIds={progress.tasks?.[String(milestone.index)] ?? []}
+                        onTaskPassed={(taskId) => void markTaskDone(milestone.index, taskId)}
+                        onActiveTask={setActiveTask}
+                      />
+                      <CoachChat
+                        corpus={corpus}
+                        projectId={projectId}
+                        milestone={milestone.index}
+                        taskId={activeTask?.id ?? null}
+                        taskTitle={activeTask?.title ?? null}
+                      />
                       <MilestoneCoach
                         key={`${milestone.index}-${progress.done.includes(milestone.index)}`}
                         milestone={milestone}
