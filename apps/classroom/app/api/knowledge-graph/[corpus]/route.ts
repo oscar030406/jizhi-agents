@@ -17,6 +17,7 @@ import type { NextRequest } from 'next/server';
 import { createLogger } from '@/lib/logger';
 import { API_ERROR_CODES, apiError, apiSuccess } from '@/lib/server/api-response';
 import { requireCorpusVisible } from '@/lib/server/corpus-access';
+import { CURATED_CORPUS, readLearningPath } from '@/lib/server/learning-path';
 
 const log = createLogger('KnowledgeGraph API');
 
@@ -55,7 +56,31 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ cor
       log.warn(`knowledge graph malformed payload for ${corpus}`);
       return apiError(API_ERROR_CODES.UPSTREAM_ERROR, 502, '知识库图谱服务没有给出图数据。');
     }
-    return apiSuccess({ graph: graph as Record<string, unknown> });
+    // AI 主库还带一份人工策展路径：课程的取材出处与课程之间的先修顺序都写在那里，
+    // 引擎不知道（它只认概念）。别的库没有这份，字段就不出现。
+    const curated =
+      corpus === CURATED_CORPUS
+        ? await readLearningPath()
+            .then((path) =>
+              path.nodes.map((node) => ({
+                id: node.id,
+                courseId: node.courseId ?? null,
+                altCourseIds: node.altCourseIds ?? [],
+                prereq: node.prereq ?? [],
+                textbookRef: node.textbookRef ?? '',
+                status: node.status,
+              })),
+            )
+            .catch((error: unknown) => {
+              log.warn(`curated path unavailable for ${corpus}: ${String(error)}`);
+              return undefined;
+            })
+        : undefined;
+
+    return apiSuccess({
+      graph: graph as Record<string, unknown>,
+      ...(curated ? { curated } : {}),
+    });
   } catch (error) {
     log.warn(`knowledge graph failed for ${corpus}: ${String(error)}`);
     return apiError(API_ERROR_CODES.UPSTREAM_ERROR, 502, '知识库图谱服务暂时不可用。');

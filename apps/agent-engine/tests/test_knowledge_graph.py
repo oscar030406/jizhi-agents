@@ -6,6 +6,7 @@
 
 import json
 
+import numpy as np
 import pytest
 
 from backend.services import knowledge_graph as kg
@@ -104,6 +105,78 @@ def test_missing_corpus_returns_empty_graph_with_reason():
     assert graph["reason"]
 
 
+#: 假向量：二维、已归一化，够把「同章节要排除」和「跨章节要连上」两条都钉住。
+#: 行序必须与索引里的活块一致（第 4 条是归档块，不进矩阵）——这正是
+#: `load_embedding_matrix` 的对齐约定。
+FIXTURE_MATRIX = np.array(
+    [
+        [1.0, 0.0],  # xx01s01#s1
+        [0.999, 0.0447],  # xx01s01#s2：与上一条同章节，余弦 0.999 也不该连
+        [0.8, 0.6],  # yy02s01#s1：跨教材，与前两条都过 0.62
+    ],
+    dtype=np.float32,
+)
+
+
+@pytest.fixture()
+def vector_graph(tmp_path, monkeypatch):
+    index = tmp_path / "knowledge_index.jsonl"
+    index.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in FIXTURE_ROWS),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(kg, "corpus_index_path", lambda name: index)
+    monkeypatch.setattr(kg, "build_domain_path", lambda name: FIXTURE_PATH)
+    monkeypatch.setattr(
+        kg,
+        "load_embedding_matrix",
+        lambda path: (FIXTURE_MATRIX, ["xx01s01#s1", "xx01s01#s2", "yy02s01#s1"]),
+    )
+    return kg.build_knowledge_graph("tiny")
+
+
+def test_similar_links_skip_same_section_neighbours(vector_graph):
+    similar = [link for link in vector_graph["links"] if link["type"] == "similar"]
+    pairs = {(link["source"], link["target"]) for link in similar}
+    # 同章节那对余弦 0.999，仍然不许出现：那层关系已经由 contains 画着
+    assert ("k:xx01s01#s1", "k:xx01s01#s2") not in pairs
+    assert pairs == {
+        ("k:xx01s01#s1", "k:yy02s01#s1"),
+        ("k:xx01s01#s2", "k:yy02s01#s1"),
+    }
+    assert vector_graph["counts"]["byLink"]["similar"] == 2
+    # 余弦要如实、留三位；页面上那句「相似度 0.80」就是它
+    weights = {link["source"]: link["weight"] for link in similar}
+    assert weights["k:xx01s01#s1"] == 0.8
+    assert 0.82 < weights["k:xx01s01#s2"] < 0.83
+
+
+def test_similar_links_are_deduped_and_endpoints_exist(vector_graph):
+    ids = {node["id"] for node in vector_graph["nodes"]}
+    similar = [link for link in vector_graph["links"] if link["type"] == "similar"]
+    assert all(link["source"] in ids and link["target"] in ids for link in similar)
+    # 对称去重：一对块只留一条边，不是来回两条
+    assert len({tuple(sorted((link["source"], link["target"]))) for link in similar}) == len(similar)
+
+
+def test_concepts_carry_nearest_chunks(vector_graph):
+    ids = {node["id"] for node in vector_graph["nodes"]}
+    concepts = [node for node in vector_graph["nodes"] if node["type"] == "concept"]
+    assert all(node.get("nearest") for node in concepts)
+    for node in concepts:
+        assert len(node["nearest"]) <= kg.NEAREST_PER_CONCEPT
+        assert all(item["id"] in ids for item in node["nearest"])
+        # 按余弦从高到低
+        weights = [item["weight"] for item in node["nearest"]]
+        assert weights == sorted(weights, reverse=True)
+
+
+def test_no_vector_index_means_no_similar_links(tiny_graph):
+    """没有 npz 就一条「相近」都不出——不拿布局距离顶替可量化的关系。"""
+    assert "similar" not in tiny_graph["counts"]["byLink"]
+    assert all(not node.get("nearest") for node in tiny_graph["nodes"])
+
+
 def test_real_ai_corpus_is_big_and_consistent():
     """盘上真库：点要够多（页面上那句读数就是它），边的两头都得在。"""
     graph = kg.build_knowledge_graph("ai")
@@ -112,3 +185,10 @@ def test_real_ai_corpus_is_big_and_consistent():
     assert all(link["source"] in ids and link["target"] in ids for link in graph["links"])
     assert graph["counts"]["byType"]["concept"] > 0
     assert graph["counts"]["byLink"]["covers"] > 0
+    # 真库有向量索引，「相近」边必须真的算出来了，且不超过上限
+    assert 0 < graph["counts"]["byLink"]["similar"] <= kg.MAX_SIMILAR_LINKS
+    assert all(
+        link["weight"] >= kg.SIMILAR_THRESHOLD
+        for link in graph["links"]
+        if link["type"] == "similar"
+    )
