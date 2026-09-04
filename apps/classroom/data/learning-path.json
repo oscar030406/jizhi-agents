@@ -387,9 +387,9 @@
       "audience": "学完 RAG 评估",
       "difficulty": 4,
       "prereq": ["rag-eval"],
-      "courseId": null,
+      "courseId": "22975I1i5X",
       "draftCourseId": "7ZMd_LcoyE",
-      "status": "planned",
+      "status": "live",
       "requirement": "面向搭过 RAG 的学员：关键词检索与向量检索怎么混合，重排模型放在哪一步，GraphRAG 解决什么问题，每种方法给出适用与不适用的场景，说明向量检索与关键词检索各自的局限时不要借用图检索术语（如“单跳”）",
       "textbookRef": "TinyGraphRAG 图检索算法与社区聚类（tu07–tu11）"
     },
