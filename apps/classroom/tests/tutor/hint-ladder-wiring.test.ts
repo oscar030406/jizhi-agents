@@ -118,8 +118,15 @@ describe('题库分支', () => {
     }
   });
 
-  it('调用点只有讲义分支这一个——多出来的那个要照上面的判据补接线', () => {
-    expect(tutorCallers()).toEqual(['components/chat/tutor-panel.tsx']);
+  it('调用点只有这两个——多出来的那个要照上面的判据补接线', () => {
+    // 2026-09-04 起多了项目带练的教练（components/practice/milestone-coach.tsx）：
+    // 它只走讲义分支（自由作答，没有 selected_index），不出提示按钮，历史里 hints_used 恒 0，
+    // 所以上面那些「提示代价回传」的判据对它暂时不适用。哪天教练加了提示阶梯，
+    // 要照 tutor-panel 的接法补：hintsUsedRef、新题清零、以引擎回的级别为准。
+    expect(tutorCallers().sort()).toEqual([
+      'components/chat/tutor-panel.tsx',
+      'components/practice/milestone-coach.tsx',
+    ]);
   });
 });
 

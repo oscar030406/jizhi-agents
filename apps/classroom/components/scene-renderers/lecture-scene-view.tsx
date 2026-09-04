@@ -233,7 +233,7 @@ function CoursePracticeBlock({ scene }: { readonly scene: Scene }) {
       </div>
       <div className="mt-3 space-y-2">
         {projects.map((p) => (
-          <PracticeCard key={p.id} project={p} />
+          <PracticeCard key={p.id} project={p} corpus={corpus} />
         ))}
       </div>
     </section>

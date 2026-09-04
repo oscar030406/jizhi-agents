@@ -72,6 +72,14 @@ function HighlightCard({
           ))}
         </ol>
       </div>
+      <p className="pt-1 text-xs">
+        <Link
+          href={`/practice/ai/${encodeURIComponent(project.id)}`}
+          className="inline-flex min-h-6 items-center rounded bg-purple-soft px-2 font-medium text-purple-deep"
+        >
+          带我做这个项目
+        </Link>
+      </p>
       {related.length > 0 && (
         <p className="mt-auto flex flex-wrap items-center gap-x-3 gap-y-1 pt-1 text-xs">
           <span className="text-muted-foreground">对口课程</span>

@@ -63,7 +63,7 @@ export function TrackPractice({
       </p>
       <div className="mt-3 space-y-2">
         {projects.map((project) => (
-          <PracticeCard key={project.id} project={project} courseTitles={courseTitles} />
+          <PracticeCard key={project.id} project={project} courseTitles={courseTitles} corpus={corpus} />
         ))}
       </div>
     </section>

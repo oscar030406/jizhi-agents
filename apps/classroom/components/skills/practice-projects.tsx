@@ -165,10 +165,13 @@ export function featuredProjects(projects: readonly PracticeProject[]): Practice
 export function PracticeCard({
   project,
   courseTitles,
+  corpus = 'ai',
 }: {
   readonly project: PracticeProject;
   /** courseId → 课名。给了才渲染「相关课程」行；读不到课名时整行不出（不显示裸 id）。 */
   readonly courseTitles?: Record<string, string>;
+  /** 带练页的路由要带域：项目 id 只在域内唯一。 */
+  readonly corpus?: string;
 }) {
   const meta = LEVEL_META[project.level];
   const relatedCourses = project.courseIds
@@ -246,6 +249,12 @@ export function PracticeCard({
         {/* 外链改成 min-h-6 的 inline-flex：原来是纯行内文本，点击区只有 16px 高，
             不到 WCAG 2.5.8 的 24×24 */}
         <p className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-1">
+          <Link
+            href={`/practice/${encodeURIComponent(corpus)}/${encodeURIComponent(project.id)}`}
+            className={`inline-flex min-h-6 items-center rounded bg-purple-soft px-2 font-medium text-purple-deep ${FOCUS_RING}`}
+          >
+            带我做这个项目
+          </Link>
           {project.links.map((l) => (
             <a
               key={l.url}

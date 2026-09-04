@@ -181,6 +181,11 @@ export interface LearnerProfileFields {
    */
   conceptMasteryByDomain?: Record<string, Record<string, number>>;
   /**
+   * 项目带练进度：键 = `${corpus}/${projectId}`，值 = 已通过检查的里程碑序号与时间。
+   * 随账户走（/api/profile update 合并写入），未登录只存本地。可选，旧画像无此字段。
+   */
+  practiceProgress?: Record<string, { done: number[]; updatedAt: string }>;
+  /**
    * 动态层：逐概念置信度（0-1，来自证据折叠的有效样本量，profile-bridge 写回）。
    * 掌握判定的第二个条件——估计高但置信低不算掌握（证据封顶）。可选，旧画像无。
    */
