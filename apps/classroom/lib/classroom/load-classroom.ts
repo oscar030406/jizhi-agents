@@ -126,6 +126,12 @@ export async function runClassroomLoad<TMediaTasks = unknown, TGeneratedAgentRec
       const classroom = await fetchClassroom(classroomId);
       if (!isCurrent()) return;
 
+      // 本地没有、服务端也拿不到：要么这门课不存在，要么当前账户无权看（跨机构直连接口回 404）。
+      // 以前这里静默放过，页面落到侧栏的「生成中断」空态，把权限问题说成了生成故障。
+      if (!classroom) {
+        throw new Error('这门课不对你开放，或者不存在。');
+      }
+
       if (classroom) {
         const { stage, scenes } = classroom;
         const applied = await applyFallbackScenes({ loadToken, stage, scenes });
