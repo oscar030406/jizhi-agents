@@ -19,6 +19,7 @@ PROMPT_GUIDE_DIR = KB_DIR / "prompt_guide_docs"  # 提示工程课语料（DAIR.
 LLM_DEPLOY_DIR = KB_DIR / "llm_deploy_docs"  # 推理部署/压缩语料，给入门主题补 L3（llm-deploy，CC BY-NC-SA，2026-08-10）
 TINY_UNIVERSE_DIR = KB_DIR / "tiny_universe_docs"  # RAG 整链白盒实现（tiny-universe，CC BY-NC-SA，2026-08-10）
 SELF_LLM_DIR = KB_DIR / "self_llm_docs"  # MoE 架构解析 + 端侧部署实操（self-llm，Apache-2.0，2026-08-10）
+INTERVIEW_BOOK_DIR = KB_DIR / "interview_book_docs"  # Harness / 自进化 Agent 两项技能的唯一证据（AIGC-Interview-Book，GPL-3.0，2026-09-04）
 SAMPLE_DIR = KB_DIR / "sample_docs"
 
 SUPPLEMENT_CONCEPTS = {"guardrails"}  # hello-agents 未覆盖的概念，从 AgentGuide 补
@@ -97,6 +98,11 @@ def main() -> None:
             chunks += sl
             manifest_rows += _manifest_rows(SELF_LLM_DIR)
             sources.append(f"self_llm_docs(llm_basics+deployment,B)={len(sl)}chunks")
+        if any(INTERVIEW_BOOK_DIR.glob("*.md")):
+            ib = load_markdown_chunks(INTERVIEW_BOOK_DIR)
+            chunks += ib
+            manifest_rows += _manifest_rows(INTERVIEW_BOOK_DIR)
+            sources.append(f"interview_book_docs(deployment,C)={len(ib)}chunks")
     elif any(AGENTGUIDE_DIR.glob("*.md")):
         chunks += load_markdown_chunks(AGENTGUIDE_DIR)
         manifest_rows += _manifest_rows(AGENTGUIDE_DIR)

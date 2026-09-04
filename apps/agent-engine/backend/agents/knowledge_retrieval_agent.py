@@ -28,19 +28,21 @@ class KnowledgeRetrievalAgent:
         for concept in required_concepts:
             if concept in covered or len(chunks) >= self.max_diversified_chunks:
                 continue
-            supplement = retriever.search(
-                f"{learning_goal} {concept}",
-                concept_tags=[concept],
-                top_k=3,
-            )
-            candidate = next(
-                (
-                    chunk
-                    for chunk in supplement.retrieved_chunks
-                    if concept in chunk.concept_tags and chunk.source_id not in source_ids
-                ),
-                None,
-            )
+            query = f"{learning_goal} {concept}"
+            candidate = self._pick_tagged(retriever, query, concept, source_ids)
+            # 语义门（余弦 ≥0.60）是按「这块内容支持这次查询」定的，不保证补进来的块
+            # 带着我们要的那个概念。缺概念时显式再问一次词法后端——**这一步是为生成补素材，
+            # 不是覆盖判定**，两把尺的分工见 embedding_retriever.search 的 docstring。
+            #
+            # 2026-09-04 实测：主库补进 48 块 ib 语料后，
+            # 「搭建可评测并可部署的 Agentic RAG 工作流 deep_learning」过语义门的块
+            # 从 1 块涨到 3 块，越过了 MIN_CHUNKS=2，于是 embedding 检索不再回落 TF-IDF——
+            # 而 deep_learning 的证据一直是 TF-IDF 给的（库里最高的 d2l 块余弦 0.5693，
+            # 从来就没过过 0.60）。旧行为靠「语义块不够」这个副作用凑巧兜住，
+            # 加语料就塌。这里把那次兜底改成写明的一步。
+            fallback = getattr(retriever, "fallback", None)
+            if candidate is None and fallback is not None:
+                candidate = self._pick_tagged(fallback, query, concept, source_ids)
             if candidate is None:
                 continue
             chunks.append(candidate)
@@ -60,6 +62,19 @@ class KnowledgeRetrievalAgent:
                 f"覆盖 {len(required_concepts) - len(missing)}/{len(required_concepts)} 个目标技能。"
             ),
             missing_evidence_warning=warning,
+        )
+
+    @staticmethod
+    def _pick_tagged(retriever, query: str, concept: str, seen: set[str]):
+        """在一个检索后端里找第一块真的带着 `concept` 标签、且还没选过的证据。"""
+        result = retriever.search(query, concept_tags=[concept], top_k=3)
+        return next(
+            (
+                chunk
+                for chunk in result.retrieved_chunks
+                if concept in chunk.concept_tags and chunk.source_id not in seen
+            ),
+            None,
         )
 
     def _required_concepts(self, diagnosis: DiagnosisResult) -> list[str]:
