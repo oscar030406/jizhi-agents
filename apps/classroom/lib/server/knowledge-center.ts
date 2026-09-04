@@ -7,7 +7,7 @@
  * | 字段 | 真源 |
  * |---|---|
  * | 语料库名单 | 引擎 `domain_registry.json` 的实时注册项 ∪ `corpora/` 下的目录 ∪ `ai` |
- * | chunk 数 | 数 `knowledge_index.jsonl` 的行数（实测与引擎 `_corpus_status()` 的 chunk_count 三库全等：1704 / 3202 / 307） |
+ * | chunk 数 | 数 `knowledge_index.jsonl` 的**活块**行数（跳过 `superseded`，与引擎 `_corpus_status()` 的 chunk_count 同口径） |
  * | 检索后端 | `knowledge_embeddings.npz` 在不在（在 = 向量，只有 jsonl = TF-IDF，都没有 = 未建库） |
  * | 就绪度 / 许可 / 概念数 | `<name>_intake/readiness.json` |
  * | 金标 | `data/eval/kc_gold_derived/<name>/` 下的 json 文件数 |
@@ -112,15 +112,33 @@ async function mtime(file: string): Promise<string | null> {
 }
 
 /**
- * jsonl 的行数 = chunk 数。
+ * jsonl 里的**活块**数 = chunk 数。
  *
- * ponytail: 整文件读进内存再数行（最大的 iotdb 索引 4.8 MB）。天花板是语料上到几百 MB
+ * 归档块必须跳过。`backend/rag/ingest.write_index` 整库重建时不删旧块，只给它们加一格
+ * `superseded` 沉到文件末尾（为的是已出课程正文里的 `[xx#sN]` 引用不断链）。所以重建过
+ * 一次之后，行数是活块的两倍——2026-09-04 主库补语料重建后实测 1752 活块 / 3456 行。
+ * 判据与 `is_active_row` 同源；照行数报就是读数在说谎，而页面上看不出来。
+ *
+ * ponytail: 整文件读进内存再逐行判（最大的 iotdb 索引 4.8 MB）。天花板是语料上到几百 MB
  * 时这一页会变慢，那时改成流式计数或让入库链把块数写进产物文件。
  */
-async function countLines(file: string): Promise<number | null> {
+export async function countActiveIndexRows(file: string): Promise<number | null> {
   try {
     const text = await fs.readFile(file, 'utf-8');
-    return text.split('\n').filter((l) => l.trim().length > 0).length;
+    let count = 0;
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue;
+      // 先做子串筛，避免给每一行都付一次 JSON.parse；坏行照旧计数（与引擎一样宁可多不可少）
+      if (line.includes('"superseded"')) {
+        try {
+          if ((JSON.parse(line) as { superseded?: unknown }).superseded) continue;
+        } catch {
+          /* 解析不了的行按活块算 */
+        }
+      }
+      count += 1;
+    }
+    return count;
   } catch {
     return null;
   }
@@ -372,7 +390,7 @@ async function stationsOf(corpus: string): Promise<{
     mtime(enginePath(`${intakeRel}/readiness.json`)),
     mtime(enginePath(indexRel)),
     mtime(enginePath(vectorRel)),
-    countLines(enginePath(indexRel)),
+    countActiveIndexRows(enginePath(indexRel)),
     jsonFilesIn(enginePath(goldRel)),
     fitnessOf(corpus),
   ]);

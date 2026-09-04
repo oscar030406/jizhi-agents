@@ -12,7 +12,7 @@
  * |---|---|
  * | `knowledge_base/<库>_intake/readiness.json` | 疆域、原文目录、许可判定、收文件数/字符数、切块数 |
  * | `knowledge_base/sources_manifest.csv` | 主语料 ai 的逐篇来源：仓库、许可原文、证据等级 |
- * | `knowledge_base/knowledge_index.jsonl` | 主语料的切片数（数行，`_intake` 里没有它） |
+ * | `knowledge_base/knowledge_index.jsonl` | 主语料的切片数（数活块行，`_intake` 里没有它） |
  * | `knowledge_base/intake_runs/<run>/run.json` | ⑥⑦ 体检的分子分母与成本 |
  *
  * ai 的资料清单为什么读 CSV 不读 `ATTRIBUTION.md`：CSV 由
@@ -26,6 +26,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 import { domainLabel } from '@/lib/knowledge/domain-labels';
+import { countActiveIndexRows } from '@/lib/server/knowledge-center';
 import { redactCaliber as redactProviderText } from '@/lib/metrics/redact-caliber';
 
 function engineDataDir(): string {
@@ -316,13 +317,9 @@ export async function readMainSources(): Promise<SourceRow[]> {
   return [...rows.values()].sort((a, b) => b.docs - a.docs);
 }
 
+/** 活块数（跳过 `superseded` 归档块）。判据只有 knowledge-center 那一处，别在这里再抄一份。 */
 async function countLines(file: string): Promise<number> {
-  try {
-    const text = await fs.readFile(file, 'utf-8');
-    return text.split('\n').filter((l) => l.trim()).length;
-  } catch {
-    return 0;
-  }
+  return (await countActiveIndexRows(file)) ?? 0;
 }
 
 /** 真源文件的落盘日期，读不到给空串（页面上那一行就整行不印）。 */

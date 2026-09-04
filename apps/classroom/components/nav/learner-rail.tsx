@@ -7,8 +7,10 @@
  * 藏在顶栏那排图标里——图标没有文字，评委三分钟里翻不出来这套系统有几块功能。
  * 这条栏把它们摆平，当前页高亮，收起后只剩图标（宽度记在 localStorage）。
  *
- * 只给学习者用：未登录的公共落地页不挂它，管理端 /admin 保持原布局。
- * 路由一条不新建，全是已有的页。
+ * 公共变体（`variant="public"`，2026-09-04）：未登录的落地页也挂这条栏，
+ * 去掉「我的画像 / 学情报告」这类要账号才有意义的项，底部账户块换成登录与注册。
+ * 这样登录前后是同一套布局，访客不必先在顶栏一行文字链里找页——那行链在窄屏整条藏起来。
+ * 管理端 /admin 保持原布局。路由一条不新建，全是已有的页。
  */
 
 import { useEffect, useState } from 'react';
@@ -19,6 +21,7 @@ import {
   Bot,
   Briefcase,
   BookOpen,
+  Home,
   LogOut,
   Menu,
   PanelLeft,
@@ -45,6 +48,16 @@ const ITEMS = [
   { href: '/agents', match: '/agents', label: '智能体分工', icon: Bot },
 ] as const;
 
+/** 公共变体的项。没有账号也有意义的那几个去处，「课程」直接锚到课程墙。 */
+const PUBLIC_ITEMS = [
+  { href: '/', match: '/', label: '首页', icon: Home },
+  { href: '/path', match: '/path', label: '学习路径', icon: Route },
+  { href: '/#courses', match: '', label: '课程', icon: BookOpen },
+  { href: '/skills', match: '/skills', label: '岗位技能', icon: Briefcase },
+  { href: '/evidence', match: '/evidence', label: '审核实录', icon: ShieldCheck },
+  { href: '/agents', match: '/agents', label: '智能体分工', icon: Bot },
+] as const;
+
 /** 当前项：浅紫底 + 深紫字，站内既有 token（功能卡的 chip 同一对），不加渐变不加色块。 */
 const ACTIVE = 'bg-purple-soft text-purple-deep';
 const IDLE = 'text-muted-foreground hover:bg-accent hover:text-foreground';
@@ -52,11 +65,13 @@ const IDLE = 'text-muted-foreground hover:bg-accent hover:text-foreground';
 function RailNav({
   collapsed,
   pathname,
+  variant,
   onOpenProfile,
   onNavigate,
 }: {
   collapsed: boolean;
   pathname: string;
+  variant: 'learner' | 'public';
   onOpenProfile: () => void;
   onNavigate?: () => void;
 }) {
@@ -66,6 +81,29 @@ function RailNav({
       collapsed && 'justify-center px-0',
       active ? ACTIVE : IDLE,
     );
+
+  if (variant === 'public') {
+    return (
+      <nav className="flex flex-col gap-0.5 overflow-y-auto p-2">
+        {PUBLIC_ITEMS.map((item) => {
+          const active = Boolean(item.match) && pathname === item.match;
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              onClick={onNavigate}
+              title={collapsed ? item.label : undefined}
+              aria-current={active ? 'page' : undefined}
+              className={itemClass(active)}
+            >
+              <item.icon className="size-4 shrink-0" />
+              {!collapsed && <span className="truncate">{item.label}</span>}
+            </Link>
+          );
+        })}
+      </nav>
+    );
+  }
 
   return (
     <nav className="flex flex-col gap-0.5 overflow-y-auto p-2">
@@ -147,12 +185,15 @@ function RailAccount({ collapsed, pinned }: { collapsed: boolean; pinned?: boole
 
 export function LearnerRail({
   onOpenProfile,
+  variant = 'learner',
 }: {
   /**
    * 首页把画像状态握在自己手里（造课要用同一份），所以由它接管「我的画像」；
    * 不传就由本栏自己挂一块面板，子页（/report /skills）走这条。
    */
   onOpenProfile?: () => void;
+  /** `public` = 未登录的落地页那一条：去掉要账号的项，底部换成登录入口。 */
+  variant?: 'learner' | 'public';
 }) {
   const pathname = usePathname() ?? '/';
   const [collapsed, setCollapsed] = useState(false);
@@ -209,9 +250,15 @@ export function LearnerRail({
               {collapsed ? <PanelLeft className="size-4" /> : <PanelLeftClose className="size-4" />}
             </button>
           </div>
-          <RailNav collapsed={collapsed} pathname={pathname} onOpenProfile={openProfile} />
+          {/* 公共变体不在栏里再放一次登录：顶栏右上角已经有 AccountMenu，一屏两个入口多余。 */}
+          <RailNav
+            collapsed={collapsed}
+            pathname={pathname}
+            variant={variant}
+            onOpenProfile={openProfile}
+          />
         </div>
-        <RailAccount collapsed={collapsed} pinned />
+        {variant === 'learner' && <RailAccount collapsed={collapsed} pinned />}
       </aside>
 
       {/* 窄屏：一个悬浮按钮 + 抽屉。放左下角是为了不和顶栏的字标、图标组抢位置；
@@ -246,16 +293,17 @@ export function LearnerRail({
               <RailNav
                 collapsed={false}
                 pathname={pathname}
+                variant={variant}
                 onOpenProfile={openProfile}
                 onNavigate={() => setDrawerOpen(false)}
               />
             </div>
-            <RailAccount collapsed={false} />
+            {variant === 'learner' && <RailAccount collapsed={false} />}
           </div>
         </div>
       )}
 
-      {!onOpenProfile && (
+      {!onOpenProfile && variant === 'learner' && (
         <SelfProfilePanel
           showTrigger={false}
           open={ownProfileOpen}

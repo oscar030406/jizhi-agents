@@ -9,6 +9,8 @@
  *
  * 1. **课程自己记的出身**（`stage.origin.corpus` / `generation.profile.corpus`）。
  *    生成时选了哪个库就是哪个域，这是最直接的证据。
+ * 1.5 **人工学习路径收了它**（`data/learning-path.json` 的 courseId / altCourseIds /
+ *    blockedCourseId）。教研把这门课排进 AI 主线，就是一条比前缀投票强的人工判据。
  * 2. **引用的 source_id 前缀多数域**。存量课（2026 上半年那批）没有出身记录，
  *    只能从引用里反推。前缀表是手工维护的 AI 域清单，对投币新建的库必然反推错。
  * 3. 都没有 → `unknown`。**不冒充主域。**
@@ -28,12 +30,24 @@
  * 规则 4 的 `ai` 是另一种形态的同一个病——查不到就冒充主域。实测盘上 41 门课
  * **没有一门**走到这条兜底（30 门在路径上、5 门有出身记录、6 门靠前缀投票），
  * 所以改成 `unknown` 对现有数据零影响：它拦的是将来那门「什么都没有」的课。
+ *
+ * ## 2026-09-04：路径判据以规则 1.5 的形式回来了
+ *
+ * 上面那次改动把「路径上的课判 ai」整条删掉，代价在课程墙上显出来了：36 门公开课里
+ * 21 门（Python 两门、线代、导数、概率、神经网络、梯度下降那一批）既没有出身记录，
+ * source_id 前缀也不在手工表里，全被判成 `unknown`，于是 AI 课程墙上一门都不显示。
+ *
+ * 所以路径判据回来，但**位置不同**：排在课程自己记的出身之后。它现在只做它本来该做的事
+ * ——纠正前缀投票的空档，不再改写课程写下的出身。`c3HH74qwAH` / `sVnMPbeeXn`
+ * 那种「自己记着别的库又挂在路径上」的课，仍然按自己记的出身走。
  */
 
 /** 判不出来。**不冒充主域**——冒充会让一门来路不明的课混进主域课程卡。 */
 export const UNKNOWN_DOMAIN = 'unknown';
 /** 出身记的库已经不在注册清单里（库被删了）。课还在，出处已经没了。 */
 export const RETIRED_DOMAIN = 'retired';
+/** 人工学习路径描述的库。规则 1.5 命中时判给它。 */
+export const CURATED_PATH_DOMAIN = 'ai';
 
 import { promises as fs } from 'node:fs';
 
@@ -72,6 +86,7 @@ function domainOfSourceId(sid: string): string | null {
  */
 export function courseDomainOf(
   data: Pick<PersistedClassroomData, 'scenes' | 'generation'> & {
+    id?: string;
     stage?: { origin?: { corpus?: string; domain?: string } };
   },
   /**
@@ -79,6 +94,11 @@ export function courseDomainOf(
    * 不假装库都还在——判不了就别判，这与 `unknown` 是同一条纪律。
    */
   liveCorpora?: ReadonlySet<string>,
+  /**
+   * 人工学习路径收了哪些课（`lib/server/learning-path.ts` 的 `pathCourseIds`）。
+   * 不传就跳过规则 1.5。
+   */
+  pathCourseIds?: ReadonlySet<string>,
 ): string {
   // ① 课自己记的出身。客户端生成的课只有 `stage.origin` 这一条：
   //    它不走服务端 `generation` 那份记录。
@@ -91,6 +111,8 @@ export function courseDomainOf(
     // 库被删了就如实说「出处没了」，不退回主域冒充。
     return liveCorpora && !liveCorpora.has(own) ? RETIRED_DOMAIN : own;
   }
+  // ①.5 人工路径收了它。只在课程没写下自己的出身时才轮到这一条。
+  if (data.id && pathCourseIds?.has(data.id)) return CURATED_PATH_DOMAIN;
   // ② 前缀投票。认不出的前缀不投票，全认不出就当没有信号。
   // ③ 什么都没有 → unknown，不冒充主域。
   return majorityDomain(collectSourceIds(data.scenes)) ?? UNKNOWN_DOMAIN;
@@ -129,6 +151,11 @@ export async function readCourseDomains(): Promise<Record<string, CourseDomain>>
   const { readDomainRegistry } = await import('@/lib/server/domain-registry');
   const registry = await readDomainRegistry().catch(() => null);
   const liveCorpora = registry ? new Set(Object.keys(registry.entries)) : undefined;
+  // 动态导入：learning-path.ts 反过来要用 readCourseDomains，静态互引会成环。
+  const { readLearningPath, pathCourseIds } = await import('@/lib/server/learning-path');
+  const onPath = await readLearningPath()
+    .then(pathCourseIds)
+    .catch(() => undefined);
   const rows = await Promise.all(
     files.map(async (file) => {
       const id = file.replace(/\.json$/, '');
@@ -136,7 +163,7 @@ export async function readCourseDomains(): Promise<Record<string, CourseDomain>>
       const data = await readClassroom(id).catch(() => null);
       if (!data?.stage || !Array.isArray(data.scenes)) return null;
 
-      const domain = courseDomainOf(data, liveCorpora);
+      const domain = courseDomainOf({ ...data, id }, liveCorpora, onPath);
       return [id, { domain, title: data.stage.name ?? id }] as const;
     }),
   );

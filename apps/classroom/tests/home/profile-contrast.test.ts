@@ -22,13 +22,7 @@ const course = (id: string, title: string, sceneCount = 5): ClassroomSummary => 
   audit: null,
 });
 
-const path = (courses: CoursePath['courses']): CoursePath => ({
-  conceptCount: 11,
-  edgeCount: 9,
-  stages: [],
-  ungroupedCourseIds: [],
-  courses,
-});
+const path = (courses: CoursePath['courses']): Pick<CoursePath, 'courses'> => ({ courses });
 
 describe('pickProfileContrast', () => {
   it('同一概念下讲解档不同时，给出档低的与档高的各一门', () => {
@@ -70,10 +64,10 @@ describe('pickProfileContrast', () => {
 
   it('老课没有生成期档位，不参与对照', () => {
     expect(
-      pickProfileContrast(
-        path({ a: { concept: 'rag' }, b: { concept: 'rag', tier: 'L2' } }),
-        [course('a', '甲'), course('b', '乙')],
-      ),
+      pickProfileContrast(path({ a: { concept: 'rag' }, b: { concept: 'rag', tier: 'L2' } }), [
+        course('a', '甲'),
+        course('b', '乙'),
+      ]),
     ).toBeNull();
   });
 });

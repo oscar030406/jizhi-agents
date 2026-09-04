@@ -1,20 +1,26 @@
 /**
- * 课程墙按学习路径分阶：把「已发布课程」挂到引擎排出来的阶次上。
+ * 课程墙的分组产物。
  *
- * 阶次不是这里排的——拓扑分层由引擎 `/internal/v1/personalize/domain-path/{corpus}`
- * 算（与 /path 页同一个产物、同一批阶）。这条路由只做两件事：
- *   1. 把每门课的场景概念票汇总成一个主概念（口径同 `pickPrimaryConcept`）；
- *   2. 用概念 id 查它落在第几阶。
+ * ## 主库 `ai`：人工阶次
  *
- * 查不到概念、或概念不在本域路径里的课，一律进 `ungroupedCourseIds`——**不隐藏**。
+ * 阶次读 `data/learning-path.json`（数据目录里那一份，见 lib/server/learning-path.ts），
+ * 不问引擎。引擎那条拓扑分层排出来的第一阶是「企业级 AI Agent 开发实战」、第四阶空着，
+ * 21 门课因为反推不出概念被甩进「未归入路径」——它算的是概念之间的先后，
+ * 不是一个人该按什么顺序学。教学顺序是教研排的，就写在那份 JSON 里。
+ *
+ * ## 其它库：仍走引擎拓扑分层
+ *
+ * 接入库没有人工路径，`/internal/v1/personalize/domain-path/{corpus}` 现算的分层
+ * 是它们唯一的顺序来源。引擎不可达时整条返回 502，前端退回不分组的平铺墙。
+ *
+ * 两条路都遵守同一条：查不到概念、对不上节点的课一律进 `ungroupedCourseIds`——**不隐藏**。
  * 课程墙上少一门课比多一个错误的阶次更难解释：访客数不出来，只会以为课没了。
- *
- * 引擎不可达时整条返回 502，前端退回不分组的平铺墙（真实降级，不编阶次）。
  */
 
 import type { NextRequest } from 'next/server';
 
 import { corpusOwnership } from '@/lib/accounts/org-store';
+import { SESSION_COOKIE } from '@/lib/accounts/session';
 import { pickPrimaryConcept } from '@/lib/evidence/scene-concepts';
 import sceneConceptTable from '@/lib/evidence/data/scene-concepts.json';
 import { createLogger } from '@/lib/logger';
@@ -23,6 +29,7 @@ import { listClassrooms, readClassroom } from '@/lib/server/classroom-storage';
 import { requireCorpusVisible } from '@/lib/server/corpus-access';
 import { canReadCourse, courseReaderForRequest } from '@/lib/server/course-access';
 import { readCourseDomains } from '@/lib/server/course-domains';
+import { CURATED_CORPUS, readCuratedWall } from '@/lib/server/learning-path';
 
 const log = createLogger('CoursePath API');
 
@@ -55,10 +62,23 @@ function primaryConcept(scenes: ReadonlyArray<Record<string, unknown>>): string 
   return pickPrimaryConcept(votes);
 }
 
-export async function GET(request: NextRequest, { params }: { params: Promise<{ corpus: string }> }) {
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ corpus: string }> },
+) {
   const { corpus } = await params;
   const access = await requireCorpusVisible(corpus);
   if (!access.ok) return access.response;
+
+  if (corpus === CURATED_CORPUS) {
+    try {
+      const { path } = await readCuratedWall(request.cookies.get(SESSION_COOKIE)?.value);
+      return apiSuccess(path as unknown as Record<string, unknown>);
+    } catch (error) {
+      log.warn(`curated course path failed: ${String(error)}`);
+      return apiError(API_ERROR_CODES.INTERNAL_ERROR, 500, '学习路径数据暂时读不到。');
+    }
+  }
 
   const base = process.env.GROUNDING_URL?.replace(/\/$/, '');
   if (!base) return apiError(API_ERROR_CODES.PROVIDER_DISABLED, 503, '学习路径服务尚未启用。');
@@ -83,9 +103,9 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       return apiError(API_ERROR_CODES.UPSTREAM_ERROR, 502, '学习路径服务返回错误。');
     }
     const envelope = (await resp.json()) as { data?: unknown } | null;
-    const path = (envelope && typeof envelope === 'object' && 'data' in envelope
-      ? envelope.data
-      : envelope) as {
+    const path = (
+      envelope && typeof envelope === 'object' && 'data' in envelope ? envelope.data : envelope
+    ) as {
       source?: string;
       concept_count?: number;
       edge_count?: number;

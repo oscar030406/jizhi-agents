@@ -1,0 +1,18 @@
+{
+  "note": "source_id 前缀 → 域 的唯一真源（2026-08-28 清查 L4 之前在 lib/server/course-domains.ts 与 scripts/build-course-domains.mjs 各抄一份）。规则按序匹配；新接知识库若前缀不在表内：运行时侧不投票（进 unknown），构建脚本侧落主域——两个消费方的兜底语义各自注释，别在这里统一。",
+  "rules": [
+    {
+      "pattern": "^em\\d",
+      "domain": "ai",
+      "note": "em 块是主库的组成部分（752/1704，先导验证语料早已合入主库）。曾单列 embodied 域，2026-08-28 叙事收敛为两个正式泛化域后归回主库——否则每门引用 em 块的主库课都会长出幽灵域。"
+    },
+    {
+      "pattern": "^(table|sql|ainode|iotdb|timecho|deployment-and-maintenance|user-manual)",
+      "domain": "iotdb"
+    },
+    {
+      "pattern": "^(content|applications|administration|developer)",
+      "domain": "odoo"
+    }
+  ]
+}

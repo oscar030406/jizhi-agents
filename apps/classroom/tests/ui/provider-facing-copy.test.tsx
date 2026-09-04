@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn() }),
+  // 公共落地页 2026-09-04 起挂左功能栏，它按当前路由高亮。
+  usePathname: () => '/',
 }));
 
 vi.mock('@/components/site-header', () => ({

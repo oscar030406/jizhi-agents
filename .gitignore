@@ -16,6 +16,12 @@ references/
 
 # ── 数据与产物（体积/隐私/版权） ─────────────────────────────────────
 data/
+# 课堂端三份人工策展 / 快照数据是源码级真源，要进仓库（其余 data/ 仍不进）
+!apps/classroom/data/
+apps/classroom/data/*
+!apps/classroom/data/learning-path.json
+!apps/classroom/data/domain-prefixes.json
+!apps/classroom/data/skill-map-ai.json
 apps/agent-engine/data/
 apps/classroom/data/classrooms/*.bak*
 *.zip

@@ -48,7 +48,17 @@ const ROLE_CARDS: ReadonlyArray<{
   },
 ];
 
-export function AccountMenu({ className }: { readonly className?: string }) {
+export function AccountMenu({
+  className,
+  align = 'right',
+}: {
+  readonly className?: string;
+  /**
+   * 弹层贴哪一边。顶栏在页面右上角，弹层贴右；左功能栏里贴左，
+   * 否则 288px 宽的面板会从 208px 宽的栏往屏幕外顶出去。
+   */
+  readonly align?: 'left' | 'right';
+}) {
   const { enabled, account, loading, refresh, submit, logout } = useAccountStore();
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<'login' | 'register'>('login');
@@ -98,7 +108,12 @@ export function AccountMenu({ className }: { readonly className?: string }) {
         {open && (
           <>
             <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-            <div className="absolute right-0 top-full z-50 mt-1 w-40 rounded-xl border border-border bg-card p-1 shadow-card">
+            <div
+              className={cn(
+                'absolute top-full z-50 mt-1 w-40 rounded-xl border border-border bg-card p-1 shadow-card',
+                align === 'left' ? 'left-0' : 'right-0',
+              )}
+            >
               <Link
                 href={ROLE_HOME[account.role]}
                 onClick={() => setOpen(false)}
@@ -132,7 +147,12 @@ export function AccountMenu({ className }: { readonly className?: string }) {
       {open && (
         <>
           <div className="fixed inset-0 z-40 bg-black/20" onClick={closePanel} />
-          <div className="absolute right-0 top-full z-50 mt-2 w-72 rounded-2xl border border-border bg-card p-4 shadow-card">
+          <div
+            className={cn(
+              'absolute top-full z-50 mt-2 w-72 rounded-2xl border border-border bg-card p-4 shadow-card',
+              align === 'left' ? 'left-0' : 'right-0',
+            )}
+          >
             {/* 第一步：选角色。没选之前不显示账号密码——先问「你是谁」再问「你是不是你」。 */}
             {!role ? (
               <div>

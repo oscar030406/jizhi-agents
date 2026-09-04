@@ -31,7 +31,8 @@ vi.mock('next/navigation', () => ({
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
-const { default: SkillsPage } = await import('@/app/skills/page');
+const { default: SkillsPage } = await import('@/app/skills/skills-view');
+type SkillMapData = import('@/app/skills/skills-view').SkillMapData;
 
 const job: JobSkills = {
   job_id: 'ai-engineer',
@@ -47,8 +48,39 @@ const job: JobSkills = {
       source_id: 'source-ai',
       source_title: 'AI 教材',
     },
+    {
+      skill: '还没成课的技能',
+      covered: false,
+      score: 0.1,
+      source_id: '',
+      source_title: '',
+    },
   ],
 };
+
+/**
+ * 主库 ai 的首屏数据由服务端外壳（app/skills/page.tsx）把 `data/skill-map-ai.json`
+ * 快照传进来。外域仍然只走 `/api/skills?domain=...`。
+ */
+const snapshot = {
+  exported_at: '2026-09-04T00:42:02.218Z',
+  domain: 'ai',
+  jobs: [job],
+  corpora: [],
+  market_stats: {},
+  provenance: {},
+} as unknown as SkillMapData & { exported_at: string };
+
+const view = () => (
+  <SkillsPage
+    snapshot={snapshot}
+    jobSkills={[
+      { skill: '智能体基础', covered: true, courses: [{ title: '已成课', courseId: 'c1' }] },
+      { skill: '还没成课的技能', covered: false, courses: [{ title: '未成课', courseId: null }] },
+    ]}
+    jobId="ai-engineer"
+  />
+);
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -92,8 +124,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('/skills 只走机构过滤接口', () => {
-  it('只请求当前有效领域的 /api/skills，不请求公开静态快照', async () => {
+describe('/skills 主库读快照、外域读接口', () => {
+  it('主库首屏直接出快照，不发 /api/skills，也不请求任何公开静态文件', async () => {
     const requests: string[] = [];
     vi.stubGlobal(
       'fetch',
@@ -101,9 +133,6 @@ describe('/skills 只走机构过滤接口', () => {
         const url = String(input);
         requests.push(url);
         if (url === '/api/classroom') return json({ classrooms: [] });
-        if (url === '/api/skills?domain=ai') {
-          return json({ domain: 'ai', jobs: [job], corpora: [], market_stats: {}, provenance: {} });
-        }
         if (url === '/api/practice-scout/ai') {
           return json({ status: 'missing', projects: [], reason: '尚未发布实操项目' });
         }
@@ -111,22 +140,23 @@ describe('/skills 只走机构过滤接口', () => {
       }),
     );
 
-    await act(async () => root.render(<SkillsPage />));
+    await act(async () => root.render(view()));
     await flush();
     await flush();
 
-    expect(requests).toContain('/api/skills?domain=ai');
+    // 引擎那条路要逐条技能做检索，冷启动实测 ~38 秒；主库不该让每个人替它等一次。
+    expect(requests).not.toContain('/api/skills?domain=ai');
     expect(requests).not.toContain('/skill-map.json');
     expect(host.textContent).toContain(job.title);
+    expect(host.textContent).toContain('知识库覆盖按 2026-09-04 快照');
   });
 
-  it('/api/skills 失败时明确 unavailable，不保留旧岗位或回退快照', async () => {
+  it('主库的技能下面写清楚有没有对口的课', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
         if (url === '/api/classroom') return json({ classrooms: [] });
-        if (url === '/api/skills?domain=ai') return json({ error: 'unavailable' }, 503);
         if (url === '/api/practice-scout/ai') {
           return json({ status: 'missing', projects: [], reason: '尚未发布实操项目' });
         }
@@ -134,12 +164,15 @@ describe('/skills 只走机构过滤接口', () => {
       }),
     );
 
-    await act(async () => root.render(<SkillsPage />));
+    await act(async () => root.render(view()));
     await flush();
     await flush();
+    // 岗位卡默认折着，展开才看得到技能行
+    const toggle = host.querySelector('button[aria-expanded]') as HTMLButtonElement;
+    await act(async () => toggle.click());
 
-    expect(host.textContent).toContain('岗位技能地图暂时不可用');
-    expect(host.textContent).not.toContain(job.title);
+    expect(host.textContent).toContain('已有课：已成课');
+    expect(host.textContent).toContain('课程生成中：未成课');
   });
 
   it('非 AI 有效领域读取失败时同样显示 unavailable，不伪装成岗位素材缺失', async () => {
@@ -170,11 +203,13 @@ describe('/skills 只走机构过滤接口', () => {
       }),
     );
 
-    await act(async () => root.render(<SkillsPage />));
+    await act(async () => root.render(view()));
     await flush();
     await flush();
 
     expect(host.textContent).toContain('岗位技能地图暂时不可用');
     expect(host.textContent).not.toContain('本机构管理者尚未提供');
+    // 外域一个字节的主库快照都不许漏出去
+    expect(host.textContent).not.toContain(job.title);
   });
 });

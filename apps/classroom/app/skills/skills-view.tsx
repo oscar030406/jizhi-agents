@@ -19,11 +19,17 @@
  * live — never padded with AI material. This page never falls back to sample
  * numbers.
  *
- * 唯一取数入口是 `/api/skills?domain=...`。该路由按当前会话与机构过滤知识库；
- * 请求失败就明确显示不可用，不读取任何公开静态快照。
+ * 取数分两路（2026-09-04）：
+ *   - 主库 ai：首屏直接渲染 `data/skill-map-ai.json` 快照（由 app/skills/page.tsx 在服务端
+ *     读好传进来）。那条实时路要转给引擎逐条技能做检索，冷启动实测 ~38 秒，
+ *     而主库的技能清单几周才动一次，没有理由让每个学习者替它等一次冷启动。
+ *     点「重新读取」仍然去问 `/api/skills?domain=ai` 拿实时结果。
+ *   - 其它领域：一如既往只走 `/api/skills?domain=...`，请求失败就明确显示不可用，
+ *     一个字节的 ai 数据都不掺。
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion } from 'motion/react';
 import {
@@ -59,6 +65,11 @@ import { ForeignDomainEmpty } from '@/components/skills/foreign-domain-empty';
 import type { CorpusStatus, JobSkills, SkillCoverage } from '@/app/api/skills/route';
 import { useAccountProfile } from '@/lib/knowledge/account-profile';
 import { useEffectiveDomainContext } from '@/lib/knowledge/use-domain-context';
+// 类型 only：learning-path.ts 只在服务端跑（它 import node:fs），这行编译期就被擦掉。
+import type { JobSkillRow } from '@/lib/server/learning-path';
+
+/** 有人工学习路径与技能快照的那个库。别的库仍旧问引擎实时结果。 */
+const CURATED_CORPUS = 'ai';
 
 /** Shape of `market_stats` in data/jobs/job_skill_map.json. Every field optional:
  *  a tile renders only when its number is really there. */
@@ -80,7 +91,7 @@ interface Provenance {
   sources?: string[];
 }
 
-interface SkillMapData {
+export interface SkillMapData {
   provenance?: Provenance;
   market_stats?: MarketStats;
   jobs: JobSkills[];
@@ -107,6 +118,9 @@ type LoadState =
   | { kind: 'ok'; domain: string; data: SkillMapData };
 
 const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
+
+/** 非主线岗位的空表。写成常量免得每次渲染都新建一个 Map 把 JobCard 的 props 拍脏。 */
+const EMPTY_SKILL_COURSES: ReadonlyMap<string, never[]> = new Map();
 
 /** 取当前会话可见的技能地图；任何失败都返回 null。 */
 async function loadSkillMap(url: string): Promise<SkillMapData | null> {
@@ -278,6 +292,28 @@ function TrendChart({ data }: { data: Record<string, number> }) {
 // 岗位卡
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** 一项技能下面那一行「已有课 / 课程生成中」。没有对口节点时整行不出。 */
+function SkillCourseLine({ courses }: { courses: JobSkillRow['courses'] }) {
+  if (!courses.length) return null;
+  return (
+    <p className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 pb-1.5 text-xs text-muted-foreground">
+      {courses.map((c) =>
+        c.courseId ? (
+          <Link
+            key={c.courseId}
+            href={`/classroom/${c.courseId}`}
+            className="text-green-deep underline-offset-4 hover:underline"
+          >
+            已有课：{c.title}
+          </Link>
+        ) : (
+          <span key={c.title}>课程生成中：{c.title}</span>
+        ),
+      )}
+    </p>
+  );
+}
+
 function JobCard({
   job,
   open,
@@ -285,6 +321,8 @@ function JobCard({
   onPickSkill,
   courseTitles,
   projects,
+  skillCourses,
+  corpus,
 }: {
   job: JobSkills;
   open: boolean;
@@ -292,6 +330,10 @@ function JobCard({
   onPickSkill: (job: JobSkills, skill: SkillCoverage) => void;
   courseTitles: Record<string, string>;
   projects: readonly PracticeProject[];
+  /** 技能名 → 学习路径里对口的课。只有主线那一岗有，别的岗位传空表。 */
+  skillCourses: ReadonlyMap<string, JobSkillRow['courses']>;
+  /** 当前领域。实操卡的「带我做这个项目」要按域拼链接，不能一律当 ai。 */
+  corpus: string;
 }) {
   const total = job.skills.length;
   const ratio = total ? job.covered_count / total : 0;
@@ -352,47 +394,51 @@ function JobCard({
                 实践项目 · 学完课去练，做完有作品
               </p>
               {jobProjects.map((p) => (
-                <PracticeCard key={p.id} project={p} courseTitles={courseTitles} />
+                <PracticeCard key={p.id} project={p} courseTitles={courseTitles} corpus={corpus} />
               ))}
             </div>
           )}
           {job.skills.map((s) => (
-            <button
-              key={s.skill}
-              type="button"
-              onClick={() => onPickSkill(job, s)}
-              title={
-                s.covered
-                  ? `知识库命中 ${s.source_title}（来源编号 ${s.source_id}，相似度 ${s.score}）— 点击按此技能造课`
-                  : `知识库未检索到可用证据（最高相似度 ${s.score}）— 仍可造课，但内容不接地，课堂徽标会显示未接地`
-              }
-              className={cn(
-                'group flex w-full items-center gap-2 rounded-md px-2 py-2 text-left transition duration-150 ease-[cubic-bezier(0.4,0,0.2,1)]',
-                'hover:bg-muted/60 active:bg-muted',
-                FOCUS_RING,
-              )}
-            >
-              <span
+            <div key={s.skill}>
+              <button
+                type="button"
+                onClick={() => onPickSkill(job, s)}
+                title={
+                  s.covered
+                    ? `知识库命中 ${s.source_title}（来源编号 ${s.source_id}，相似度 ${s.score}）— 点击按此技能造课`
+                    : `知识库未检索到可用证据（最高相似度 ${s.score}）— 仍可造课，但内容不接地，课堂徽标会显示未接地`
+                }
                 className={cn(
-                  'size-2 shrink-0 rounded-full',
-                  s.covered ? 'bg-green-solid' : 'bg-muted-foreground/50',
-                )}
-              />
-              <span className="min-w-0 flex-1 truncate text-xs">{s.skill}</span>
-              <span
-                className={cn(
-                  'shrink-0 text-xs tabular-nums',
-                  // 「可接地」这一档原来是 emerald-600/400，亮色下实测 3.77:1，不到正文
-                  // 要求的 4.5:1。换成 green-deep（亮 6.85 / 暗 9.91）——green-solid
-                  // 只有 3.43，够当色块不够当文字。
-                  s.covered ? 'text-green-deep' : 'text-muted-foreground',
+                  'group flex w-full items-center gap-2 rounded-md px-2 py-2 text-left transition duration-150 ease-[cubic-bezier(0.4,0,0.2,1)]',
+                  'hover:bg-muted/60 active:bg-muted',
+                  FOCUS_RING,
                 )}
               >
-                {s.covered ? `来源 ${s.source_id}` : '暂无语料'}
-              </span>
-              {/* 箭头原来只在 hover 出现，键盘用户永远看不到 */}
-              <ArrowRight className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100" />
-            </button>
+                <span
+                  className={cn(
+                    'size-2 shrink-0 rounded-full',
+                    s.covered ? 'bg-green-solid' : 'bg-muted-foreground/50',
+                  )}
+                />
+                <span className="min-w-0 flex-1 truncate text-xs">{s.skill}</span>
+                <span
+                  className={cn(
+                    'shrink-0 text-xs tabular-nums',
+                    // 「可接地」这一档原来是 emerald-600/400，亮色下实测 3.77:1，不到正文
+                    // 要求的 4.5:1。换成 green-deep（亮 6.85 / 暗 9.91）——green-solid
+                    // 只有 3.43，够当色块不够当文字。
+                    s.covered ? 'text-green-deep' : 'text-muted-foreground',
+                  )}
+                >
+                  {s.covered ? `来源 ${s.source_id}` : '暂无语料'}
+                </span>
+                {/* 箭头原来只在 hover 出现，键盘用户永远看不到 */}
+                <ArrowRight className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100" />
+              </button>
+              {/* 这项技能在学习路径上对口哪门课。成课的直接进课堂，没成课的如实写「课程生成中」，
+                「按此技能造课」仍然是上面那颗按钮。 */}
+              <SkillCourseLine courses={skillCourses.get(s.skill) ?? []} />
+            </div>
           ))}
         </div>
       )}
@@ -402,7 +448,18 @@ function JobCard({
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function SkillsPage() {
+export default function SkillsView({
+  snapshot,
+  jobSkills,
+  jobId,
+}: {
+  /** 主库 ai 的岗位技能地图快照。 */
+  snapshot: SkillMapData & { exported_at?: string };
+  /** 「AI Agent 开发工程师」13 项技能各自对应的节点与成课状态。 */
+  jobSkills: JobSkillRow[];
+  /** 上面这 13 项属于哪个岗位（对不上就不往别的岗位卡上贴课）。 */
+  jobId: string;
+}) {
   const router = useRouter();
   const [state, setState] = useState<LoadState>({ kind: 'loading' });
   /** 画像选定的知识库。岗位图谱必须来自当前领域；别的领域摆 AI 岗位只会误导
@@ -455,6 +512,8 @@ export default function SkillsPage() {
   useEffect(() => {
     if (contextState.kind !== 'ready' || !context?.domain) return;
     const effectiveDomain = context.domain;
+    // 主库首屏直接用快照渲染，一次请求都不发；点了「重新读取」才去问引擎实时结果。
+    if (effectiveDomain === CURATED_CORPUS && reloadKey === 0) return;
     let cancelled = false;
     (async () => {
       const live = await loadSkillMap(`/api/skills?domain=${encodeURIComponent(effectiveDomain)}`);
@@ -483,7 +542,13 @@ export default function SkillsPage() {
     [router],
   );
 
-  const data = state.kind === 'ok' && state.domain === context?.domain ? state.data : null;
+  /** 主库在没点过「重新读取」之前一律走快照，不看 `state`。 */
+  const usingSnapshot = context?.domain === CURATED_CORPUS && reloadKey === 0;
+  const data = usingSnapshot
+    ? snapshot
+    : state.kind === 'ok' && state.domain === context?.domain
+      ? state.data
+      : null;
   const market = data?.market_stats ?? {};
   const prov = data?.provenance ?? {};
   const exp = market.experience ?? {};
@@ -492,16 +557,25 @@ export default function SkillsPage() {
   const asOf = data?.stale_from ?? null;
   // API 可能返回按域分桶的最后一次成功数据；时间必须明示。
   const asOfStale = Boolean(asOf && data?.stale);
+  // 快照日期只在真的用了快照那一份数据时才写出来（点过「重新读取」之后是实时结果）。
+  const snapshotDate =
+    usingSnapshot && snapshot.exported_at ? snapshot.exported_at.slice(0, 10) : null;
 
   // 空态判据以服务端为准：引擎说这个域没有岗位数据（jobs 空 + reason），就是没有。
   const serverEmpty = Boolean(data && !data.jobs?.length && data.reason);
   const foreignDomain = serverEmpty;
   const skillsLoading =
-    state.kind === 'loading' || (state.kind === 'ok' && state.domain !== context?.domain);
+    !usingSnapshot &&
+    (state.kind === 'loading' || (state.kind === 'ok' && state.domain !== context?.domain));
   const totalSkills = data?.jobs.reduce((sum, job) => sum + job.skills.length, 0) ?? 0;
   const coveredSkills =
     data?.jobs.reduce((sum, job) => sum + job.skills.filter((skill) => skill.covered).length, 0) ??
     0;
+  /** 技能名 → 对口课。只给 `jobId` 那一岗用，别的岗位拿空表。 */
+  const skillCourseMap = useMemo(
+    () => new Map(jobSkills.map((row) => [row.skill, row.courses])),
+    [jobSkills],
+  );
   const mlJob = data?.jobs.find((job) => job.job_id === 'ml_engineer');
   const mlSkillGaps =
     mlJob?.skills.filter((skill) => !skill.covered).map((skill) => skill.skill) ?? [];
@@ -549,6 +623,11 @@ export default function SkillsPage() {
               {asOfStale && (
                 <p className="max-w-xs text-right text-xs leading-relaxed text-amber-700 dark:text-amber-300">
                   缓存数据可能已过期；系统恢复实时读取后会自动更新。
+                </p>
+              )}
+              {snapshotDate && !asOf && (
+                <p className="max-w-xs text-right text-xs leading-relaxed text-muted-foreground">
+                  知识库覆盖按 {snapshotDate} 快照，重算跑 scripts/export-skill-map.mjs
                 </p>
               )}
             </div>
@@ -612,7 +691,12 @@ export default function SkillsPage() {
               </p>
               <div className="space-y-2">
                 {practice.projects.map((p) => (
-                  <PracticeCard key={p.id} project={p} courseTitles={courseTitles} />
+                  <PracticeCard
+                    key={p.id}
+                    project={p}
+                    courseTitles={courseTitles}
+                    corpus={corpus}
+                  />
                 ))}
               </div>
             </section>
@@ -769,6 +853,8 @@ export default function SkillsPage() {
                       onPickSkill={pickSkill}
                       courseTitles={courseTitles}
                       projects={practice.kind === 'ready' ? practice.projects : []}
+                      skillCourses={job.job_id === jobId ? skillCourseMap : EMPTY_SKILL_COURSES}
+                      corpus={corpus}
                     />
                   ))}
                 </div>

@@ -31,7 +31,12 @@ vi.mock('next/navigation', () => ({
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
-const { default: SkillsPage } = await import('@/app/skills/page');
+const { default: SkillsPage } = await import('@/app/skills/skills-view');
+type SkillMapData = import('@/app/skills/skills-view').SkillMapData;
+
+/** 主库 ai 的首屏数据现在由服务端外壳传进来（快照），不再由页面自己去取。 */
+let snapshot: SkillMapData;
+const view = () => <SkillsPage snapshot={snapshot} jobSkills={[]} jobId="" />;
 
 const aiJob: JobSkills = {
   job_id: 'ai-engineer',
@@ -106,6 +111,7 @@ beforeEach(() => {
     source: 'server',
     profile: { domain: 'ai', corpus: 'ai' },
   };
+  snapshot = skillMap as SkillMapData;
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
@@ -133,7 +139,7 @@ describe('/skills 岗位状态按领域绑定', () => {
       }),
     );
 
-    await act(async () => root.render(<SkillsPage />));
+    await act(async () => root.render(view()));
     await flush();
 
     expect(host.textContent).toContain('当前账户画像暂时无法读取');
@@ -169,7 +175,7 @@ describe('/skills 岗位状态按领域绑定', () => {
       }),
     );
 
-    await act(async () => root.render(<SkillsPage />));
+    await act(async () => root.render(view()));
     await flush();
 
     expect(host.textContent).toContain('机构课程暂不可用');
@@ -179,6 +185,8 @@ describe('/skills 岗位状态按领域绑定', () => {
 
   it('从 AI 切到外域且接口返回 204 时立即清掉旧岗位并固定诚实空态', async () => {
     const oldJob = { ...aiJob, title: '只属于 AI 的旧岗位' };
+    // ai 那一屏来自快照，不再走 /api/skills?domain=ai
+    snapshot = { ...skillMap, jobs: [oldJob] } as SkillMapData;
     const oldProject = project('generated-ai', '只属于 AI 的引擎项目');
     const requests: string[] = [];
     vi.stubGlobal(
@@ -214,7 +222,7 @@ describe('/skills 岗位状态按领域绑定', () => {
         registered: true,
       },
     };
-    await act(async () => root.render(<SkillsPage />));
+    await act(async () => root.render(view()));
     await flush();
     await flush();
     expect(host.textContent).toContain(oldJob.title);
@@ -233,7 +241,7 @@ describe('/skills 岗位状态按领域绑定', () => {
         registered: true,
       },
     };
-    await act(async () => root.render(<SkillsPage />));
+    await act(async () => root.render(view()));
     expect(host.textContent).not.toContain(oldProject.name);
     await flush();
 
@@ -279,7 +287,7 @@ describe('/skills 岗位状态按领域绑定', () => {
       },
     };
 
-    await act(async () => root.render(<SkillsPage />));
+    await act(async () => root.render(view()));
     await flush();
     await flush();
 
@@ -334,7 +342,7 @@ describe('/skills 岗位状态按领域绑定', () => {
       },
     };
 
-    await act(async () => root.render(<SkillsPage />));
+    await act(async () => root.render(view()));
     await flush();
     await flush();
 

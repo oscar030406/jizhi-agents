@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-const homeSource = readFileSync(join(process.cwd(), 'app', 'page.tsx'), 'utf-8');
+const homeSource = readFileSync(join(process.cwd(), 'app', 'home-view.tsx'), 'utf-8');
 const courseDomainsSource = readFileSync(
   join(process.cwd(), 'lib', 'knowledge', 'use-course-domains.ts'),
   'utf-8',

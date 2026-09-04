@@ -16,7 +16,11 @@ const mocks = vi.hoisted(() => ({
   scenes: [] as Scene[],
 }));
 
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: vi.fn() }),
+  // 公共落地页 2026-09-04 起挂左功能栏，它按当前路由高亮。
+  usePathname: () => '/',
+}));
 vi.mock('rough-notation', () => ({
   annotate: () => ({ show: vi.fn(), remove: vi.fn() }),
 }));
@@ -116,7 +120,8 @@ describe('动态实操项目消费链', () => {
     expect(mocks.hookCalls).toContain('ai');
     expect(sources.join('\n')).not.toContain('@/data/practice-projects.json');
     expect(sources[0]).not.toContain('@/data/learning-path.json');
-    expect(html).toContain('正在读取引擎生成的当前领域路径');
+    // 09-04 起公共首页不再挂引擎路径卡（它按拓扑阶次把「服务化部署」排第一阶，和五阶课程墙打架），
+    // 所以这里不再断言那句加载文案；路径卡只在登录工作台出现。
     expect(html).toContain('全部 1 个实操项目');
     expect(html).toContain('拉取仓库');
     expect(html).toContain('运行基线');

@@ -60,7 +60,13 @@ import { SpeechButton } from '@/components/audio/speech-button';
 import { LearnerAccountSwitcher } from '@/components/learner-account-switcher';
 import { OrgBadge } from '@/components/home/org-badge';
 import { AccountMenu } from '@/components/account/account-menu';
-import { PublicLanding } from '@/components/home/public-landing';
+import {
+  CuratedCourseWall,
+  PublicLanding,
+  type ClassroomSummary as PublicCourseSummary,
+  type CoursePath,
+} from '@/components/home/public-landing';
+import { usePublishedPractice } from '@/components/skills/practice-projects';
 import { DemoStrip } from '@/components/tour/demo-strip';
 import { ReplayTourLink } from '@/components/tour/replay-tour-link';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -74,6 +80,7 @@ import { LearnerRail } from '@/components/nav/learner-rail';
 import { domainLabel } from '@/lib/knowledge/domain-labels';
 import { NO_BLUEPRINT, TIER_TEXT } from '@/components/generation/profile-impact-preview';
 import { presentationTier } from '@/lib/generation/learner-profile';
+import type { JobSkillRow } from '@/lib/server/learning-path';
 
 const log = createLogger('Home');
 
@@ -119,7 +126,15 @@ const initialFormState: FormState = {
   requirement: '',
 };
 
-function HomePage() {
+interface HomeData {
+  /** 当前会话看得见的已发布课。服务端读好随首屏下发，页面不再自己发一次请求。 */
+  initialCourses: PublicCourseSummary[];
+  /** 主库 ai 的人工五阶。读不到时为 null，课程墙整块不出。 */
+  initialPath: CoursePath | null;
+  initialJobSkills: JobSkillRow[];
+}
+
+function HomePage({ initialCourses, initialPath, initialJobSkills }: HomeData) {
   const { t } = useI18n();
   const { theme, setTheme } = useTheme();
   const router = useRouter();
@@ -381,6 +396,13 @@ function HomePage() {
     [effectiveDomain, registryVersion],
   );
 
+  /**
+   * 课程墙只在有效领域是主库 ai 时出：这份五阶只描述 ai 的教研顺序，
+   * 摆给学智能制造的人看就是跨库串味。实操角标同理，跟着同一个域走。
+   */
+  const showCuratedWall = effectiveDomain === 'ai' && Boolean(initialPath);
+  const wallPractice = usePublishedPractice(showCuratedWall ? 'ai' : null);
+
   const updateForm = <K extends keyof FormState>(field: K, value: FormState[K]) => {
     setForm((prev) => ({ ...prev, [field]: value }));
     try {
@@ -488,7 +510,11 @@ function HomePage() {
   if (forcePublic || (accountEnabled && !account)) {
     return (
       <div className="min-h-[100dvh] w-full bg-background">
-        <PublicLanding />
+        <PublicLanding
+          initialCourses={initialCourses}
+          initialPath={initialPath}
+          initialJobSkills={initialJobSkills}
+        />
       </div>
     );
   }
@@ -1014,6 +1040,25 @@ function HomePage() {
                   </div>
                 </section>
               )}
+
+              {/* ── ④ 课程墙：按学习路径五阶排的全部已发布课（真源 data/learning-path.json） ── */}
+              {showCuratedWall && initialPath && (
+                <section
+                  id="courses"
+                  data-tour="courses"
+                  className={cn('scroll-mt-16 overflow-hidden lg:col-span-3', CARD_RECIPE_STATIC)}
+                >
+                  <div className="h-0.5 w-full bg-yellow-soft" />
+                  <div className="px-5 pb-5 pt-4">
+                    <h2 className="text-lg font-medium">已经生成的课</h2>
+                    <CuratedCourseWall
+                      path={initialPath}
+                      courses={initialCourses}
+                      practiceProjects={wallPractice.kind === 'ready' ? wallPractice.projects : []}
+                    />
+                  </div>
+                </section>
+              )}
             </div>
           </motion.main>
         </div>
@@ -1022,14 +1067,14 @@ function HomePage() {
   );
 }
 
-export default function Page() {
+export default function HomeView(props: HomeData) {
   // globals.css 里的 prefers-reduced-motion 分支只降 CSS 动画和过渡（那段注释自己也
   // 写了「framer-motion 走 JS 驱动不受此影响」），所以首页这些入场位移、卡片错峰、
   // 折叠展开在系统开了「减少动态效果」时照跑。MotionConfig 把这条补上，
   // 写法照抄 components/scene-renderers/classroom-complete.tsx 已有的用法。
   return (
     <MotionConfig reducedMotion="user">
-      <HomePage />
+      <HomePage {...props} />
     </MotionConfig>
   );
 }

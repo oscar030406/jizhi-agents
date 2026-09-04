@@ -71,7 +71,10 @@ next-env.d.ts
 .worktrees
 
 # generated data
-/data
+/data/*
+!/data/learning-path.json
+!/data/domain-prefixes.json
+!/data/skill-map-ai.json
 /logs
 
 # docs

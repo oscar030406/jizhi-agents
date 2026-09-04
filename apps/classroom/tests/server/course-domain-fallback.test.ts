@@ -28,6 +28,31 @@ describe('课程自己记的出身最大', () => {
   });
 });
 
+describe('人工学习路径收了它就判 ai（规则 1.5）', () => {
+  const onPath = new Set(['_m1O5OWXON', 'Xl_l7SQNEV']);
+
+  it('没有出身也认不出前缀，但排在路径上 → ai', () => {
+    // 这就是「Python 零基础第一课」那一批的原形：既没有 origin，
+    // source_id 前缀也不在手工表里，删掉路径判据之后它们全成了 unknown，
+    // 于是 36 门公开课里 21 门在 AI 课程墙上一门都不显示。
+    const c = course({ id: '_m1O5OWXON', scenes: [] });
+    expect(courseDomainOf(c, undefined, onPath)).toBe('ai');
+  });
+
+  it('同题课（altCourseIds）同样算在路径上', () => {
+    expect(courseDomainOf(course({ id: 'Xl_l7SQNEV' }), undefined, onPath)).toBe('ai');
+  });
+
+  it('课程自己记的出身仍然压过路径（2026-08-23 那两门孤儿课的教训）', () => {
+    const c = course({ id: '_m1O5OWXON', stage: { origin: { corpus: 'rag-adv' } } });
+    expect(courseDomainOf(c, undefined, onPath)).toBe('rag-adv');
+  });
+
+  it('不在路径上的课不受这条规则影响', () => {
+    expect(courseDomainOf(course({ id: 'not-on-path' }), undefined, onPath)).toBe(UNKNOWN_DOMAIN);
+  });
+});
+
 describe('em 前缀归主库', () => {
   it('引 em 块的课判 ai（2026-08-28 起 em 规则直接映射主库）', () => {
     const c = course({ scenes: [{ audit: { sources: [{ source_id: 'em1#s2' }] } }] });
@@ -75,16 +100,14 @@ describe('两门孤儿课已经删掉', () => {
     }
   });
 
-  it('学习路径的节点留着，只摘掉了 courseId', async () => {
+  it('学习路径里不再有指向它们的课程 id', async () => {
     const { promises: fs } = await import('node:fs');
     const lp = JSON.parse(await fs.readFile('data/learning-path.json', 'utf-8')) as {
-      nodes?: Array<{ id: string; courseId?: string }>;
+      nodes?: Array<{ id: string; courseId?: string; altCourseIds?: string[] }>;
     };
-    const ids = (lp.nodes ?? []).map((n) => n.id);
-    // 教研产物不随某一次实例化一起删
-    expect(ids).toContain('vector-search');
-    expect(ids).toContain('rag-advanced');
-    const linked = (lp.nodes ?? []).map((n) => n.courseId).filter(Boolean);
+    // 教研节点不随某一次实例化一起删：这一节还排在路径上，只是还没成课
+    expect((lp.nodes ?? []).map((n) => n.id)).toContain('rag-advanced');
+    const linked = (lp.nodes ?? []).flatMap((n) => [n.courseId, ...(n.altCourseIds ?? [])]);
     expect(linked).not.toContain('c3HH74qwAH');
     expect(linked).not.toContain('sVnMPbeeXn');
   });

@@ -151,9 +151,9 @@ describe('pickSampleChips', () => {
 
   it('有阶次时优先摊到不同阶', () => {
     const chips = pickSampleChips(pool, [
-      { index: 1, title: '第 1 阶', conceptIds: [], courseIds: ['n1'] },
-      { index: 2, title: '第 2 阶', conceptIds: [], courseIds: ['a1'] },
-      { index: 3, title: '第 3 阶', conceptIds: [], courseIds: ['r1', 'r2', 'r3'] },
+      { index: 1, courseIds: ['n1'] },
+      { index: 2, courseIds: ['a1'] },
+      { index: 3, courseIds: ['r1', 'r2', 'r3'] },
     ]);
     expect(chips.map((x) => x.id)).toEqual(['r1', 'a1', 'n1']);
   });

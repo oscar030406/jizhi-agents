@@ -16,6 +16,7 @@ import {
   releaseCorpusOwnerMarker,
   readCorpora,
   readCorpus,
+  countActiveIndexRows,
 } from '@/lib/server/knowledge-center';
 import { readDomainRegistry } from '@/lib/server/domain-registry';
 
@@ -180,6 +181,31 @@ describe('知识库中心', () => {
    * 引擎离线降级方案是「这一页压根不问引擎」。证明方式：把 fetch 换成一调用就抛的桩，
    * 聚合层照样出全量数据——有任何一次网络调用，这条用例会直接炸。
    */
+  /**
+   * 索引重建后文件里同时躺着活块与归档块（`backend/rag/ingest.write_index` 保留旧块，
+   * 只加一格 `superseded`）。照行数报，chunk 数会翻倍，而页面上看不出来。
+   */
+  it('切片数只数活块，归档块不算', async () => {
+    const dir = await fs.mkdtemp(path.join(process.cwd(), '.tmp-kc-'));
+    const file = path.join(dir, 'knowledge_index.jsonl');
+    try {
+      await fs.writeFile(
+        file,
+        [
+          '{"source_id":"a#s1","content":"活块一"}',
+          '{"source_id":"b#s1","content":"活块二"}',
+          '',
+          '{"source_id":"a#s1","content":"上一代","superseded": true}',
+        ].join('\n'),
+        'utf-8',
+      );
+      expect(await countActiveIndexRows(file)).toBe(2);
+      expect(await countActiveIndexRows(path.join(dir, 'nope.jsonl'))).toBeNull();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('不依赖引擎进程：网络被掐死也照常出数据', async () => {
     if (!(await hasEngineCorpora())) {
       console.warn('跳过：本机没有引擎数据目录');
