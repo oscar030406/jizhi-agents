@@ -161,6 +161,17 @@ export async function startTour(id: TourId, opts: { force?: boolean } = {}): Pro
     onPopoverRender: (popover, { state }) => {
       const step = (state.activeStep?.data as { step?: TourStep } | undefined)?.step;
       if (step) popover.wrapper.insertBefore(agentHeader(step), popover.title);
+      // 每步都给「跳过」：跳过等于走完，之后不再自动弹（想再看走顶栏「重看引导」或 ?tour=）。
+      // 不用 driver 自带的关闭叉：那个只关不记，下次打开又从头弹。
+      const skip = document.createElement('button');
+      skip.type = 'button';
+      skip.className = 'jz-tour-skip';
+      skip.textContent = '跳过引导';
+      skip.addEventListener('click', () => {
+        finish();
+        instance.destroy();
+      });
+      popover.footer.insertBefore(skip, popover.footer.firstChild);
     },
     onDoneClick: () => {
       finish();

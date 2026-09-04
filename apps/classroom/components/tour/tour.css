@@ -96,3 +96,19 @@
 .jz-tour .driver-popover-arrow-side-bottom.driver-popover-arrow {
   border-bottom-color: #fff;
 }
+
+/* 「跳过引导」：放在页脚最左，弱化成文字链，和「上一步 / 下一步」区分主次 */
+.jz-tour .jz-tour-skip {
+  margin-right: auto;
+  border: 0;
+  background: transparent;
+  padding: 0 4px;
+  font-size: 12px;
+  color: var(--muted-foreground, #6b7280);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.jz-tour .jz-tour-skip:hover {
+  color: var(--foreground, #111827);
+}
