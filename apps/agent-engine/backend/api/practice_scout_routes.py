@@ -140,3 +140,22 @@ def restore_release(corpus: str, payload: dict = Body(...)) -> dict:
         return practice_scout.restore_release(corpus, version, courses)
     except practice_scout.ScoutError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/{corpus}/guide", dependencies=[Depends(verify_internal_token)])
+def build_guide(corpus: str, payload: dict = Body(...)) -> dict:
+    """项目带练：按画像把一张已发布实操卡拆成里程碑。同档缓存，首次约 20-40 秒。"""
+    from backend.services import practice_guide
+
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id 必填")
+    profile = payload.get("profile")
+    if not isinstance(profile, dict):
+        profile = {}
+    try:
+        return practice_guide.build_guide(corpus, project_id, profile, refresh=bool(payload.get("refresh")))
+    except practice_guide.GuideError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except practice_scout.ScoutError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
