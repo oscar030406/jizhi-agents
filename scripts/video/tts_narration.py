@@ -38,13 +38,15 @@ EDGE_VOICE = "zh-CN-XiaoxiaoNeural"
 # 七个智能体各一把嗓子（CosyVoice2 内置音色，都是合成音，不是真人配音）。
 # 「旁白」是无角色的中性讲述，片头/落版用。
 VOICES = {
+    # 09-04 定案：全片沿用数字人演示视频那条声线（CosyVoice2 anna），七个角色靠画面上的头像与名牌区分，
+    # 不靠换嗓子。想恢复一人一嗓，把下面的值改回 claire/david/bella/benjamin/charles/diana 即可。
     "旁白": "anna",
-    "阿诊": "claire",
-    "阿检": "david",
-    "阿讲": "bella",
-    "阿审": "benjamin",
-    "阿裁": "charles",
-    "阿路": "diana",
+    "阿诊": "anna",
+    "阿检": "anna",
+    "阿讲": "anna",
+    "阿审": "anna",
+    "阿裁": "anna",
+    "阿路": "anna",
     "阿问": "anna",
 }
 GAP_SEC = 0.45
