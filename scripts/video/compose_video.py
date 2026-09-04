@@ -10,7 +10,8 @@
       "narration": "audio/lively/scene1.mp3",   # 口播；可省略（无旁白段）
       "system_audio": 0.25,              # 录屏原声保留音量（产品 TTS 原声段可调高）
       "speedups": [{"start": 12.0, "end": 95.0, "factor": 8}],  # 生成等待段加速
-      "label": "画像输入 · 每字段附抽取依据"   # 左下角小字幕（可省略）
+      "label": "画像输入 · 每字段附抽取依据",   # 左下角小字幕（可省略）
+      "speakers": [{"role": "阿诊", "start": 0, "end": 21.3}]  # 说话的小人（可省略；tts_narration 的 speakers.json 原样填）
     }
 
 工艺规则（继承灵山视频手艺）：
@@ -40,6 +41,43 @@ from moviepy import (
 
 FONT = r"C:\Windows\Fonts\msyh.ttc"  # 微软雅黑，标注与小字幕用
 W, H, FPS = 1920, 1080, 30
+# 说话的小人：立绘在课堂端 public/agents/，头像随旁白块切换，右下角，不压左下角字幕
+AGENTS_DIR = Path(__file__).resolve().parents[2] / "apps" / "classroom" / "public" / "agents"
+AGENT_ART = {
+    "阿诊": ("azhen-bust.png", "学情诊断"),
+    "阿检": ("ajian-bust.png", "知识检索"),
+    "阿讲": ("ajiang-bust.png", "内容生成"),
+    "阿审": ("ashen-a-bust.png", "审核"),
+    "阿裁": ("acai-bust.png", "仲裁"),
+    "阿路": ("alu-bust.png", "反馈决策"),
+    "阿问": ("awen-bust.png", "导学"),
+}
+BUST = 168
+
+
+def speaker_overlays(spans: list[dict], total: float):
+    """每个旁白块一张头像 + 名字/职责小牌，只在该块说话的时段出现。"""
+    out = []
+    for sp in spans:
+        art = AGENT_ART.get(sp.get("role", ""))
+        if not art:
+            continue
+        ipath = AGENTS_DIR / art[0]
+        if not ipath.exists():
+            continue
+        start = float(sp["start"])
+        end = min(float(sp["end"]) + 0.3, total)
+        if end <= start:
+            continue
+        bust = (ImageClip(str(ipath)).resized(height=BUST)
+                .with_start(start).with_duration(end - start)
+                .with_position((W - BUST - 36, H - BUST - 120)))
+        tag = (TextClip(font=FONT, text=f"{sp['role']} · {art[1]}", font_size=28,
+                        color="white", bg_color="#00000088", margin=(12, 6))
+               .with_start(start).with_duration(end - start)
+               .with_position((W - BUST - 36, H - 108)))
+        out += [bust, tag]
+    return out
 
 
 def build_scene(base: Path, spec: dict, idx: int):
@@ -49,6 +87,9 @@ def build_scene(base: Path, spec: dict, idx: int):
         if not ipath.exists():
             raise SystemExit(f"镜 {idx}: 图卡不存在 {ipath}")
         card = ImageClip(str(ipath)).with_duration(float(spec["duration"])).resized((W, H))
+        overlays = speaker_overlays(spec.get("speakers", []), card.duration)
+        if overlays:
+            card = CompositeVideoClip([card, *overlays], size=(W, H))
         if spec.get("narration"):
             npath = base / spec["narration"]
             if not npath.exists():
@@ -92,6 +133,11 @@ def build_scene(base: Path, spec: dict, idx: int):
             .with_position((36, H - 90))
         )
         clip = CompositeVideoClip([clip, label], size=(W, H))
+
+    # ---- 右下角说话的小人：按 speakers 的起止秒切换 ----
+    overlays = speaker_overlays(spec.get("speakers", []), clip.duration)
+    if overlays:
+        clip = CompositeVideoClip([clip, *overlays], size=(W, H))
 
     # ---- 音轨：旁白全量 + 原声压低 ----
     tracks = []

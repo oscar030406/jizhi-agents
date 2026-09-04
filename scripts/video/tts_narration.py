@@ -9,6 +9,9 @@
 
 稿件格式：每段以 `## NN 标题` 或 `## 片头` / `## 落版` 开头，段内有一行 `旁白：`，
 其后到下一个 `## ` 之前的正文就是口播。
+v5 起支持多角色：一段里可以有多行 `旁白【阿诊】：`，每块按角色换音色（VOICES 表），
+各块分别合成后用 ffmpeg 拼成该段一个 mp3，块与块之间垫 0.45 秒静音；
+`speakers.json` 记每段各块的角色与起止秒，装配器据此在画面上盖说话的小人头像。
 
 引擎：首选 SiliconFlow CosyVoice2-0.5B（key 读环境变量 SILICONFLOW_API_KEY，
 没有就读 apps/agent-engine/.env），请求剥掉代理环境变量直连；失败回退 edge-tts。
@@ -32,27 +35,47 @@ _CN_DIGITS = "零一二三四五六七八九"
 COSY_MODEL = "FunAudioLLM/CosyVoice2-0.5B"
 COSY_VOICE = "anna"
 EDGE_VOICE = "zh-CN-XiaoxiaoNeural"
+# 七个智能体各一把嗓子（CosyVoice2 内置音色，都是合成音，不是真人配音）。
+# 「旁白」是无角色的中性讲述，片头/落版用。
+VOICES = {
+    "旁白": "anna",
+    "阿诊": "claire",
+    "阿检": "david",
+    "阿讲": "bella",
+    "阿审": "benjamin",
+    "阿裁": "charles",
+    "阿路": "diana",
+    "阿问": "anna",
+}
+GAP_SEC = 0.45
 INSTRUCTION = "请用清晰、平稳、像给同学讲解作品一样的语气说。"
 
 
 # ---------- 稿件解析 ----------
-def parse_script(path: Path) -> list[tuple[str, str]]:
+def parse_script(path: Path) -> list[tuple[str, list[tuple[str, str]]]]:
+    """返回 [(段号, [(角色, 口播文本), ...]), ...]。
+    兼容旧格式：只有一行 `旁白：` 的段算一块，角色记「旁白」。"""
     text = path.read_text(encoding="utf-8")
     sections = re.split(r"^## ", text, flags=re.M)
-    out: list[tuple[str, str]] = []
+    out: list[tuple[str, list[tuple[str, str]]]] = []
+    marker = re.compile(r"^旁白(?:【([^】]+)】)?：\s*$", flags=re.M)
     for sec in sections[1:]:
         head, _, body = sec.partition("\n")
         m = re.match(r"(片头|落版|\d{2})\b", head.strip())
         if not m:
             continue
         sid = {"片头": "00", "落版": "99"}.get(m.group(1), m.group(1))
-        nm = re.search(r"^旁白：\s*$", body, flags=re.M)
-        if not nm:
+        hits = list(marker.finditer(body))
+        if not hits:
             continue
-        narration = body[nm.end():].strip()
-        # 去掉段后的「## 六、」之类不会出现（已被 split），但保留换行给清洗器
-        if narration:
-            out.append((sid, narration))
+        blocks: list[tuple[str, str]] = []
+        for i, h in enumerate(hits):
+            end = hits[i + 1].start() if i + 1 < len(hits) else len(body)
+            narration = body[h.end():end].strip()
+            if narration:
+                blocks.append((h.group(1) or "旁白", narration))
+        if blocks:
+            out.append((sid, blocks))
     return out
 
 
@@ -125,14 +148,14 @@ def siliconflow_key() -> str:
     return ""
 
 
-def tts_cosyvoice(text: str, instruct: bool, speed: float) -> bytes | None:
+def tts_cosyvoice(text: str, instruct: bool, speed: float, voice: str = COSY_VOICE) -> bytes | None:
     key = siliconflow_key()
     if not key:
         return None
     payload = {
         "model": COSY_MODEL,
         "input": (f"{INSTRUCTION}<|endofprompt|>{text}" if instruct else text),
-        "voice": f"{COSY_MODEL}:{COSY_VOICE}",
+        "voice": f"{COSY_MODEL}:{voice}",
         "response_format": "mp3",
         "speed": speed,
     }
@@ -166,6 +189,28 @@ def tts_edge(text: str, out: Path, rate: str) -> bool:
         return False
 
 
+def concat_mp3(parts: list[Path], target: Path, gap: float = GAP_SEC) -> None:
+    """按序拼接，块间垫静音；重编码成一条 mp3（不用 -c copy，帧头会对不上）。"""
+    inputs: list[str] = []
+    filt: list[str] = []
+    for i, p in enumerate(parts):
+        inputs += ["-i", str(p)]
+        filt.append(f"[{i}:a]")
+    n = len(parts)
+    if n == 1:
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(parts[0]), str(target)], check=True)
+        return
+    # 每块后面接一段静音（最后一块不接），再 concat
+    chain = []
+    for i in range(n):
+        if i < n - 1:
+            chain.append(f"[{i}:a]apad=pad_dur={gap}[p{i}]")
+        else:
+            chain.append(f"[{i}:a]acopy[p{i}]")
+    graph = ";".join(chain) + ";" + "".join(f"[p{i}]" for i in range(n)) + f"concat=n={n}:v=0:a=1[out]"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", *inputs, "-filter_complex", graph, "-map", "[out]", str(target)], check=True)
+
+
 def duration_of(path: Path) -> float:
     p = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(path)],
@@ -197,36 +242,59 @@ def main() -> int:
         return 1
     dur_file = out / "durations.json"
     durations = json.loads(dur_file.read_text(encoding="utf-8")) if dur_file.exists() else {}
+    spk_file = out / "speakers.json"
+    speakers = json.loads(spk_file.read_text(encoding="utf-8")) if spk_file.exists() else {}
     script_text = {}
-    for sid, raw in segs:
+    parts_dir = out / "parts"
+    parts_dir.mkdir(exist_ok=True)
+    for sid, blocks in segs:
         if a.only and sid not in a.only:
             continue
-        speech = clean_for_speech(raw)
-        script_text[sid] = speech
-        print(f"[{sid}] {len(speech)} 字")
+        speeches = [(role, clean_for_speech(raw)) for role, raw in blocks]
+        script_text[sid] = [{"role": r, "text": t} for r, t in speeches]
+        print(f"[{sid}] {sum(len(t) for _, t in speeches)} 字，{len(speeches)} 块：{'、'.join(r for r, _ in speeches)}")
         if a.dry_run:
-            print("   ", speech)
+            for r, t in speeches:
+                print(f"    【{r}】{t}")
+            continue
+        part_paths: list[Path] = []
+        failed = False
+        for i, (role, speech) in enumerate(speeches):
+            part = parts_dir / f"{sid}-{i + 1}-{role}.mp3"
+            ok = False
+            if a.engine in ("auto", "cosy"):
+                audio = tts_cosyvoice(speech, a.instruct, a.speed, VOICES.get(role, COSY_VOICE))
+                if audio:
+                    part.write_bytes(audio)
+                    ok = True
+                    print(f"    cosyvoice[{VOICES.get(role, COSY_VOICE)}] -> {part.name}")
+            if not ok and a.engine in ("auto", "edge"):
+                ok = tts_edge(speech, part, a.edge_rate)
+                if ok:
+                    print(f"    edge-tts -> {part.name}")
+            if not ok:
+                print(f"    合成失败：{sid} 第 {i + 1} 块")
+                failed = True
+                break
+            part_paths.append(part)
+        if failed:
             continue
         target = out / f"{sid}.mp3"
-        ok = False
-        if a.engine in ("auto", "cosy"):
-            audio = tts_cosyvoice(speech, a.instruct, a.speed)
-            if audio:
-                target.write_bytes(audio)
-                ok = True
-                print(f"    cosyvoice -> {target.name}")
-        if not ok and a.engine in ("auto", "edge"):
-            ok = tts_edge(speech, target, a.edge_rate)
-            if ok:
-                print(f"    edge-tts -> {target.name}")
-        if not ok:
-            print(f"    合成失败：{sid}")
-            continue
+        concat_mp3(part_paths, target)
+        # 记每块的起止秒：装配器按它切换画面上的说话小人
+        cursor = 0.0
+        spans = []
+        for (role, _), part in zip(speeches, part_paths):
+            d = duration_of(part)
+            spans.append({"role": role, "start": round(cursor, 2), "end": round(cursor + d, 2)})
+            cursor += d + GAP_SEC
+        speakers[sid] = spans
         durations[sid] = duration_of(target)
         print(f"    {durations[sid]} s")
     if not a.dry_run:
         dur_file.write_text(json.dumps(durations, ensure_ascii=False, indent=2), encoding="utf-8")
         (out / "speech-text.json").write_text(json.dumps(script_text, ensure_ascii=False, indent=2), encoding="utf-8")
+        spk_file.write_text(json.dumps(speakers, ensure_ascii=False, indent=2), encoding="utf-8")
         total = sum(v for v in durations.values() if v > 0)
         print(f"合计口播 {total:.0f} s（{total/60:.1f} 分）；时长表 {dur_file}")
     return 0

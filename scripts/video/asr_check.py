@@ -76,6 +76,11 @@ def main() -> int:
         print(f"缺 {ref_file}，先跑 tts_narration.py")
         return 1
     refs = json.loads(ref_file.read_text(encoding="utf-8"))
+    # v5 起一段可能是多块 [{role, text}]：对照文本按块顺序拼起来，与拼好的 mp3 对得上
+    refs = {
+        sid: ("".join(b.get("text", "") for b in ref) if isinstance(ref, list) else ref)
+        for sid, ref in refs.items()
+    }
 
     import whisper  # type: ignore
 
