@@ -46,7 +46,14 @@ def main() -> int:
     scenes = json.loads(SCENES.read_text(encoding="utf-8"))
     for spec in scenes:
         if spec.get("video") in SPEEDUPS:
-            spec["speedups"] = SPEEDUPS[spec["video"]]
+            raw = duration(VIDEO / spec["video"]) if (VIDEO / spec["video"]).exists() else 0.0
+            # 实录比预想短时，起点落在片尾之后的加速段直接丢掉，装配器不接受越界窗口
+            wins = [dict(sp, end=min(float(sp["end"]), raw)) for sp in SPEEDUPS[spec["video"]] if float(sp["start"]) < raw - 1]
+            wins = [w for w in wins if float(w["factor"]) > 1.0 and w["end"] - float(w["start"]) > 1]
+            if wins:
+                spec["speedups"] = wins
+            else:
+                spec.pop("speedups", None)
     grand = 0.0
     for spec in scenes:
         if spec.get("video") and not (VIDEO / spec["video"]).exists():
