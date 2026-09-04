@@ -5,6 +5,7 @@ import type { InteractiveContent } from '@/lib/types/stage';
 import { useInteractiveIframePool } from '@/lib/store/interactive-iframe-pool';
 import { patchHtmlForIframe } from '@/lib/utils/iframe';
 import TemplateWidgetHost from '@/components/widgets/TemplateWidgetHost';
+import { ExternalAidsForScene } from '@/components/aids/external-aid-card';
 
 interface InteractiveRendererProps {
   readonly content: InteractiveContent;
@@ -22,6 +23,10 @@ export function InteractiveRenderer({ content, sceneId }: InteractiveRendererPro
       <div className="h-full w-full overflow-auto p-6">
         <div className="mx-auto max-w-3xl">
           <TemplateWidgetHost config={content.widgetConfig} />
+          {/* 站内模板教具之后再给外部成品：同一个概念，先自己练一遍再看人家怎么画。
+              iframe 那条分支不挂——那边的 iframe 由 InteractiveIframeHost 按矩形浮在
+              槽位上，往槽位里加内容会顶偏它的定位。 */}
+          <ExternalAidsForScene sceneId={sceneId} />
         </div>
       </div>
     );

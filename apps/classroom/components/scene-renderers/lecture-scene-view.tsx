@@ -27,6 +27,7 @@ import {
   ExcerptBlockView,
 } from '@/components/slide-renderer/components/element/TextElement/ExcerptBlock';
 import { annotateClaimsInHtml } from '@/lib/generation/claim-annotate';
+import { ExternalAidsForScene } from '@/components/aids/external-aid-card';
 import {
   PracticeCard,
   projectsForCourse,
@@ -391,6 +392,7 @@ export function LectureSceneView({ scene }: LectureSceneViewProps) {
           );
         })}
         {blocks.length === 0 && <p className="text-sm text-muted-foreground">本节暂无讲义内容。</p>}
+        <ExternalAidsForScene sceneId={scene.id} />
         <CoursePracticeBlock scene={scene} />
         {note && claims?.[note.index] && (
           <div className="absolute z-20" style={{ top: note.top, left: note.left }}>

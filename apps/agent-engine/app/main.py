@@ -83,7 +83,9 @@ app.include_router(model_cache_router)
 from backend.api.intake_routes import router as intake_router  # noqa: E402
 from backend.api.knowledge_graph_routes import router as knowledge_graph_router  # noqa: E402
 from backend.api.practice_scout_routes import router as practice_scout_router  # noqa: E402
+from backend.api.teaching_aid_routes import router as teaching_aid_router  # noqa: E402
 
 app.include_router(intake_router)
 app.include_router(practice_scout_router)
 app.include_router(knowledge_graph_router)
+app.include_router(teaching_aid_router)

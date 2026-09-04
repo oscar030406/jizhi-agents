@@ -11,6 +11,7 @@ from backend.api.intake_routes import router as intake_router
 from backend.api.knowledge_graph_routes import router as knowledge_graph_router
 from backend.api.practice_scout_routes import router as practice_scout_router
 from backend.api.routes import router
+from backend.api.teaching_aid_routes import router as teaching_aid_router
 from backend.integration.personalize_api import router as personalize_router
 
 
@@ -43,6 +44,8 @@ app.include_router(intake_router)
 app.include_router(practice_scout_router)
 # 知识宇宙：该库的概念/教材/章节/证据块结构图，只读。挂载点同样两个 main 都要有。
 app.include_router(knowledge_graph_router)
+# 外部可视化教具：按概念找 GitHub 上的交互式讲解站点。挂载点同样两个 main 都要有。
+app.include_router(teaching_aid_router)
 
 if FRONTEND_DIR.exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIR / "assets"), name="assets")
