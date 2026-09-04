@@ -17,8 +17,8 @@ SCENES = VIDEO / "scenes-v5.json"
 
 SPEEDUPS = {
     "raw/v5-06-B反馈与导学.mp4": [
-        {"start": 8.0, "end": 70.0, "factor": 1.89},
-        {"start": 96.0, "end": 125.0, "factor": 1.89},
+        {"start": 8.0, "end": 70.0, "factor": 1.02},
+        {"start": 96.0, "end": 96.0, "factor": 1.02},
     ],
 }
 
