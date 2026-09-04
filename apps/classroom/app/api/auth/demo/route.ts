@@ -5,7 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-import { DEMO_USERNAMES, type DemoRole } from '@/lib/accounts/demo';
+import { DEMO_ROLES, DEMO_USERNAMES, accountRoleOfDemo, type DemoRole } from '@/lib/accounts/demo';
 import { SESSION_COOKIE, sessionCookieOptions } from '@/lib/accounts/session';
 import {
   accountByUsername,
@@ -25,10 +25,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: '本部署未启用账户系统' }, { status: 503 });
   }
   const body = (await req.json().catch(() => ({}))) as { role?: unknown };
-  const role: DemoRole | null =
-    body.role === 'learner' || body.role === 'manager' ? body.role : null;
+  const role: DemoRole | null = DEMO_ROLES.includes(body.role as DemoRole)
+    ? (body.role as DemoRole)
+    : null;
   if (!role) {
-    return NextResponse.json({ error: 'role 只能是 learner 或 manager' }, { status: 400 });
+    return NextResponse.json({ error: 'role 只能是 learner、manager、learner2 或 manager2' }, { status: 400 });
   }
 
   // 与注册同一把限流器：演示登录不验密码，不限流就是一个无限建会话的口子。
@@ -46,7 +47,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const account = await accountByUsername(DEMO_USERNAMES[role]);
-    if (!account || account.role !== role) {
+    if (!account || account.role !== accountRoleOfDemo(role)) {
       log.error(`demo account for ${role} missing or role mismatch`);
       return NextResponse.json({ error: '演示账号尚未就绪' }, { status: 503 });
     }
