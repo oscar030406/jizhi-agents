@@ -26,6 +26,7 @@ import { AlertTriangle } from 'lucide-react';
 import { loadLearnerProfile } from '@/components/generation/learner-profile-popover';
 import { ConceptGraph, type ConceptGraphNode } from '@/components/path/concept-graph';
 import { KnowledgeUniverse } from '@/components/path/knowledge-universe';
+import { LinearRoadmap } from '@/components/path/linear-roadmap';
 import { DomainPathNotice } from '@/components/path/domain-path-notice';
 import { TrackPractice } from '@/components/path/track-practice';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -362,6 +363,7 @@ function DomainPathBody({ corpus, contextLabel }: { corpus: string; contextLabel
       {state.kind === 'ok' && graphNodes.length > 0 && (
         <>
           <PersonalRouteSummary path={state.path} nodes={graphNodes} />
+          <LinearRoadmap nodes={graphNodes} stages={state.path.stages} />
           <div role="tablist" aria-label="图的视图" className="mt-6 flex gap-2">
             {(
               [
