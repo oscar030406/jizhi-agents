@@ -44,6 +44,7 @@ from backend.rag.ingest import read_index_rows
 from backend.rag.retriever import corpus_index_path
 from backend.services.concept_graph import KB_DIR, read_json_dict
 from backend.services.domain_path import build_domain_path
+from backend.services.graph_layout import attach_layout
 
 #: 证据块节点上限。三千个点是 WebGL 力导向在集成显卡上还能转得动的量级；
 #: 超了按等距抽样，不是截断——截断会让最后几本教材整本消失。
@@ -328,7 +329,15 @@ def build_knowledge_graph(corpus: str) -> dict[str, Any]:
 
 
 def knowledge_graph(corpus: str) -> dict[str, Any]:
-    """带盘上缓存的入口。缓存键是索引文件的 mtime。"""
+    """带盘上缓存的入口。缓存键是索引文件的 mtime。
+
+    出口再套一层 `attach_layout`：离线算好的三维坐标（graph_layout/<corpus>.json，
+    同一把 mtime 钥匙）写进节点，浏览器拿到就直接摆、不再跑力导向。没算过就原样给。
+    """
+    return attach_layout(_cached_graph(corpus))
+
+
+def _cached_graph(corpus: str) -> dict[str, Any]:
     name = (corpus or "").strip().lower()
     index_path = corpus_index_path(name)
     if index_path is None:

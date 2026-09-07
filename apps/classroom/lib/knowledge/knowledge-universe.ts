@@ -39,6 +39,10 @@ export interface UniverseNode {
   courseId?: string;
   /** 全站视图下这个点属于哪个库 */
   corpus?: string;
+  /** 离线算好的坐标（含全站视图的库偏移）。有就钉住不动，没有交给力导向 */
+  x?: number;
+  y?: number;
+  z?: number;
 }
 
 export interface UniverseLink {
@@ -69,8 +73,14 @@ export interface EngineGraph {
     difficulty?: string;
     sourceId?: string;
     nearest?: Array<{ id: string; weight: number }>;
+    /** 引擎离线算好的三维坐标（graph_layout）；没算过就没有这三个字段 */
+    x?: number;
+    y?: number;
+    z?: number;
   }>;
   links?: Array<{ source: string; target: string; type: string; weight?: number }>;
+  /** 引擎告知这张图的坐标是否齐了；ready 时浏览器直接摆点，不跑力导向 */
+  layout?: { ready?: boolean; placed?: number };
 }
 
 /** `data/learning-path.json` 里一个节点（人工策展的 AI 主线路径）。 */
@@ -104,6 +114,8 @@ export interface MergeInput {
   prefix?: string;
   /** 全站视图下这批点属于哪个库 */
   corpus?: string;
+  /** 全站视图下整库坐标的平移量：三个库之间没有边，不错开就叠在原点 */
+  offset?: readonly [number, number, number];
 }
 
 const NODE_TYPES: ReadonlySet<string> = new Set([
@@ -172,10 +184,38 @@ export function mergeKnowledgeUniverse(
   const key = (id: string) => `${prefix}${id}`;
   const nodes: UniverseNode[] = [];
   const ids = new Set<string>();
+  const [ox, oy, oz] = input.offset ?? [0, 0, 0];
+  const placed = new Map<string, readonly [number, number, number]>();
+  const coordsOf = (raw: { x?: number; y?: number; z?: number }) =>
+    typeof raw.x === 'number' && typeof raw.y === 'number' && typeof raw.z === 'number'
+      ? ([raw.x + ox, raw.y + oy, raw.z + oz] as const)
+      : null;
+  const at = (id: string, xyz: readonly [number, number, number]) => {
+    placed.set(id, xyz);
+    return { x: xyz[0], y: xyz[1], z: xyz[2] };
+  };
+  // 课程、项目这类前端拼上去的点没有离线坐标：放在它挂靠的那个点旁边，按序号绕一圈错开，
+  // 免得几十门课叠在同一处。挂靠点自己也没坐标就返回 null，交给力导向。
+  const beside = (
+    id: string,
+    anchor: string | undefined,
+    rank: number,
+  ): { x: number; y: number; z: number } | null => {
+    const base = anchor ? placed.get(anchor) : undefined;
+    if (!base) return null;
+    const angle = rank * 2.39996;
+    const radius = 26 + 6 * Math.sqrt(rank);
+    return at(id, [
+      base[0] + Math.cos(angle) * radius,
+      base[1] + Math.sin(angle) * radius,
+      base[2] + ((rank % 5) - 2) * 8,
+    ]);
+  };
 
   for (const raw of engine?.nodes ?? []) {
     if (!raw?.id || !NODE_TYPES.has(raw.type) || ids.has(key(raw.id))) continue;
     const type = raw.type as UniverseNodeType;
+    const xyz = coordsOf(raw);
     // 概念 id 是内部代号（llm_basics），上屏要换中文名；表里没有就原样，不编。
     const conceptId = type === 'concept' ? raw.id.slice(2) : '';
     ids.add(key(raw.id));
@@ -194,6 +234,7 @@ export function mergeKnowledgeUniverse(
       ...(type === 'concept' && input.statusOfConcept[conceptId]
         ? { status: input.statusOfConcept[conceptId] }
         : {}),
+      ...(xyz ? at(key(raw.id), xyz) : {}),
     });
   }
 
@@ -210,10 +251,14 @@ export function mergeKnowledgeUniverse(
 
   // 课程：挂不上概念的照样上图（一个孤点），不隐藏——课程墙那条同源纪律，
   // 少一门课比多一条错边更难解释。
+  let courseRank = 0;
   for (const course of input.courses) {
     const id = key(`course:${course.id}`);
     if (ids.has(id)) continue;
     ids.add(id);
+    const concept = input.conceptOfCourse[course.id];
+    courseRank += 1;
+    const spot = beside(id, concept ? key(`c:${concept}`) : undefined, courseRank);
     nodes.push({
       id,
       type: 'course',
@@ -222,6 +267,7 @@ export function mergeKnowledgeUniverse(
       size: 5,
       courseId: course.id,
       ...(input.corpus ? { corpus: input.corpus } : {}),
+      ...(spot ?? {}),
     });
   }
   for (const course of input.courses) {
@@ -250,12 +296,14 @@ export function mergeKnowledgeUniverse(
 
   // 实操项目：只连到课，不直接连概念——项目对口的是课，概念是隔着课推出来的，
   // 画一条直连边等于把推断说成数据。
+  let projectRank = 0;
   for (const project of input.projects ?? []) {
     const linked = project.courseIds.filter((courseId) => ids.has(key(`course:${courseId}`)));
     if (!linked.length) continue;
     const id = key(`project:${project.id}`);
     if (!ids.has(id)) {
       ids.add(id);
+      projectRank += 1;
       nodes.push({
         id,
         type: 'project',
@@ -263,6 +311,7 @@ export function mergeKnowledgeUniverse(
         group: 'project',
         size: 6,
         ...(input.corpus ? { corpus: input.corpus } : {}),
+        ...(beside(id, key(`course:${linked[0]}`), projectRank) ?? {}),
       });
     }
     for (const courseId of linked) push(id, key(`course:${courseId}`), 'practices');
@@ -277,6 +326,19 @@ function withCounts(nodes: UniverseNode[], links: UniverseLink[]): UniverseGraph
   const byLink: LinkCounts = {};
   for (const link of links) byLink[link.type] = (byLink[link.type] ?? 0) + 1;
   return { nodes, links, counts: { nodes: nodes.length, links: links.length, byType, byLink } };
+}
+
+/**
+ * 有离线坐标的点占多少。引擎那侧算过布局就接近 1；课程、项目是前端拼的，挂靠不上
+ * 概念时没有坐标，所以不要求等于 1。达到 `STATIC_LAYOUT_COVERAGE` 就整张图不跑力导向。
+ */
+export const STATIC_LAYOUT_COVERAGE = 0.95;
+
+export function layoutCoverage(nodes: ReadonlyArray<UniverseNode>): number {
+  if (!nodes.length) return 0;
+  let placed = 0;
+  for (const node of nodes) if (typeof node.x === 'number') placed += 1;
+  return placed / nodes.length;
 }
 
 /** 全站视图：几个库各自合好之后拼成一张图。id 已经带库前缀，不会撞。 */

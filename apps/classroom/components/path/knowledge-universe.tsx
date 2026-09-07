@@ -37,7 +37,9 @@ import { usePublishedPractice } from '@/components/skills/practice-projects';
 import { domainLabel } from '@/lib/knowledge/domain-labels';
 import {
   combineUniverses,
+  layoutCoverage,
   mergeKnowledgeUniverse,
+  STATIC_LAYOUT_COVERAGE,
   neighbourhood,
   prerequisiteDirections,
   type ConceptStatus,
@@ -202,7 +204,7 @@ function baseColor(node: UniverseNode, wholeSite: boolean): string {
 }
 
 /** 图里跑的点/边对象：库会往上写 x/y/z，也会把 source/target 换成节点对象。 */
-type RtNode = UniverseNode & { x?: number; y?: number; z?: number };
+type RtNode = UniverseNode & { x?: number; y?: number; z?: number; fx?: number; fy?: number; fz?: number };
 type RtLink = {
   source: string | RtNode;
   target: string | RtNode;
@@ -329,10 +331,19 @@ export function KnowledgeUniverse({
   const wholeSite = scope === 'site';
   const graph: UniverseGraph = useMemo(() => {
     const names = wholeSite ? (siteCorpora ?? [corpus]) : [corpus];
-    const merged = names
-      .filter((name) => loaded[name])
+    const present = names.filter((name) => loaded[name]);
+    // 全站视图：离线坐标是各库各算的，都以原点为中心；不平移就三团叠成一坨。
+    // 平移量与下面 runtime 撒点用同一个圆（半径 900 均分），有没有离线坐标观感一致。
+    const offsetOf = (name: string): readonly [number, number, number] => {
+      const index = present.indexOf(name);
+      if (!wholeSite || present.length < 2) return [0, 0, 0];
+      const angle = (index / present.length) * Math.PI * 2;
+      return [Math.cos(angle) * 900, Math.sin(angle) * 900, 0];
+    };
+    const merged = present
       .map((name) =>
         mergeKnowledgeUniverse(loaded[name].graph, {
+          ...(wholeSite ? { offset: offsetOf(name) } : {}),
           // 课程/项目/人工路径只有当前领域这一份，别的库如实空着
           courses: name === corpus ? courses : [],
           conceptOfCourse: name === corpus ? conceptOfCourse : {},
@@ -381,7 +392,14 @@ export function KnowledgeUniverse({
         z: (rank % 17) * 6 - 48,
       };
     };
-    const nodes: RtNode[] = graph.nodes.map((node) => ({ ...node, ...seedOf(node.corpus) }));
+    // 离线算好坐标的点：不撒、钉住（fx/fy/fz），力导向即使跑起来也不挪它们；
+    // 只有前端拼上去又挂靠不上的点才交给力导向。
+    const nodes: RtNode[] = graph.nodes.map((node) =>
+      typeof node.x === 'number'
+        ? { ...node, fx: node.x, fy: node.y, fz: node.z }
+        : { ...node, ...seedOf(node.corpus) },
+    );
+    const staticLayout = layoutCoverage(graph.nodes) >= STATIC_LAYOUT_COVERAGE;
     const byId = new Map(nodes.map((node) => [node.id, node]));
     const links: RtLink[] = graph.links.map((link) => ({
       source: byId.get(link.source) ?? link.source,
@@ -391,7 +409,7 @@ export function KnowledgeUniverse({
       sid: link.source,
       tid: link.target,
     }));
-    return { nodes, links, byId };
+    return { nodes, links, byId, staticLayout };
   }, [graph]);
 
   const hits = useMemo(() => {
@@ -699,7 +717,7 @@ function DetailCard({
 }: {
   node: UniverseNode;
   graph: UniverseGraph;
-  runtime: { nodes: RtNode[]; links: RtLink[]; byId: Map<string, RtNode> };
+  runtime: { nodes: RtNode[]; links: RtLink[]; byId: Map<string, RtNode>; staticLayout: boolean };
   onClose: () => void;
   onPick: (id: string) => void;
   onDraft?: (conceptLabel: string) => void;
@@ -834,7 +852,7 @@ function Canvas({
   onSelect,
   flyToRef,
 }: {
-  runtime: { nodes: RtNode[]; links: RtLink[]; byId: Map<string, RtNode> };
+  runtime: { nodes: RtNode[]; links: RtLink[]; byId: Map<string, RtNode>; staticLayout: boolean };
   nodeTypes: ReadonlySet<UniverseNodeType>;
   linkTypes: ReadonlySet<UniverseLinkType>;
   showLabels: boolean;
@@ -1071,6 +1089,10 @@ function Canvas({
     const links = runtime.links.filter(
       (link) => linkTypes.has(link.type) && visible.has(link.sid) && visible.has(link.tid),
     );
+    // 坐标齐了就零 tick：点已经在该在的位置，预热与冷却只会让它们抖一下再回来，
+    // 评委看到的「转圈」多半就是这几秒。没算过坐标的库照旧跑力导向。
+    if (runtime.staticLayout) graph.warmupTicks(0).cooldownTicks(0);
+    else graph.warmupTicks(60).cooldownTicks(220);
     graph.graphData({ nodes, links });
     // 第一帧就把相机退到能装下整张图的距离：点数的立方根 × 常数，与力导向铺开的
     // 尺度同阶。不设的话开场几秒里屏幕上只有几粒尘。

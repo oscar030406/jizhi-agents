@@ -446,6 +446,40 @@ def learner_blueprint_api(
     """
     from backend.agents.learner_diagnosis_agent import LearnerDiagnosisAgent
     from backend.schemas.learner import PretestResult
+    from backend.services.blueprint_cache import cached_call
+
+    request = {
+        "learning_goal": learning_goal,
+        "background": background,
+        "programming_level": programming_level,
+        "python_level": python_level,
+        "agent_level": agent_level,
+        "rag_level": rag_level,
+        "engineering_level": engineering_level,
+        "learning_preference": learning_preference,
+        "time_budget_hours": time_budget_hours,
+        "corpus": corpus,
+        "concept_mastery": dict(concept_mastery or {}),
+    }
+    # 规则本体毫秒级，慢的是模型那句摘要；同一份输入不重算，见 blueprint_cache 的说明
+    return cached_call(request, lambda: _learner_blueprint_uncached(**request))
+
+
+def _learner_blueprint_uncached(
+    learning_goal: str,
+    background: str,
+    programming_level: int,
+    python_level: int,
+    agent_level: int,
+    rag_level: int,
+    engineering_level: int,
+    learning_preference: str,
+    time_budget_hours: int,
+    corpus: str,
+    concept_mastery: dict[str, float] | None,
+) -> dict[str, Any]:
+    from backend.agents.learner_diagnosis_agent import LearnerDiagnosisAgent
+    from backend.schemas.learner import PretestResult
 
     profile = LearnerProfile(
         id="external_maic",

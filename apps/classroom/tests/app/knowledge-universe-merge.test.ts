@@ -8,10 +8,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   combineUniverses,
+  layoutCoverage,
   mergeKnowledgeUniverse,
   neighbourhood,
   parseSourceRefs,
   prerequisiteDirections,
+  STATIC_LAYOUT_COVERAGE,
   type EngineGraph,
   type UniverseLink,
 } from '@/lib/knowledge/knowledge-universe';
@@ -240,5 +242,67 @@ describe('prerequisiteDirections', () => {
   it('多跳按最短距离', () => {
     const { upstream } = prerequisiteDirections(links, 'c:top');
     expect(Object.fromEntries(upstream)).toEqual({ 'c:mid': 1, 'c:side': 1, 'c:base': 2 });
+  });
+});
+
+describe('离线坐标', () => {
+  const PLACED: EngineGraph = {
+    nodes: [
+      { id: 'c:rag', type: 'concept', label: 'rag', group: 'stage-2', size: 5, x: 10, y: 20, z: 30 },
+      { id: 's:ha01s01', type: 'section', label: '第1章', group: 'ha', size: 3, x: -5, y: 0, z: 5 },
+      // 引擎少给一个点的坐标（新加的块还没重算布局）
+      { id: 'k:ha01s01#s1', type: 'chunk', label: '开头', group: 'ha', size: 1 },
+    ],
+    links: [{ source: 's:ha01s01', target: 'c:rag', type: 'covers' }],
+  };
+  const input = {
+    courses: [
+      { id: 'course-a', title: '挂在 rag 上的课' },
+      { id: 'course-b', title: '挂不上概念的课' },
+    ],
+    conceptOfCourse: { 'course-a': 'rag', 'course-b': null },
+    statusOfConcept: {},
+    projects: [{ id: 'proj-1', name: '项目', courseIds: ['course-a'] }],
+  };
+
+  it('引擎节点的坐标原样带过来，没坐标的点也不补', () => {
+    const graph = mergeKnowledgeUniverse(PLACED, input);
+    const byId = new Map(graph.nodes.map((node) => [node.id, node]));
+    expect(byId.get('c:rag')).toMatchObject({ x: 10, y: 20, z: 30 });
+    expect(byId.get('k:ha01s01#s1')?.x).toBeUndefined();
+  });
+
+  it('课程放在它主概念旁边，挂不上概念的课交给力导向', () => {
+    const graph = mergeKnowledgeUniverse(PLACED, input);
+    const byId = new Map(graph.nodes.map((node) => [node.id, node]));
+    const course = byId.get('course:course-a')!;
+    expect(typeof course.x).toBe('number');
+    const distance = Math.hypot(course.x! - 10, course.y! - 20, course.z! - 30);
+    expect(distance).toBeGreaterThan(5);
+    expect(distance).toBeLessThan(80);
+    expect(byId.get('course:course-b')?.x).toBeUndefined();
+    // 项目跟着第一门相关课走
+    const project = byId.get('project:proj-1')!;
+    expect(typeof project.x).toBe('number');
+    expect(Math.hypot(project.x! - course.x!, project.y! - course.y!, project.z! - course.z!)).toBeLessThan(80);
+  });
+
+  it('全站视图的平移量加在每个坐标上', () => {
+    const graph = mergeKnowledgeUniverse(PLACED, {
+      ...input,
+      prefix: 'ai|',
+      corpus: 'ai',
+      offset: [900, -900, 0],
+    });
+    const rag = graph.nodes.find((node) => node.id === 'ai|c:rag')!;
+    expect(rag).toMatchObject({ x: 910, y: -880, z: 30 });
+  });
+
+  it('覆盖率按有坐标的点算，够阈值才算静态布局', () => {
+    const graph = mergeKnowledgeUniverse(PLACED, input);
+    // 5 个点里 3 个有坐标（rag、section、course-a）+ 项目 1 个 = 4/6
+    expect(layoutCoverage(graph.nodes)).toBeCloseTo(4 / 6, 5);
+    expect(layoutCoverage([])).toBe(0);
+    expect(STATIC_LAYOUT_COVERAGE).toBeGreaterThan(0.9);
   });
 });
