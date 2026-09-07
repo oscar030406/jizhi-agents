@@ -36,7 +36,7 @@ type SkillMapData = import('@/app/skills/skills-view').SkillMapData;
 
 /** 主库 ai 的首屏数据现在由服务端外壳传进来（快照），不再由页面自己去取。 */
 let snapshot: SkillMapData;
-const view = () => <SkillsPage snapshot={snapshot} jobSkills={[]} jobId="" />;
+const view = () => <SkillsPage snapshot={snapshot} jobSkills={[]} skillEvidence={[]} jobId="" />;
 
 const aiJob: JobSkills = {
   job_id: 'ai-engineer',

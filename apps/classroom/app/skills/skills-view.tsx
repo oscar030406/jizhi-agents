@@ -62,11 +62,19 @@ import { conceptLabel } from '@/lib/knowledge/concept-labels';
 import { domainLabel } from '@/lib/generation/learner-profile';
 import { loadLearnerProfile } from '@/components/generation/learner-profile-popover';
 import { ForeignDomainEmpty } from '@/components/skills/foreign-domain-empty';
+// 技能徽章（微认证）：判定在 lib/learner/micro-credential.ts，取数与展示在下面这个组件里。
+import {
+  SkillBadgeLine,
+  SkillBadgeNotice,
+  useSkillBadgeIndex,
+  useSkillBadges,
+} from '@/components/skills/skill-badge';
+import type { SkillBadge } from '@/lib/learner/micro-credential';
 import type { CorpusStatus, JobSkills, SkillCoverage } from '@/app/api/skills/route';
 import { useAccountProfile } from '@/lib/knowledge/account-profile';
 import { useEffectiveDomainContext } from '@/lib/knowledge/use-domain-context';
 // 类型 only：learning-path.ts 只在服务端跑（它 import node:fs），这行编译期就被擦掉。
-import type { JobSkillRow } from '@/lib/server/learning-path';
+import type { JobSkillEvidence, JobSkillRow } from '@/lib/server/learning-path';
 
 /** 有人工学习路径与技能快照的那个库。别的库仍旧问引擎实时结果。 */
 const CURATED_CORPUS = 'ai';
@@ -121,6 +129,8 @@ const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
 
 /** 非主线岗位的空表。写成常量免得每次渲染都新建一个 Map 把 JobCard 的 props 拍脏。 */
 const EMPTY_SKILL_COURSES: ReadonlyMap<string, never[]> = new Map();
+/** 同上，给徽章用：只有主线那一岗有证据接线面，别的岗位一枚徽章都不出。 */
+const EMPTY_SKILL_BADGES: ReadonlyMap<string, SkillBadge> = new Map();
 
 /** 取当前会话可见的技能地图；任何失败都返回 null。 */
 async function loadSkillMap(url: string): Promise<SkillMapData | null> {
@@ -323,6 +333,9 @@ function JobCard({
   projects,
   skillCourses,
   corpus,
+  skillBadges,
+  badgeIssuedTo,
+  badgeNotice,
 }: {
   job: JobSkills;
   open: boolean;
@@ -334,6 +347,11 @@ function JobCard({
   skillCourses: ReadonlyMap<string, JobSkillRow['courses']>;
   /** 当前领域。实操卡的「带我做这个项目」要按域拼链接，不能一律当 ai。 */
   corpus: string;
+  /** 技能名 → 徽章。判不了或非主线岗位时是空表，那时一枚徽章都不出。 */
+  skillBadges: ReadonlyMap<string, SkillBadge>;
+  badgeIssuedTo: string;
+  /** 判不了时的那一句（未登录、画像读不到）。只在主线那一岗出一次。 */
+  badgeNotice: string | null;
 }) {
   const total = job.skills.length;
   const ratio = total ? job.covered_count / total : 0;
@@ -398,6 +416,7 @@ function JobCard({
               ))}
             </div>
           )}
+          {badgeNotice && <SkillBadgeNotice text={badgeNotice} />}
           {job.skills.map((s) => (
             <div key={s.skill}>
               <button
@@ -438,6 +457,9 @@ function JobCard({
               {/* 这项技能在学习路径上对口哪门课。成课的直接进课堂，没成课的如实写「课程生成中」，
                 「按此技能造课」仍然是上面那颗按钮。 */}
               <SkillCourseLine courses={skillCourses.get(s.skill) ?? []} />
+              {skillBadges.get(s.skill) && (
+                <SkillBadgeLine badge={skillBadges.get(s.skill)!} issuedTo={badgeIssuedTo} />
+              )}
             </div>
           ))}
         </div>
@@ -451,12 +473,15 @@ function JobCard({
 export default function SkillsView({
   snapshot,
   jobSkills,
+  skillEvidence,
   jobId,
 }: {
   /** 主库 ai 的岗位技能地图快照。 */
   snapshot: SkillMapData & { exported_at?: string };
   /** 「AI Agent 开发工程师」13 项技能各自对应的节点与成课状态。 */
   jobSkills: JobSkillRow[];
+  /** 同这 13 项技能的证据接线面（对口课的主概念与场景 id），技能徽章据此判定。 */
+  skillEvidence: JobSkillEvidence[];
   /** 上面这 13 项属于哪个岗位（对不上就不往别的岗位卡上贴课）。 */
   jobId: string;
 }) {
@@ -576,6 +601,17 @@ export default function SkillsView({
     () => new Map(jobSkills.map((row) => [row.skill, row.courses])),
     [jobSkills],
   );
+  // 技能徽章（微认证）：判定读画像里的掌握度、证据账本里的测验判定、画像里的实操里程碑。
+  const badgeState = useSkillBadges({
+    jobId,
+    skills: skillEvidence,
+    corpus,
+    profileState,
+    practice,
+  });
+  const badgeIndex = useSkillBadgeIndex(badgeState);
+  const badgeNotice = badgeState.kind === 'unavailable' ? badgeState.reason : null;
+  const badgeIssuedTo = badgeState.kind === 'ready' ? badgeState.issuedTo : '';
   const mlJob = data?.jobs.find((job) => job.job_id === 'ml_engineer');
   const mlSkillGaps =
     mlJob?.skills.filter((skill) => !skill.covered).map((skill) => skill.skill) ?? [];
@@ -855,6 +891,9 @@ export default function SkillsView({
                       projects={practice.kind === 'ready' ? practice.projects : []}
                       skillCourses={job.job_id === jobId ? skillCourseMap : EMPTY_SKILL_COURSES}
                       corpus={corpus}
+                      skillBadges={job.job_id === jobId ? badgeIndex : EMPTY_SKILL_BADGES}
+                      badgeIssuedTo={badgeIssuedTo}
+                      badgeNotice={job.job_id === jobId ? badgeNotice : null}
                     />
                   ))}
                 </div>

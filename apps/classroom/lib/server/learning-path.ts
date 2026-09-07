@@ -319,3 +319,73 @@ export function jobSkillRows(
     }),
   }));
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 岗位技能 × 学习证据（技能徽章的接线面）
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * 一项技能在证据侧的接线面：它对口哪些课、这些课的主概念是什么、里面有哪些场景。
+ *
+ * 形状与 `lib/learner/micro-credential.ts` 的 `SkillEvidenceInput` 对齐，页面拿到
+ * 直接往判定函数里送，中间不再改形状。
+ */
+export interface JobSkillEvidence {
+  skill: string;
+  courses: Array<{ courseId: string; title: string }>;
+  /** 每门对口课的主概念，去重。反推不出概念的课不进这张表，也不编一个。 */
+  concepts: string[];
+  /** 对口课里的场景 id，用来把证据账本里的测验判定认回这门课。 */
+  scenes: Array<{ sceneId: string; courseId: string; courseTitle: string }>;
+}
+
+/**
+ * 「AI Agent 开发工程师」13 项技能各自的证据接线面。
+ *
+ * 只读 `jobSkillCourses` 映射到、且已成课的那十几门课文件（实测 12 门约 1 MB），
+ * 不扫全部课程目录——课程墙那条路（`readCuratedWall`）才需要全量。
+ * 单门课读失败就跳过它，不让一门坏文件把整页的徽章判定拖成不可用。
+ */
+export async function jobSkillEvidence(data: LearningPath): Promise<JobSkillEvidence[]> {
+  const nodeById = new Map((data.nodes ?? []).map((n) => [n.id, n]));
+  const entries = Object.entries(data.jobSkillCourses?.skills ?? {});
+
+  const wanted = new Set<string>();
+  for (const [, nodeIds] of entries) {
+    for (const nodeId of nodeIds) {
+      const node = nodeById.get(nodeId);
+      if (node?.status === 'live' && node.courseId) wanted.add(node.courseId);
+    }
+  }
+
+  const loaded = new Map<string, { concept: string | null; sceneIds: string[] }>();
+  await Promise.all(
+    [...wanted].map(async (courseId) => {
+      const classroom = await readClassroom(courseId).catch(() => null);
+      if (!classroom) return;
+      const scenes = (classroom.scenes ?? []) as unknown as Array<Record<string, unknown>>;
+      loaded.set(courseId, {
+        concept: primaryConcept(scenes),
+        sceneIds: scenes.map((s) => String(s.id ?? '')).filter(Boolean),
+      });
+    }),
+  );
+
+  return entries.map(([skill, nodeIds]) => {
+    const courses: JobSkillEvidence['courses'] = [];
+    const concepts: string[] = [];
+    const scenes: JobSkillEvidence['scenes'] = [];
+    for (const nodeId of nodeIds) {
+      const node = nodeById.get(nodeId);
+      if (!node || node.status !== 'live' || !node.courseId) continue;
+      const course = loaded.get(node.courseId);
+      if (!course) continue;
+      courses.push({ courseId: node.courseId, title: node.title });
+      if (course.concept && !concepts.includes(course.concept)) concepts.push(course.concept);
+      for (const sceneId of course.sceneIds) {
+        scenes.push({ sceneId, courseId: node.courseId, courseTitle: node.title });
+      }
+    }
+    return { skill, courses, concepts, scenes };
+  });
+}

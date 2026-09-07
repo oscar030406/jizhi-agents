@@ -78,6 +78,7 @@ const view = () => (
       { skill: '智能体基础', covered: true, courses: [{ title: '已成课', courseId: 'c1' }] },
       { skill: '还没成课的技能', covered: false, courses: [{ title: '未成课', courseId: null }] },
     ]}
+    skillEvidence={[]}
     jobId="ai-engineer"
   />
 );
