@@ -1,29 +1,32 @@
 # 演示视频制作链
 
-稿件：`docs/06-defense/录屏稿-v5.md`（分镜、操作、旁白三合一；v5 起旁白由七个智能体分段第一人称讲，写法是 `旁白【阿诊】：`，一段可多块）。v3/v4 稿与音频保留不再维护。
+成片 `docs/06-defense/集智演示视频.mp4`（520 秒）就是这条链跑出来的。
+
+- 口播稿：`docs/06-defense/录屏稿-v6.md`（叙事顺序对齐答辩 PPT，句子取自 PPT），知识宇宙补录段另在 `录屏稿-v6-知识宇宙.md`。
+- 录屏操作：`docs/06-defense/录屏稿-v5.md` 第一、二、四节（账号、地址、每段怎么操作、失败口径）。v6 复用 v5 录的实录，没有重录，所以这份仍是录屏的操作依据。
+- 实录：`docs/06-defense/video/raw/v5-*.mp4` 与 `v6-10-知识宇宙.mp4`。
 
 ## 顺序
 
-1. **图卡**：`python scripts/video/make_cards.py` → `docs/06-defense/video/{opening,end}-card-v3.png`
-2. **口播**：`python scripts/video/tts_narration.py docs/06-defense/录屏稿-v5.md -o docs/06-defense/audio/v5`
-   - 角色→音色表在脚本顶部 `VOICES`（CosyVoice2 内置音色，全是合成音）；一段多块时各块分别合成，块间垫 0.45 秒静音，ffmpeg 拼成该段一个 mp3；`speakers.json` 记每块角色与起止秒。
-   - 首选 SiliconFlow CosyVoice2（key 从 `apps/agent-engine/.env` 读，请求直连不走代理），失败自动回退 edge-tts。
-   - 产物 `docs/06-defense/audio/v3/<段号>.mp3`、`durations.json`（每段口播秒数，录屏时画面不能短于它）、`speech-text.json`（清洗后的实际口播文本）。
-   - `--dry-run` 先看清洗后的文本；`--only 04 07` 只重合成某几段；`--speed 1.05` 微调语速。
-3. **ASR 回核**：`python scripts/video/asr_check.py docs/06-defense/audio/v3`
-   - 本机 whisper small 转写，与口播稿比对；相似度低于 0.85 或转写里出现语气指令词的段要重合成。
-   - 数字两边都归一化成阿拉伯数字再比，「百分之二点一」对 2.1% 不算错。
-4. **录屏**：按录屏稿第四节的文件名录到 `docs/06-defense/video/raw/`。1920×1080、30 fps。每段画面时长 ≥ `durations.json` 里对应口播秒数，装配器会硬校验。
-   - 本机没装 OBS。Win+G 游戏录制栏可以录浏览器窗口（设置里把质量调到高、帧率 30、录系统声音）；要录整个桌面或多窗口切换就装 OBS。
-5. **填加速段**：`docs/06-defense/video/scenes-v3.json` 里第 03 段的 `speedups` 把 `end` 改成实际的生成等待结束秒。装配器会在右上角盖「过程加速 N×」。
-6. **出片**：`python scripts/video/compose_video.py docs/06-defense/video/scenes-v5.json -o docs/06-defense/集智演示视频.mp4`
-   - 清单里每镜的 `speakers` 直接抄 `speakers.json` 对应段；装配器按起止秒在右下角叠加说话小人的头像（`apps/classroom/public/agents/*-bust.png`）和「名字 · 职责」小牌。
-   - 超 600 秒直接报错。左下角功能字幕、旁白全量、录屏原声压低都由装配器处理。
-7. **打包**：视频落到 `docs/06-defense/` 后，跑 `scripts/build-submission.ps1`（不带 `-SkipVideoCheck`）。
+1. **口播**：`python scripts/video/tts_narration.py docs/06-defense/录屏稿-v6.md -o docs/06-defense/audio/v6 --speed 1.1 --engine cosy`
+   - 稿件里 `旁白【阿检】：` 这种标记按角色分块，一段可多块；块间垫 0.45 秒静音，拼成该段一个 mp3。`speakers.json` 记每块角色与起止秒，装配器按它切头像。
+   - 音色表在脚本顶部 `VOICES`，现在七个角色统一用 CosyVoice2 的 anna（一条声线，用户定的）。key 从 `apps/agent-engine/.env` 读，请求直连不走代理，失败回退 edge-tts。
+   - 产物：`<段号>.mp3`、`durations.json`、`speech-text.json`。`--dry-run` 只看清洗后的文本，`--only 04 07` 重合成某几段。
+2. **ASR 回核**：`python scripts/video/asr_check.py docs/06-defense/audio/v6`
+   - 本机 whisper small 转写与稿件比对，相似度低于 0.85 的段重合成。数字两边归一化后再比，「百分之二点一」对 2.1% 不算错。
+3. **录屏**（只在实录要重录时做）：按 `录屏稿-v5.md` 第四节录到 `video/raw/`，1920×1080、30 fps。知识宇宙这类 WebGL 画面必须用有头 Chrome 录，无头会录成黑屏（`tmp/video-recording-20260904/rec-universe.js` 是现成的脚本）。
+4. **装配**：`python scripts/video/compose_ffmpeg.py --tone dark`
+   - 段序、实录文件、左下角字幕、要保留的区间都写在脚本顶部的 `SCENES` 里，改片子改这一处。
+   - 每段画面按该段口播长度加 0.6 秒裁剪，不够长就定格末帧，所以没有空屏。
+   - `--tone`：`dark` 反相转色相当暗色主题用（录屏是亮色页面，直接放刺眼），`dim` 只压白底，`none` 只拉对比度。
+   - 片头片尾用答辩 PPT 封面底图现场合成，不再需要单独的图卡文件。
+   - 按段并行编码后无损拼接，整片约 30 秒出片；总长超 600 秒直接报错。
+5. **打包**：视频落到 `docs/06-defense/` 后跑 `scripts/build-submission.ps1`（不带 `-SkipVideoCheck`）。
 
-## 已知坑（从数字人项目带过来的）
+## 已知坑
 
-- CosyVoice2 的语气指令偶尔会被念进音频，所以默认不加指令（`--instruct` 才加），而且合成后一律过 ASR。
+- CosyVoice2 的语气指令偶尔被念进音频，所以默认不加指令（`--instruct` 才加），合成后一律过 ASR。
 - 音频偶发爆音靠播放端限幅，不追单条素材。
-- 剪辑合成用 moviepy 重编码整体拼接，不用 `-c copy` 拼段（PTS 会跳）。
-- 旁白与录屏原声叠着会有「双声」感：录屏段原声默认压到 0.2，产品自带 TTS 的段可以调高 `system_audio`。
+- 拼段不要用 `-c copy`：段与段的 SAR 不一致时会拼出花屏或半截文件，装配器统一走 `setsar=1` 再重编码。
+- 旁白与录屏原声叠着有「双声」感：录屏段原声压到 0.2，产品自带 TTS 的段可调高 `system_audio`。
+- 两个装配进程同时写同一个 `scene-*.mp4` 会写出坏文件，改脚本重跑前先确认上一次跑完了。
