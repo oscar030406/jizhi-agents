@@ -40,6 +40,7 @@ import {
 } from '@/lib/knowledge/domain-registry';
 import { useDomainRegistryVersion } from '@/lib/knowledge/use-domain-registry';
 import { ProfileImpactPreview } from '@/components/generation/profile-impact-preview';
+import { ProfileRadar } from '@/components/learner/profile-radar';
 import type { PretestDimResult, PretestQuestion } from '@/app/api/pretest/route';
 
 const STORAGE_KEY = 'learnerProfile';
@@ -544,6 +545,26 @@ export function SelfProfilePanel({
           {/* 预览放在套用按钮正下方、所有字段之上：套预设是演示时切画像的主要手势，
             切完不用滚动就能看见这份画像把课改成了什么样。 */}
           <ProfileImpactPreview profile={profile} />
+
+          {/* 画像多维对照。面板里只有画像自己那几张表，没有学情诊断的产物——
+            拿不到的维度（目标达成、以及没答过题时的知识掌握）如实空着。
+            分域表按画像当前选的培训领域取：evidence 落盘时 Measured.domain
+            就是这个值（lib/evidence/profile-bridge.ts learnerDomain）。 */}
+          <div className="space-y-1">
+            <p className="text-[11px] font-medium text-muted-foreground">画像多维对照</p>
+            <ProfileRadar
+              height={200}
+              input={{
+                conceptMastery: profile.conceptMasteryByDomain?.[profile.domain ?? ''],
+                conceptConfidence: profile.conceptConfidenceByDomain?.[profile.domain ?? ''],
+                conceptRecall: profile.conceptRecallByDomain?.[profile.domain ?? ''],
+                selfLevels: DIMENSIONS.map((d) => profile[d.key] as number | undefined),
+              }}
+            />
+          </div>
+          <FieldNote>
+            它决定什么：什么都不决定，只是把画像里已有的数摆到一把标尺上看。带引擎诊断口径的完整对照在「学情报告」页。
+          </FieldNote>
 
           <div className="grid grid-cols-2 gap-2">
             <label className="text-[11px] space-y-1">

@@ -37,6 +37,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { SiteHeader } from '@/components/site-header';
 import { LearnerRail } from '@/components/nav/learner-rail';
 import { EvidenceTrajectoryChart } from '@/components/report/evidence-trajectory-chart';
+import { ProfileRadar } from '@/components/learner/profile-radar';
 import { PathOrDomainCard } from '@/components/home/learning-overview';
 import {
   CONFIDENCE_FLOOR,
@@ -1748,6 +1749,26 @@ export default function ReportPage() {
                         blueprintFallback()
                       )}
                     </div>
+                  </div>
+
+                  {/* 画像雷达：把上面这些散着的量放到同一把 0–1 标尺上比。
+                    自评那五维只在 AI 领域有语义（与上面同一条口径），别的领域传 null
+                    让「先验基础」如实空着，不拿 0 填成一个假的凹陷。 */}
+                  <div className="rounded-lg border border-border/70 p-3">
+                    <p className="mb-2 text-xs font-medium text-foreground">画像多维对照</p>
+                    <ProfileRadar
+                      height={260}
+                      input={{
+                        conceptMastery: domainProfile?.conceptMastery,
+                        conceptConfidence: domainProfile?.conceptConfidence,
+                        conceptRecall: domainProfile?.conceptRecall,
+                        masteryVector: bp?.mastery_vector,
+                        selfLevels: isAiDomain
+                          ? PROFILE_DIMENSIONS.map((d) => profile[d.key] as number | undefined)
+                          : null,
+                        skillGaps: bp?.blueprint?.skill_gaps,
+                      }}
+                    />
                   </div>
                 </div>
               )}
