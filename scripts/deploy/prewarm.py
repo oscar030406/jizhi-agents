@@ -112,17 +112,18 @@ def engine(path: str, method: str = "GET", tok: str | None = None, timeout: floa
 
 
 def warm_graphs(tok: str) -> list[str]:
-    status, _, registry = engine("/api/domain-intake/corpus-owners")
+    """域清单走网站的 /api/domains（已按可见性过滤，entries 的键就是库名）；读不到按已知三库。"""
     corpora: list[str] = []
-    if isinstance(registry, dict):
-        entries = registry.get("data") if isinstance(registry.get("data"), (dict, list)) else registry
+    try:
+        s, _, payload = Web().call("/api/domains", timeout=60)
+        entries = payload.get("entries") if isinstance(payload, dict) else None
         if isinstance(entries, dict):
-            corpora = [k for k in entries.keys() if isinstance(k, str)]
-        elif isinstance(entries, list):
-            corpora = [e.get("corpus") for e in entries if isinstance(e, dict) and e.get("corpus")]
+            corpora = [k for k in entries if isinstance(k, str) and k.strip()]
+    except Exception:  # noqa: BLE001 - 预热脚本，读不到就退到默认清单
+        corpora = []
     if not corpora:
         corpora = ["ai", "iotdb", "smart-manufacturing"]
-        log(f"域清单没读到（HTTP {status}），按已知三库预热")
+        log("域清单没读到，按已知三库预热")
     for name in corpora:
         s, t, g = engine(f"/api/knowledge-graph/{name}")
         n = (g or {}).get("counts", {}).get("nodes") if isinstance(g, dict) else None
@@ -139,7 +140,8 @@ def warm_account(role: str, practice: bool) -> None:
         log(f"[{role}] 演示登录 HTTP {s}，跳过（15 分钟配额或账号不在）")
         return
     s, _, profile = web.call("/api/profile")
-    prof = profile.get("profile") if isinstance(profile, dict) and isinstance(profile.get("profile"), dict) else profile
+    # /api/profile 的画像在 fields 下（lib/knowledge/account-profile.ts 也只认这一格）
+    prof = profile.get("fields") if isinstance(profile, dict) and isinstance(profile.get("fields"), dict) else None
     corpus = ""
     goal = ""
     if isinstance(prof, dict):
