@@ -11,17 +11,26 @@
  */
 
 import skillMapSnapshot from '@/data/skill-map-ai.json';
-import { jobSkillRows, readLearningPath, skillCoverageOf } from '@/lib/server/learning-path';
+import {
+  jobSkillEvidence,
+  jobSkillRows,
+  readLearningPath,
+  skillCoverageOf,
+} from '@/lib/server/learning-path';
 import SkillsView from './skills-view';
 
 export const dynamic = 'force-dynamic';
 
 export default async function Page() {
   const learningPath = await readLearningPath().catch(() => null);
+  // 技能徽章的接线面（对口课的主概念与场景 id）。只读 jobSkillCourses 映射到的那十几门
+  // 课文件；读失败就给空表，页面据此显示「判不了」而不是拿别的数据凑一个判定。
+  const skillEvidence = learningPath ? await jobSkillEvidence(learningPath).catch(() => []) : [];
   return (
     <SkillsView
       snapshot={skillMapSnapshot as Parameters<typeof SkillsView>[0]['snapshot']}
       jobSkills={learningPath ? jobSkillRows(learningPath, skillCoverageOf(skillMapSnapshot)) : []}
+      skillEvidence={skillEvidence}
       jobId={learningPath?.jobSkillCourses?.job_id ?? ''}
     />
   );
