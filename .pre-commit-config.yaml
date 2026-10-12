@@ -1,0 +1,34 @@
+# 提交前的机械检查。只跑快的，慢测试在提交前手动跑。
+# 装：uv tool install pre-commit && pre-commit install
+# 单独跑一遍：pre-commit run --all-files
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        # 仓库里现有最大的被跟踪文件是 2.3 MB（docs/技术实现文档.pdf）。
+        # 10 MiB 的闸门拦得住误提交的构建产物和数据，又远低于 50 MiB 的硬上限。
+        args: [--maxkb=10240]
+      - id: check-merge-conflict
+      - id: trailing-whitespace
+        exclude: |
+          (?x)^(
+            apps/classroom/pnpm-lock\.yaml|
+            apps/classroom/public/vendor/.*|
+            .*\.min\.(js|css)|
+            .*\.ipynb
+          )$
+      - id: end-of-file-fixer
+        exclude: |
+          (?x)^(
+            apps/classroom/pnpm-lock\.yaml|
+            apps/classroom/public/vendor/.*|
+            .*\.min\.(js|css)|
+            .*\.ipynb|
+            .*\.svg
+          )$
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.0
+    hooks:
+      # id 用 ruff-check；旧的 ruff 别名已经自带 --force-exclude，再传一次会报重复参数
+      - id: ruff-check
