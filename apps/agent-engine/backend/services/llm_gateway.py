@@ -11,6 +11,7 @@ from typing import Any, Mapping
 
 import requests
 
+from backend.services import call_deadline
 from backend.services.model_routing import ModelRoute, route_for
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,10 @@ JSON_ONLY_REMINDER = "你上一次的输出不是合法 JSON。这次只输出�
 MAX_STRUCTURED_ATTEMPTS = 3
 # 抬预算的天花板，防止一路翻倍到把上下文窗口吃光
 MAX_STRUCTURED_TOKENS = 16000
+
+
+class DeadlineExceeded(RuntimeError):
+    """本次请求的执行上限用完了（只有调用方带了 x-sched-deadline-ms 才可能抛）。"""
 
 
 class LLMGateway:
@@ -110,7 +115,7 @@ class LLMGateway:
                 "Content-Type": "application/json",
             },
             json=payload,
-            timeout=(
+            timeout=_clamped_timeout(
                 float(self.env.get("LLM_CONNECT_TIMEOUT_SECONDS", "15")),
                 float(self.env.get("LLM_TIMEOUT_SECONDS", "30")),
             ),
@@ -119,6 +124,8 @@ class LLMGateway:
         response.raise_for_status()
         if not stream:
             return response.json()
+        # 流式下读超时只约束「两块之间」的停顿，整次调用的墙钟是无界的——
+        # 执行上限得在拼块的循环里自己看表。
         return _collect_stream(response)
 
     def structured_chat(
@@ -146,6 +153,9 @@ class LLMGateway:
         messages = list(base_messages)
         budget = max_tokens
         for attempt in range(MAX_STRUCTURED_ATTEMPTS):
+            if call_deadline.expired():
+                logger.warning("structured_chat for %s stopped: call deadline reached", agent)
+                return None
             self._increment(attempts=1)
             try:
                 raw = self.chat(agent, messages, temperature=temperature, max_tokens=budget)
@@ -156,6 +166,15 @@ class LLMGateway:
                     completion_tokens=int(usage.get("completion_tokens") or 0),
                     total_tokens=int(usage.get("total_tokens") or 0),
                 )
+                if call_deadline.remaining_seconds() is not None:
+                    # 只在调度实验驱动这次调用时记一行：这两条路由本来不写用量账本，
+                    # 不记就只能拿字节数倒推 token。
+                    # 本模块的 logger 没配 handler，INFO 到不了日志，用 warning 才出得来
+                    logger.warning(
+                        "sched-usage agent=%s attempt=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s",
+                        agent, attempt + 1,
+                        usage.get("prompt_tokens"), usage.get("completion_tokens"), usage.get("total_tokens"),
+                    )
                 content = raw["choices"][0]["message"]["content"]
                 parsed = _parse_json_object(content)
                 if parsed is not None:
@@ -187,12 +206,27 @@ class LLMGateway:
                     continue
                 messages.append({"role": "assistant", "content": content})
                 messages.append({"role": "user", "content": JSON_ONLY_REMINDER})
+            except DeadlineExceeded as exc:
+                # 上限到点是实验设的硬停，不是瞬断，重试只会把它拖得更久
+                self._increment(request_failures=1)
+                logger.warning("structured_chat for %s hit the call deadline: %s", agent, exc)
+                return None
             except Exception as exc:  # noqa: BLE001 - fallback path must never raise
                 self._increment(request_failures=1)
                 # 网络瞬断/超时也重试一次，第二次仍失败才降级
                 logger.warning("structured_chat failed for %s (attempt %s): %s", agent, attempt + 1, exc)
         logger.warning("structured_chat gave up for %s after retry", agent)
         return None
+
+
+def _clamped_timeout(connect_s: float, read_s: float) -> tuple[float, float]:
+    """没设执行上限就按配置值；设了就不让单次等待超过剩余时间。"""
+    remaining = call_deadline.remaining_seconds()
+    if remaining is None:
+        return (connect_s, read_s)
+    if remaining <= 0.0:
+        raise DeadlineExceeded("执行上限已用完，不再发起模型调用")
+    return (min(connect_s, remaining), min(read_s, remaining))
 
 
 def _collect_stream(response: requests.Response) -> dict[str, Any]:
@@ -206,6 +240,9 @@ def _collect_stream(response: requests.Response) -> dict[str, Any]:
     finish_reason: str | None = None
     usage: dict[str, Any] = {}
     for raw_line in response.iter_lines(decode_unicode=False):
+        if call_deadline.expired():
+            response.close()
+            raise DeadlineExceeded("执行上限已用完，流式应答在中途停止")
         if not raw_line:
             continue
         line = raw_line.decode("utf-8", "replace").strip()

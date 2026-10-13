@@ -14,6 +14,7 @@ import { SESSION_COOKIE } from '@/lib/accounts/session';
 import { createLogger } from '@/lib/logger';
 import { API_ERROR_CODES, apiError, apiSuccess } from '@/lib/server/api-response';
 import { requireCorpusVisible } from '@/lib/server/corpus-access';
+import { dispatch, schedConfig, schedHeaders } from '@/lib/server/classroom-dispatch';
 
 const log = createLogger('PracticeGuide API');
 
@@ -75,6 +76,39 @@ const PROFILE_KEYS = [
   'role',
 ] as const;
 
+/**
+ * 派发时就能算出来的规模代理（只在调度实验开着时用）：引擎按 `milestone_count`
+ * 决定要写几段里程碑，而输出 token 数是这次调用耗时的主项，所以里程碑数就是
+ * 一个诚实的、请求侧可算的代价序。里程碑数由画像的时间预算与项目难度决定
+ * （引擎 practice_guide.py 的 `_milestone_count`），两项这边都拿得到。
+ * 系数没有标定过：它只用来排序，不进任何判定式。
+ */
+function milestoneCount(timeBudgetHours: unknown, difficulty: number): number {
+  const hours = Number(timeBudgetHours);
+  if (Number.isFinite(hours) && hours > 0 && hours <= 5) return 3;
+  if (Number.isFinite(hours) && hours > 0 && hours <= 12) return 4;
+  return difficulty <= 3 ? 5 : 6;
+}
+
+async function projectDifficulty(base: string, corpus: string, projectId: string) {
+  try {
+    const resp = await fetch(
+      `${base}/api/practice-scout/${encodeURIComponent(corpus)}/published`,
+      { signal: AbortSignal.timeout(8_000), cache: 'no-store' },
+    );
+    if (!resp.ok) return { difficulty: 3, hasLink: true };
+    const body = (await resp.json()) as { projects?: Array<Record<string, unknown>> };
+    const project = (body.projects ?? []).find((p) => p.id === projectId);
+    const difficulty = Number(project?.difficulty);
+    return {
+      difficulty: Number.isFinite(difficulty) ? difficulty : 3,
+      hasLink: Array.isArray(project?.links) && (project.links as unknown[]).length > 0,
+    };
+  } catch {
+    return { difficulty: 3, hasLink: true };
+  }
+}
+
 export async function POST(req: NextRequest) {
   const base = process.env.GROUNDING_URL?.replace(/\/$/, '');
   if (!base) return apiError(API_ERROR_CODES.PROVIDER_DISABLED, 503, '实操引擎尚未配置。');
@@ -107,28 +141,78 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // 调度实验（SCHED_K 未设时下面两步都不做，请求路径与改造前一致）
+  const sched = schedConfig();
+  const requestBody = JSON.stringify({
+    project_id: projectId,
+    profile,
+    refresh: body?.refresh === true,
+  });
+  let predictedCostS = 0;
+  let milestones = 0;
+  let hasLink = true;
+  if (sched.k > 0) {
+    const card = await projectDifficulty(base, corpus, projectId);
+    hasLink = card.hasLink;
+    milestones = milestoneCount((profile as { time_budget_hours?: unknown }).time_budget_hours, card.difficulty);
+    predictedCostS = 30 * milestones + (hasLink ? 8 : 0);
+  }
+
   try {
-    const resp = await fetch(`${base}/api/practice-scout/${encodeURIComponent(corpus)}/guide`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-internal-token': process.env.GROUNDING_TOKEN ?? '',
+    const call = await dispatch(
+      {
+        jobClass: 'practice-guide',
+        predictedCostS,
+        meta: {
+          corpus,
+          projectId,
+          milestonesPredicted: milestones,
+          hasRepoLink: hasLink,
+          requestBytes: requestBody.length,
+          personalized,
+        },
       },
-      body: JSON.stringify({ project_id: projectId, profile, refresh: body?.refresh === true }),
-      // 首次生成实测 90-150 秒（6000 token 的结构化输出 + README + 检索），同档第二次是缓存秒回
-      signal: AbortSignal.timeout(170_000),
-      cache: 'no-store',
-    });
-    if (!resp.ok) {
-      const detail = ((await resp.json().catch(() => null)) as { detail?: string } | null)?.detail;
-      log.warn(`guide ${corpus}/${projectId} HTTP ${resp.status}: ${detail ?? ''}`);
+      async () => {
+        const resp = await fetch(`${base}/api/practice-scout/${encodeURIComponent(corpus)}/guide`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-internal-token': process.env.GROUNDING_TOKEN ?? '',
+            ...schedHeaders(),
+          },
+          body: requestBody,
+          // 首次生成实测 90-150 秒（6000 token 的结构化输出 + README + 检索），同档第二次是缓存秒回
+          signal: AbortSignal.timeout(170_000),
+          cache: 'no-store',
+        });
+        // 整包读完才算这次调用结束——只等到响应头回来不代表引擎干完了活
+        return { ok: resp.ok, status: resp.status, text: await resp.text() };
+      },
+      (value) => ({
+        httpStatus: value?.status ?? 0,
+        responseBytes: value?.text.length ?? 0,
+        // 引擎侧的执行上限把这次生成停掉了（与「模型没听懂」分开记）
+        engineDeadlineHit: value ? value.text.includes('guide-deadline-exceeded') : false,
+        engineCached: value ? /"cached"\s*:\s*true/.test(value.text) : false,
+      }),
+    );
+    const parsed = ((): unknown => {
+      try {
+        return JSON.parse(call.text);
+      } catch {
+        return null;
+      }
+    })();
+    if (!call.ok) {
+      const detail = (parsed as { detail?: string } | null)?.detail;
+      log.warn(`guide ${corpus}/${projectId} HTTP ${call.status}: ${detail ?? ''}`);
       return apiError(
         API_ERROR_CODES.UPSTREAM_ERROR,
         502,
         detail ? `带练路线没生成出来：${detail}` : '带练路线服务返回错误。',
       );
     }
-    const payload = (await resp.json()) as Omit<PracticeGuidePayload, 'personalized'>;
+    const payload = parsed as Omit<PracticeGuidePayload, 'personalized'>;
     log.info(
       `guide ${corpus}/${projectId} key=${payload.profile_key} cached=${payload.cached} personalized=${personalized}`,
     );

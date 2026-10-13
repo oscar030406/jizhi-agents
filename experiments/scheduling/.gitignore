@@ -1,0 +1,5 @@
+# 实验产物不进版本库：每轮都会重跑，归档的那份在论文仓 prechecks/platform_testbed/records/
+records/
+.local-pids.json
+# 回放实验的测试账号、口令与会话（seed-accounts.mjs 写的），只留在本机
+replay-accounts/

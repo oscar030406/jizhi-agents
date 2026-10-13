@@ -13,6 +13,7 @@ from app.api.personalize import router as personalize_router
 from app.api.practice import router as practice_router
 from app.config.log_config import configure_logger
 from app.time_utils import elapsed_milliseconds
+from backend.services import call_deadline
 
 app = FastAPI(title="AI Learn Service", version="0.2.0")
 logger = configure_logger("ai_service.http")
@@ -23,6 +24,9 @@ async def log_http_request(request: Request, call_next: Callable[[Request], Awai
     """记录进入 Python AI 服务的 HTTP 请求，便于判断前端链路是否打到本服务。"""
     start_time = time.perf_counter()
     trace_id = request.headers.get("x-trace-id", "")
+    # 调度实验：调用方可以给本次请求设一个执行上限，模型网关按它压超时。
+    # 不带这个头时就是 None，与改造前一致。
+    call_deadline.deadline_from_header(request.headers.get(call_deadline.HEADER))
 
     # 请求进入时先打日志，避免鉴权失败或异常时看不到链路。
     logger.info("收到 Python AI 服务请求：traceId=%s method=%s path=%s client=%s", trace_id, request.method, request.url.path, request.client.host if request.client else "")

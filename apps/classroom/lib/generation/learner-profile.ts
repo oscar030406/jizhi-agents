@@ -115,6 +115,7 @@ const EDUCATION_LABEL: Record<string, string> = {
 // 领域/语料显示名的真源在 `lib/knowledge/domain-labels.ts`（原先这里、报告页、
 // 生成入口各抄一份，且都缺实际接入的语料库）。这里只做转出，老调用点不用改 import。
 import { domainLabel } from '@/lib/knowledge/domain-labels';
+import { schedHeaders } from '@/lib/server/classroom-dispatch';
 import { keysFromProfile } from './decompression';
 export { domainLabel };
 
@@ -156,6 +157,8 @@ export async function fetchLearnerBlueprint(
       headers: {
         'Content-Type': 'application/json',
         'x-internal-token': process.env.GROUNDING_TOKEN ?? '',
+        // 调度实验：派发器开着时带上本 job 的剩余执行上限，关着时是空对象
+        ...schedHeaders(),
       },
       body: JSON.stringify({
         learning_goal: learningGoal,

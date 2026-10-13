@@ -26,6 +26,7 @@ from typing import Any
 from pydantic import BaseModel, Field, ValidationError
 
 from backend.integration.personalize_service import evidence_retrieve_api
+from backend.services import call_deadline
 from backend.services import practice_scout
 from backend.services.llm_gateway import LLMGateway
 
@@ -317,6 +318,10 @@ def build_guide(corpus: str, project_id: str, profile: dict[str, Any], refresh: 
     evidence = _evidence(corpus, project, tier)
     user = _build_user_message(project, readme, evidence, profile, tier, eng, count, habits)
     parsed = gateway.structured_chat(AGENT, GUIDE_SYSTEM, user, temperature=0.3, max_tokens=4500)
+    if parsed is None and call_deadline.expired():
+        # 调用方带了 x-sched-deadline-ms，上限在引擎侧真的把这次生成停掉了。
+        # 与「模型没听懂」分开报，排队实验要按这个区分超时 job。
+        raise GuideError("guide-deadline-exceeded：本次调用的执行上限已用完")
     guide = _validate(parsed, evidence, habits, count)
 
     doc = {
